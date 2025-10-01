@@ -119,3 +119,77 @@ This project uses Svelte 5's modern syntax:
 - Playwright e2e tests in `e2e/` directory
 - Tests run against production build (`npm run build` → `npm run preview`)
 - Test server runs on port 4173
+
+### Minecraft Bot Architecture
+
+This project includes a functional Minecraft bot framework using Mineflayer:
+
+**Location**: `src/lib/server/steve/`
+
+**Key Dependencies**:
+
+- **mineflayer** (4.33.0): Core Minecraft bot framework
+- **mineflayer-pathfinder** (2.4.5): Pathfinding and navigation
+- **minecrafthawkeye** (1.3.9): Line-of-sight and collision detection
+- **minecraft-data** (3.98.0): Minecraft protocol data
+- **vec3** (0.1.10): 3D vector mathematics
+
+**Architecture**:
+
+The bot system uses a **functional, modular** approach (not class-based). All
+code is TypeScript with strict typing.
+
+**Ability Modules** (`src/lib/server/steve/abilities/`):
+
+- `movement.ts` - Basic locomotion and pathfinding
+  - `initializeMovement()`, `walkTo()`, `startSprinting()`, `stopSprinting()`
+- `mining.ts` - Block breaking functionality
+  - `mineBlock()`, `canMineBlock()`
+- `inventory.ts` - Item management with change tracking
+  - `setupInventoryTracking()`, `getInventoryChanges()`, `dropItem()`,
+    `hasItem()`, `countItem()`
+- `navigation.ts` - Advanced pathfinding with 360° scanning
+  - `initializeNavigation()`, `findNearestBlock()`, `scanAreaForBlock()`,
+    `goTo()`, `followPlayer()`
+
+**Examples** (`src/lib/server/steve/examples/`):
+
+- `circle.ts` - 50 bots in synchronized choreography
+- `olympics.ts` - Multi-bot formations (ceremonies, torch relay, wave)
+- `stress.ts` - Server stress testing with random movement
+- `village.ts` - Role-based bots (Guard, Farmer, Miner, Logger)
+- `wood.ts` - Wood gathering worker with CLI args
+
+**Usage Pattern**:
+
+```typescript
+import mineflayer from "mineflayer";
+import {
+  goTo,
+  initializeNavigation,
+} from "$lib/server/steve/abilities/navigation";
+import { mineBlock } from "$lib/server/steve/abilities/mining";
+
+const bot = mineflayer.createBot({
+  host: "localhost",
+  port: 25565,
+  username: "Steve",
+});
+
+bot.once("spawn", () => {
+  initializeNavigation(bot);
+
+  // Use abilities
+  const block = bot.findBlock({ matching: someBlockId, maxDistance: 32 });
+  await goTo(bot, block.position);
+  await mineBlock(bot, block);
+});
+```
+
+**Design Philosophy**:
+
+- Pure functions over classes
+- Explicit bot parameter passing
+- Composable abilities
+- TypeScript strict mode
+- No global state
