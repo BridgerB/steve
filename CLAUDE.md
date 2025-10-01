@@ -1,10 +1,12 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with
+code in this repository.
 
 ## Project Overview
 
 This is a SvelteKit application using:
+
 - **SvelteKit 2.x** with Svelte 5 (using modern runes syntax like `$props()`)
 - **Drizzle ORM** with PostgreSQL for database management
 - **Vite 7** as the build tool
@@ -44,7 +46,8 @@ npm run test
 
 ## Database Commands
 
-The project uses Docker Compose for local PostgreSQL development and Drizzle ORM for schema management.
+The project uses Docker Compose for local PostgreSQL development and Drizzle ORM
+for schema management.
 
 ```bash
 # Start PostgreSQL database (via Docker)
@@ -64,13 +67,17 @@ npm run db:studio
 ```
 
 **Database Setup**:
-1. Copy `.env.example` to `.env` (DATABASE_URL should already be configured for local Docker)
+
+1. Copy `.env.example` to `.env` (DATABASE_URL should already be configured for
+   local Docker)
 2. Start the database with `npm run db:start`
 3. Push schema changes with `npm run db:push` or generate/run migrations
 
 **Database Configuration**:
+
 - Local database runs on `localhost:5432` via Docker
-- Default credentials: user=`root`, password=`mysecretpassword`, database=`local`
+- Default credentials: user=`root`, password=`mysecretpassword`,
+  database=`local`
 - Connection string is loaded from `DATABASE_URL` environment variable
 
 ## Architecture
@@ -79,7 +86,8 @@ npm run db:studio
 
 - `src/routes/` - SvelteKit file-based routing
   - `+page.svelte` - Page components
-  - `+layout.svelte` - Layout wrapper (uses Svelte 5 snippets with `{@render children?.()}`)
+  - `+layout.svelte` - Layout wrapper (uses Svelte 5 snippets with
+    `{@render children?.()}`)
 - `src/lib/` - Reusable library code (aliased as `$lib`)
   - `src/lib/server/` - Server-only code (never sent to client)
   - `src/lib/server/db/` - Database configuration and schema
@@ -91,6 +99,7 @@ npm run db:studio
 ### Database Layer
 
 The database is configured using Drizzle ORM with PostgreSQL:
+
 - Schema defined in `src/lib/server/db/schema.ts` using Drizzle's `pgTable` API
 - Database client exported from `src/lib/server/db/index.ts` as `db`
 - Uses `postgres` driver (not `pg`)
@@ -100,6 +109,7 @@ The database is configured using Drizzle ORM with PostgreSQL:
 ### Svelte 5 Usage
 
 This project uses Svelte 5's modern syntax:
+
 - Runes API: `$props()`, `$state()`, `$derived()`, `$effect()`
 - Snippets instead of slots: `{@render children?.()}`
 - No `export let` - use `let { propName } = $props()` instead
