@@ -1,5 +1,8 @@
 import mineflayer from "mineflayer";
 import type { Bot } from "mineflayer";
+import { initializeMovement } from "./abilities/movement";
+import { initializeNavigation } from "./abilities/navigation";
+import { setupInventoryLogging } from "./abilities/inventory";
 
 interface BotOptions {
   host: string;
@@ -18,6 +21,11 @@ const bot: Bot = mineflayer.createBot(options);
 
 bot.once("spawn", () => {
   console.log("Steve spawned into the world");
+
+  // Initialize abilities functionally
+  initializeMovement(bot);
+  initializeNavigation(bot);
+  setupInventoryLogging(bot);
 
   setTimeout(() => {
     console.log("10 seconds passed, disconnecting...");
