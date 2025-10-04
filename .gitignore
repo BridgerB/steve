@@ -22,3 +22,20 @@ Thumbs.db
 # Vite
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# Minecraft Server
+eula.txt
+server.properties
+server.jar
+world/
+logs/
+*.log
+banned-ips.json
+banned-players.json
+ops.json
+usercache.json
+whitelist.json
+crash-reports/
+libraries/
+versions/
+result
