@@ -41,8 +41,24 @@
             --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.coreutils ]} \
             --run 'set -euo pipefail' \
             --run 'if [ ! -f eula.txt ]; then echo "eula=true" > eula.txt; echo "✅ Accepted EULA"; fi' \
-            --run 'if [ ! -f server.properties ]; then cat > server.properties <<PROPS
-max-players=100
+            --run 'if [ -d world ] || [ -f server.properties ]; then
+  echo ""
+  echo "════════════════════════════════════════════════════════"
+  echo "  Existing Minecraft server data found"
+  echo "════════════════════════════════════════════════════════"
+  echo ""
+  echo "  [c] Continue with existing world and settings (default)"
+  echo "  [u] Update server.properties to flake settings (keep world)"
+  echo "  [f] Fresh start - delete everything and start over"
+  echo "  [q] Quit without starting"
+  echo ""
+  read -p "Your choice [c/u/f/q]: " user_choice
+  case "$user_choice" in
+    u|U)
+      echo ""
+      echo "📝 Updating server.properties to match flake..."
+      cat > server.properties <<PROPS
+max-players=1000
 online-mode=false
 pvp=true
 difficulty=normal
@@ -58,13 +74,71 @@ spawn-animals=true
 spawn-npcs=true
 allow-flight=false
 PROPS
-echo "✅ Generated server.properties"; fi' \
+      echo "✅ Updated server.properties (world preserved)"
+      echo ""
+      ;;
+    f|F)
+      echo ""
+      echo "🗑️  Deleting world data, logs, and server.properties..."
+      rm -rf world/ logs/ server.properties usercache.json banned-*.json ops.json whitelist.json
+      echo "✅ Cleaned up - starting fresh"
+      echo ""
+      cat > server.properties <<PROPS
+max-players=1000
+online-mode=false
+pvp=true
+difficulty=normal
+gamemode=survival
+enable-command-block=true
+spawn-protection=0
+view-distance=10
+server-port=25565
+motd=Local Bot Testing Server
+white-list=false
+spawn-monsters=true
+spawn-animals=true
+spawn-npcs=true
+allow-flight=false
+PROPS
+      ;;
+    q|Q)
+      echo ""
+      echo "👋 Exiting without starting server"
+      exit 0
+      ;;
+    *)
+      echo ""
+      echo "✅ Continuing with existing data"
+      echo ""
+      ;;
+  esac
+else
+  cat > server.properties <<PROPS
+max-players=1000
+online-mode=false
+pvp=true
+difficulty=normal
+gamemode=survival
+enable-command-block=true
+spawn-protection=0
+view-distance=10
+server-port=25565
+motd=Local Bot Testing Server
+white-list=false
+spawn-monsters=true
+spawn-animals=true
+spawn-npcs=true
+allow-flight=false
+PROPS
+  echo "✅ First run - generated server.properties"
+  echo ""
+fi' \
             --run 'echo "🚀 Starting Minecraft Server 1.21.8..."' \
             --run 'echo "📍 Server will be available at: localhost:25565"' \
-            --run 'echo "⚙️  Max players: 100 | Online mode: OFF"' \
+            --run 'echo "⚙️  Max players: 1000 | Online mode: OFF"' \
             --run 'echo ""' \
-            --add-flags "-Xmx4G" \
-            --add-flags "-Xms4G" \
+            --add-flags "-Xmx16G" \
+            --add-flags "-Xms16G" \
             --add-flags "-XX:+UseG1GC" \
             --add-flags "-XX:+ParallelRefProcEnabled" \
             --add-flags "-XX:MaxGCPauseMillis=200" \
