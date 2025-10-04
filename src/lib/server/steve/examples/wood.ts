@@ -22,22 +22,66 @@ function parseCliArgs(): {
   };
 }
 
-// Find any wood log type
+// Wood log types to search for
+const WOOD_TYPES = [
+  "oak_log",
+  "birch_log",
+  "spruce_log",
+  "jungle_log",
+  "acacia_log",
+  "dark_oak_log",
+  "mangrove_log",
+  "cherry_log",
+];
+
+// Check if a block is a wood log
+function isWoodLog(bot: Bot, block: any): boolean {
+  if (!block) return false;
+  return WOOD_TYPES.includes(block.name);
+}
+
+// Check blocks directly below the bot (handles spawning on trees)
+function checkBlocksBelow(bot: Bot): any | null {
+  for (let dy = -1; dy >= -10; dy--) {
+    const checkPos = bot.entity.position.offset(0, dy, 0);
+    const block = bot.blockAt(checkPos);
+
+    if (block && isWoodLog(bot, block)) {
+      return block;
+    }
+  }
+
+  return null;
+}
+
+// Find any wood log type in surrounding area
 function findWoodLog(bot: Bot): any | null {
-  const woodTypes = [
-    "oak_log",
-    "birch_log",
-    "spruce_log",
-    "jungle_log",
-    "acacia_log",
-    "dark_oak_log",
-  ];
-  return bot.findBlock({
-    matching: woodTypes
-      .map((name) => bot.registry.blocksByName[name]?.id)
-      .filter((id) => id !== undefined),
-    maxDistance: 3233,
+  const woodIds = WOOD_TYPES
+    .map((name) => bot.registry.blocksByName[name]?.id)
+    .filter((id) => id !== undefined);
+
+  const block = bot.findBlock({
+    matching: woodIds,
+    maxDistance: 128,
   });
+
+  if (!block) {
+    // Manual scan as fallback
+    const pos = bot.entity.position;
+    for (let x = -10; x <= 10; x++) {
+      for (let y = -5; y <= 10; y++) {
+        for (let z = -10; z <= 10; z++) {
+          const checkPos = pos.offset(x, y, z);
+          const block = bot.blockAt(checkPos);
+          if (block && isWoodLog(bot, block)) {
+            return block;
+          }
+        }
+      }
+    }
+  }
+
+  return block;
 }
 
 // Find item by partial name match (includes offhand for 1.9+)
@@ -47,31 +91,6 @@ function itemByName(bot: Bot, name: string): any | undefined {
     items.push(bot.inventory.slots[45]);
   }
   return items.filter((item) => item.name.includes(name))[0];
-}
-
-// Transfer wood to player inventory
-async function giveWoodToPlayer(bot: Bot, username: string): Promise<void> {
-  const woodItem = itemByName(bot, "_log");
-  if (!woodItem) {
-    bot.chat("I don't have any wood in my inventory!");
-    return;
-  }
-
-  try {
-    // Transfer items to player inventory
-    // Note: bot.transfer() may not work as expected in newer versions
-    // This is preserved from original code but may need adjustment
-    await (bot as any).transfer({
-      itemType: woodItem.type,
-      count: woodItem.count,
-      sourceStart: woodItem.slot,
-      sourceEnd: woodItem.slot + 1,
-      destStart: 0,
-      destEnd: 36, // Player main inventory size
-    });
-  } catch (err) {
-    console.log(err);
-  }
 }
 
 // Main wood gathering workflow
@@ -93,12 +112,27 @@ async function runWoodWorker(): Promise<void> {
     defaultMove = new pathfinder.Movements(bot);
     bot.pathfinder.setMovements(defaultMove);
 
+    console.log(`Bot spawned at ${bot.entity.position}`);
+    console.log("Waiting 2 seconds for chunks to load...");
+
+    // Wait for chunks to load
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+
     // Start gathering wood immediately
     try {
-      // Find nearest wood log
-      const woodBlock = findWoodLog(bot);
+      // First check if we're standing on/near a tree
+      let woodBlock = checkBlocksBelow(bot);
+
+      // If no wood below, search the surrounding area
       if (!woodBlock) {
-        console.log("No logs found nearby");
+        woodBlock = findWoodLog(bot);
+      }
+
+      if (!woodBlock) {
+        console.log(
+          "No logs found nearby or below - try moving to a forest biome",
+        );
+        bot.chat("No wood found! I need to be near trees.");
         return;
       }
 
@@ -136,36 +170,33 @@ async function runWoodWorker(): Promise<void> {
       }
 
       const nearestPlayer = Object.values(players)[0];
+      if (!nearestPlayer.entity) {
+        console.log("Player not in render distance");
+        return;
+      }
+
       try {
         await bot.pathfinder.goto(
           new pathfinder.goals.GoalNear(
             nearestPlayer.entity.position.x,
             nearestPlayer.entity.position.y,
             nearestPlayer.entity.position.z,
-            1,
+            0.5,
           ),
         );
 
-        // Get the wood item and drop it at player's feet
         const woodItem = itemByName(bot, "_log");
         if (woodItem) {
           try {
-            // Trigger a right-click action to throw the item
-            bot.attack(nearestPlayer.entity);
-            setTimeout(() => {
-              const pos = nearestPlayer.entity?.position;
-              if (pos) {
-                bot.chat(
-                  `/execute as ${bot.username} run tp ${pos.x} ${
-                    pos.y + 1
-                  } ${pos.z}`,
-                );
-              }
-              giveWoodToPlayer(bot, nearestPlayer.username);
-            }, 500);
+            await bot.lookAt(nearestPlayer.entity.position);
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            await bot.toss(woodItem.type, null, woodItem.count);
+            bot.chat(`Threw ${woodItem.count} ${woodItem.name} at you!`);
           } catch (err) {
-            console.log("Failed to drop wood:", err);
+            console.log("Failed to toss wood:", err);
           }
+        } else {
+          console.log("No wood in inventory after mining!");
         }
       } catch (err) {
         console.log("Failed to reach player:", err);
