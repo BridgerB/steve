@@ -425,7 +425,9 @@ async function main(): Promise<void> {
       }
     } catch (error) {
       console.log(
-        `  Error finding blocks: ${error instanceof Error ? error.message : "Unknown"}`,
+        `  Error finding blocks: ${
+          error instanceof Error ? error.message : "Unknown"
+        }`,
       );
     }
     console.log("  ✓ Block finding test complete\n");
@@ -463,7 +465,9 @@ async function main(): Promise<void> {
       }
     } catch (error) {
       console.log(
-        `  Error getting biome: ${error instanceof Error ? error.message : "Unknown"}`,
+        `  Error getting biome: ${
+          error instanceof Error ? error.message : "Unknown"
+        }`,
       );
     }
     console.log("  ✓ Biome detection test complete\n");
@@ -504,7 +508,9 @@ async function main(): Promise<void> {
     console.log(`  Thunder state: ${bot.thunderState}`);
     console.log(`  World time: ${bot.time.time}`);
     console.log(`  Time of day: ${bot.time.timeOfDay}`);
-    console.log(`  Day/Night cycle: ${bot.time.doDaylightCycle ? "On" : "Off"}`);
+    console.log(
+      `  Day/Night cycle: ${bot.time.doDaylightCycle ? "On" : "Off"}`,
+    );
     console.log(`  Moon phase: ${bot.time.moonPhase}`);
     console.log("  ✓ Weather detection test complete\n");
     await new Promise((resolve) => setTimeout(resolve, 1000));
