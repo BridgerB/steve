@@ -367,8 +367,161 @@ async function main(): Promise<void> {
     console.log("  ✓ Entity scan complete\n");
     await new Promise((resolve) => setTimeout(resolve, 1000));
 
-    // Test 8: Final state display
-    console.log("📊 Test 8: Final Bot State");
+    // Test 8: Crouch/Sneak test
+    console.log("🤫 Test 8: Crouch/Sneak Test");
+    bot.setControlState("sneak", true);
+    console.log("  Sneaking for 2 seconds...");
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    bot.setControlState("sneak", false);
+    console.log("  ✓ Sneak test complete\n");
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+
+    // Test 9: Look up and down (pitch test)
+    console.log("🔺 Test 9: Pitch Test (look up/down)");
+    const pitches = [
+      { angle: -Math.PI / 2, label: "Up (90°)" },
+      { angle: -Math.PI / 4, label: "Up (45°)" },
+      { angle: 0, label: "Straight (0°)" },
+      { angle: Math.PI / 4, label: "Down (45°)" },
+      { angle: Math.PI / 2, label: "Down (90°)" },
+    ];
+    for (const { angle, label } of pitches) {
+      await bot.look(bot.entity.yaw, angle, false);
+      console.log(`  Looking ${label}`);
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    }
+    console.log("  ✓ Pitch test complete\n");
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+
+    // Test 10: Block finding test
+    console.log("🔍 Test 10: Block Finding Test");
+    try {
+      const nearbyBlock = bot.findBlock({
+        matching: (block) => block.name !== "air",
+        maxDistance: 32,
+        count: 1,
+      });
+      if (nearbyBlock) {
+        console.log(`  Found block: ${nearbyBlock.name}`);
+        console.log(
+          `  Position: (${nearbyBlock.position.x}, ${nearbyBlock.position.y}, ${nearbyBlock.position.z})`,
+        );
+        console.log(
+          `  Distance: ${
+            bot.entity.position.distanceTo(nearbyBlock.position).toFixed(2)
+          } blocks`,
+        );
+
+        // Try to look at the block
+        await bot.lookAt(nearbyBlock.position);
+        console.log("  Looking at block...");
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+
+        // Check if we can see it
+        const canSee = bot.canSeeBlock(nearbyBlock);
+        console.log(`  Can see block: ${canSee ? "Yes" : "No"}`);
+      } else {
+        console.log("  No blocks found nearby");
+      }
+    } catch (error) {
+      console.log(
+        `  Error finding blocks: ${error instanceof Error ? error.message : "Unknown"}`,
+      );
+    }
+    console.log("  ✓ Block finding test complete\n");
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+
+    // Test 11: Physics state test
+    console.log("⚡ Test 11: Physics State Test");
+    console.log(`  On ground: ${bot.entity.onGround}`);
+    console.log(`  In water: ${bot.entity.isInWater}`);
+    console.log(`  In lava: ${bot.entity.isInLava}`);
+    console.log(`  In web: ${bot.entity.isInWeb}`);
+    console.log(
+      `  Velocity: (${bot.entity.velocity.x.toFixed(2)}, ${
+        bot.entity.velocity.y.toFixed(2)
+      }, ${bot.entity.velocity.z.toFixed(2)})`,
+    );
+    console.log(`  Yaw: ${(bot.entity.yaw * 180 / Math.PI).toFixed(1)}°`);
+    console.log(`  Pitch: ${(bot.entity.pitch * 180 / Math.PI).toFixed(1)}°`);
+    console.log("  ✓ Physics state test complete\n");
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+
+    // Test 12: Biome detection test
+    console.log("🌲 Test 12: Biome Detection Test");
+    try {
+      const biome = bot.blockAt(bot.entity.position)?.biome;
+      if (biome) {
+        console.log(`  Current biome: ${biome.name}`);
+        console.log(`  Biome ID: ${biome.id}`);
+        console.log(
+          `  Temperature: ${biome.temperature?.toFixed(2) ?? "N/A"}`,
+        );
+        console.log(`  Rainfall: ${biome.rainfall?.toFixed(2) ?? "N/A"}`);
+      } else {
+        console.log("  Biome data not available");
+      }
+    } catch (error) {
+      console.log(
+        `  Error getting biome: ${error instanceof Error ? error.message : "Unknown"}`,
+      );
+    }
+    console.log("  ✓ Biome detection test complete\n");
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+
+    // Test 13: Chat message test
+    console.log("💬 Test 13: Chat Message Test");
+    const messages = [
+      "Testing chat functionality!",
+      "Can you see these messages?",
+      "Debug bot reporting in! 🤖",
+    ];
+    for (let i = 0; i < messages.length; i++) {
+      bot.chat(messages[i]);
+      console.log(`  Sent: "${messages[i]}"`);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    console.log("  ✓ Chat message test complete\n");
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+
+    // Test 14: Hand swap test
+    console.log("🤚 Test 14: Hand Swap Test");
+    console.log(`  Main hand: ${bot.settings.mainHand}`);
+    console.log(`  Held item slot: ${bot.quickBarSlot}`);
+    // Cycle through hotbar slots
+    for (let slot = 0; slot < 9; slot++) {
+      bot.setQuickBarSlot(slot);
+      console.log(`  Switched to hotbar slot ${slot}`);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    bot.setQuickBarSlot(0); // Reset to slot 0
+    console.log("  ✓ Hand swap test complete\n");
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+
+    // Test 15: Rain/Weather detection
+    console.log("🌧️  Test 15: Weather Detection Test");
+    console.log(`  Is raining: ${bot.isRaining ? "Yes" : "No"}`);
+    console.log(`  Thunder state: ${bot.thunderState}`);
+    console.log(`  World time: ${bot.time.time}`);
+    console.log(`  Time of day: ${bot.time.timeOfDay}`);
+    console.log(`  Day/Night cycle: ${bot.time.doDaylightCycle ? "On" : "Off"}`);
+    console.log(`  Moon phase: ${bot.time.moonPhase}`);
+    console.log("  ✓ Weather detection test complete\n");
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+
+    // Test 16: Connection & server info
+    console.log("🌐 Test 16: Connection & Server Info");
+    console.log(`  Server brand: ${bot.game.serverBrand}`);
+    console.log(`  Protocol version: ${bot.protocolVersion}`);
+    console.log(`  Max players: ${bot.game.maxPlayers}`);
+    console.log(`  Hardcore mode: ${bot.game.hardcore ? "Yes" : "No"}`);
+    console.log(`  Total players online: ${Object.keys(bot.players).length}`);
+    console.log(`  Physics enabled: ${bot.physicsEnabled ? "Yes" : "No"}`);
+    console.log("  ✓ Connection info test complete\n");
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+
+    // Test 17: Final state display
+    console.log("📊 Test 17: Final Bot State");
     displayBotState(bot);
 
     console.log("✅ All automated tests complete!\n");
