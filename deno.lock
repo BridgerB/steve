@@ -8,10 +8,9 @@
     "npm:@types/node@20": "20.19.15",
     "npm:drizzle-kit@~0.30.2": "0.30.6_esbuild@0.19.12",
     "npm:drizzle-orm@0.40": "0.40.1_postgres@3.4.7",
-    "npm:minecraft-data@^3.98.0": "3.98.0",
     "npm:minecrafthawkeye@^1.3.9": "1.3.9",
     "npm:mineflayer-pathfinder@^2.4.5": "2.4.5",
-    "npm:mineflayer@^4.33.0": "4.33.0_minecraft-data@3.98.0_prismarine-registry@1.11.0",
+    "npm:mineflayer@^4.33.0": "4.33.0_minecraft-data@3.99.1_prismarine-registry@1.11.0",
     "npm:postgres@^3.4.5": "3.4.7",
     "npm:svelte-check@4": "4.3.1_svelte@5.38.10__acorn@8.15.0_typescript@5.9.2",
     "npm:svelte@5": "5.38.10_acorn@8.15.0",
@@ -1118,8 +1117,8 @@
         "@jridgewell/sourcemap-codec"
       ]
     },
-    "minecraft-data@3.98.0": {
-      "integrity": "sha512-JAPqJ/TZoxMUlAPPdWUh1v5wdqvYGFSZ4rW9bUtmaKBkGpomDSjw4V02ocBqbxKJvcTtmc5nM/LfN9/0DDqHrQ=="
+    "minecraft-data@3.99.1": {
+      "integrity": "sha512-mI9SNwlrqY2uTTLOT332Hf/QlaLa+AH3V36qu3Y2i9Z2/PjsZlja2ToTDHjazWqDMBtfch+rDTwPB2mHloArHA=="
     },
     "minecraft-folder-path@1.2.0": {
       "integrity": "sha512-qaUSbKWoOsH9brn0JQuBhxNAzTDMwrOXorwuRxdJKKKDYvZhtml+6GVCUrY5HRiEsieBEjCUnhVpDuQiKsiFaw=="
@@ -1160,7 +1159,7 @@
       "integrity": "sha512-Jh3JnUgRLwhMh2Dugo4SPza68C41y+NPP5sdsgxRu35ydndo70i1JJGxauVWbXrpNwIxYNztUw78aFyb7icw8g==",
       "dependencies": [
         "minecraft-data",
-        "prismarine-block@1.22.0_minecraft-data@3.98.0_prismarine-registry@1.11.0__minecraft-data@3.98.0",
+        "prismarine-block@1.22.0_minecraft-data@3.99.1_prismarine-registry@1.11.0__minecraft-data@3.99.1",
         "prismarine-entity",
         "prismarine-item@1.17.0",
         "prismarine-nbt",
@@ -1168,13 +1167,13 @@
         "vec3"
       ]
     },
-    "mineflayer@4.33.0_minecraft-data@3.98.0_prismarine-registry@1.11.0": {
+    "mineflayer@4.33.0_minecraft-data@3.99.1_prismarine-registry@1.11.0": {
       "integrity": "sha512-tysUKVhUpEvHKDn8Awex/wz8WYyRGYrl6EujOVLJsGOU775AwKcapBVAS1BrP0UbM2di6MDwb74muGAFytY+TQ==",
       "dependencies": [
         "minecraft-data",
         "minecraft-protocol",
-        "prismarine-biome@1.3.0_minecraft-data@3.98.0_prismarine-registry@1.11.0",
-        "prismarine-block@1.22.0_minecraft-data@3.98.0_prismarine-registry@1.11.0__minecraft-data@3.98.0",
+        "prismarine-biome@1.3.0_minecraft-data@3.99.1_prismarine-registry@1.11.0",
+        "prismarine-block@1.22.0_minecraft-data@3.99.1_prismarine-registry@1.11.0__minecraft-data@3.99.1",
         "prismarine-chat@1.12.0",
         "prismarine-chunk",
         "prismarine-entity",
@@ -1284,40 +1283,40 @@
     "prismarine-biome@1.3.0": {
       "integrity": "sha512-GY6nZxq93mTErT7jD7jt8YS1aPrOakbJHh39seYsJFXvueIOdHAmW16kYQVrTVMW5MlWLQVxV/EquRwOgr4MnQ=="
     },
-    "prismarine-biome@1.3.0_minecraft-data@3.98.0_prismarine-registry@1.11.0": {
+    "prismarine-biome@1.3.0_minecraft-data@3.99.1_prismarine-registry@1.11.0": {
       "integrity": "sha512-GY6nZxq93mTErT7jD7jt8YS1aPrOakbJHh39seYsJFXvueIOdHAmW16kYQVrTVMW5MlWLQVxV/EquRwOgr4MnQ==",
       "dependencies": [
         "minecraft-data",
-        "prismarine-registry@1.11.0_minecraft-data@3.98.0"
+        "prismarine-registry@1.11.0_minecraft-data@3.99.1"
       ]
     },
-    "prismarine-biome@1.3.0_minecraft-data@3.98.0_prismarine-registry@1.11.0__minecraft-data@3.98.0": {
+    "prismarine-biome@1.3.0_minecraft-data@3.99.1_prismarine-registry@1.11.0__minecraft-data@3.99.1": {
       "integrity": "sha512-GY6nZxq93mTErT7jD7jt8YS1aPrOakbJHh39seYsJFXvueIOdHAmW16kYQVrTVMW5MlWLQVxV/EquRwOgr4MnQ==",
       "dependencies": [
         "minecraft-data",
-        "prismarine-registry@1.11.0_minecraft-data@3.98.0"
+        "prismarine-registry@1.11.0_minecraft-data@3.99.1"
       ]
     },
-    "prismarine-block@1.22.0_minecraft-data@3.98.0_prismarine-registry@1.11.0": {
+    "prismarine-block@1.22.0_minecraft-data@3.99.1_prismarine-registry@1.11.0": {
       "integrity": "sha512-SKVTm+CHR5mY/d+delryqzB2hMH8HIPse8b0O51Ez2R5zPFtKVCLGk5NG71kCDKbMzhhev2iF0O4UC/fWDXhRw==",
       "dependencies": [
         "minecraft-data",
         "prismarine-biome@1.3.0",
-        "prismarine-chat@1.12.0_minecraft-data@3.98.0",
-        "prismarine-item@1.17.0_minecraft-data@3.98.0",
+        "prismarine-chat@1.12.0_minecraft-data@3.99.1",
+        "prismarine-item@1.17.0_minecraft-data@3.99.1",
         "prismarine-nbt",
         "prismarine-registry@1.11.0"
       ]
     },
-    "prismarine-block@1.22.0_minecraft-data@3.98.0_prismarine-registry@1.11.0__minecraft-data@3.98.0": {
+    "prismarine-block@1.22.0_minecraft-data@3.99.1_prismarine-registry@1.11.0__minecraft-data@3.99.1": {
       "integrity": "sha512-SKVTm+CHR5mY/d+delryqzB2hMH8HIPse8b0O51Ez2R5zPFtKVCLGk5NG71kCDKbMzhhev2iF0O4UC/fWDXhRw==",
       "dependencies": [
         "minecraft-data",
-        "prismarine-biome@1.3.0_minecraft-data@3.98.0_prismarine-registry@1.11.0__minecraft-data@3.98.0",
-        "prismarine-chat@1.12.0_minecraft-data@3.98.0_prismarine-registry@1.11.0__minecraft-data@3.98.0",
-        "prismarine-item@1.17.0_minecraft-data@3.98.0_prismarine-registry@1.11.0__minecraft-data@3.98.0",
+        "prismarine-biome@1.3.0_minecraft-data@3.99.1_prismarine-registry@1.11.0__minecraft-data@3.99.1",
+        "prismarine-chat@1.12.0_minecraft-data@3.99.1_prismarine-registry@1.11.0__minecraft-data@3.99.1",
+        "prismarine-item@1.17.0_minecraft-data@3.99.1_prismarine-registry@1.11.0__minecraft-data@3.99.1",
         "prismarine-nbt",
-        "prismarine-registry@1.11.0_minecraft-data@3.98.0"
+        "prismarine-registry@1.11.0_minecraft-data@3.99.1"
       ]
     },
     "prismarine-chat@1.12.0": {
@@ -1328,7 +1327,7 @@
         "prismarine-registry@1.11.0"
       ]
     },
-    "prismarine-chat@1.12.0_minecraft-data@3.98.0": {
+    "prismarine-chat@1.12.0_minecraft-data@3.99.1": {
       "integrity": "sha512-+1QBUn4WGXbAGwoGwJy31/FvH6JtTBHh//yU0xwOiVnBO71+6Ij0hYMd9PzTTAwR9bySfl/YLltGPBftUAOYOA==",
       "dependencies": [
         "mojangson",
@@ -1336,19 +1335,19 @@
         "prismarine-registry@1.11.0"
       ]
     },
-    "prismarine-chat@1.12.0_minecraft-data@3.98.0_prismarine-registry@1.11.0__minecraft-data@3.98.0": {
+    "prismarine-chat@1.12.0_minecraft-data@3.99.1_prismarine-registry@1.11.0__minecraft-data@3.99.1": {
       "integrity": "sha512-+1QBUn4WGXbAGwoGwJy31/FvH6JtTBHh//yU0xwOiVnBO71+6Ij0hYMd9PzTTAwR9bySfl/YLltGPBftUAOYOA==",
       "dependencies": [
         "mojangson",
         "prismarine-nbt",
-        "prismarine-registry@1.11.0_minecraft-data@3.98.0"
+        "prismarine-registry@1.11.0_minecraft-data@3.99.1"
       ]
     },
-    "prismarine-chunk@1.39.0_minecraft-data@3.98.0_prismarine-registry@1.11.0": {
+    "prismarine-chunk@1.39.0_minecraft-data@3.99.1_prismarine-registry@1.11.0": {
       "integrity": "sha512-RJHACPV2T3ABGlj0+q/ZUDBLPcslWTIa12lWyE2jJb/svqpTBx8S/K6VjHxhyJ488L9ZWdEmOAr+CHMZJtwWHw==",
       "dependencies": [
-        "prismarine-biome@1.3.0_minecraft-data@3.98.0_prismarine-registry@1.11.0",
-        "prismarine-block@1.22.0_minecraft-data@3.98.0_prismarine-registry@1.11.0__minecraft-data@3.98.0",
+        "prismarine-biome@1.3.0_minecraft-data@3.99.1_prismarine-registry@1.11.0",
+        "prismarine-block@1.22.0_minecraft-data@3.99.1_prismarine-registry@1.11.0__minecraft-data@3.99.1",
         "prismarine-nbt",
         "prismarine-registry@1.11.0",
         "smart-buffer",
@@ -1373,18 +1372,18 @@
         "prismarine-registry@1.11.0"
       ]
     },
-    "prismarine-item@1.17.0_minecraft-data@3.98.0": {
+    "prismarine-item@1.17.0_minecraft-data@3.99.1": {
       "integrity": "sha512-wN1OjP+f+Uvtjo3KzeCkVSy96CqZ8yG7cvuvlGwcYupQ6ct7LtNkubHp0AHuLMJ0vbbfAC0oZ2bWOgI1DYp8WA==",
       "dependencies": [
         "prismarine-nbt",
         "prismarine-registry@1.11.0"
       ]
     },
-    "prismarine-item@1.17.0_minecraft-data@3.98.0_prismarine-registry@1.11.0__minecraft-data@3.98.0": {
+    "prismarine-item@1.17.0_minecraft-data@3.99.1_prismarine-registry@1.11.0__minecraft-data@3.99.1": {
       "integrity": "sha512-wN1OjP+f+Uvtjo3KzeCkVSy96CqZ8yG7cvuvlGwcYupQ6ct7LtNkubHp0AHuLMJ0vbbfAC0oZ2bWOgI1DYp8WA==",
       "dependencies": [
         "prismarine-nbt",
-        "prismarine-registry@1.11.0_minecraft-data@3.98.0"
+        "prismarine-registry@1.11.0_minecraft-data@3.99.1"
       ]
     },
     "prismarine-nbt@2.7.0": {
@@ -1418,15 +1417,15 @@
       "integrity": "sha512-uTvWE+bILxYv4i5MrrlxPQ0KYWINv1DJ3P2570GLC8uCdByDiDLBFfVyk4BrqOZBlDBft9CnaJMeOsC1Ly1iXw==",
       "dependencies": [
         "minecraft-data",
-        "prismarine-block@1.22.0_minecraft-data@3.98.0_prismarine-registry@1.11.0__minecraft-data@3.98.0",
+        "prismarine-block@1.22.0_minecraft-data@3.99.1_prismarine-registry@1.11.0__minecraft-data@3.99.1",
         "prismarine-nbt"
       ]
     },
-    "prismarine-registry@1.11.0_minecraft-data@3.98.0": {
+    "prismarine-registry@1.11.0_minecraft-data@3.99.1": {
       "integrity": "sha512-uTvWE+bILxYv4i5MrrlxPQ0KYWINv1DJ3P2570GLC8uCdByDiDLBFfVyk4BrqOZBlDBft9CnaJMeOsC1Ly1iXw==",
       "dependencies": [
         "minecraft-data",
-        "prismarine-block@1.22.0_minecraft-data@3.98.0_prismarine-registry@1.11.0",
+        "prismarine-block@1.22.0_minecraft-data@3.99.1_prismarine-registry@1.11.0",
         "prismarine-nbt"
       ]
     },
@@ -1763,7 +1762,6 @@
         "npm:@types/node@20",
         "npm:drizzle-kit@~0.30.2",
         "npm:drizzle-orm@0.40",
-        "npm:minecraft-data@^3.98.0",
         "npm:minecrafthawkeye@^1.3.9",
         "npm:mineflayer-pathfinder@^2.4.5",
         "npm:mineflayer@^4.33.0",

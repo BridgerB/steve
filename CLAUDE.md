@@ -131,7 +131,6 @@ This project includes a functional Minecraft bot framework using Mineflayer:
 - **mineflayer** (4.33.0): Core Minecraft bot framework
 - **mineflayer-pathfinder** (2.4.5): Pathfinding and navigation
 - **minecrafthawkeye** (1.3.9): Line-of-sight and collision detection
-- **minecraft-data** (3.98.0): Minecraft protocol data
 - **vec3** (0.1.10): 3D vector mathematics
 
 **Architecture**:
