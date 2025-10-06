@@ -73,6 +73,7 @@ spawn-monsters=true
 spawn-animals=true
 spawn-npcs=true
 allow-flight=false
+rate-limit=0
 PROPS
       echo "✅ Updated server.properties (world preserved)"
       echo ""
@@ -99,6 +100,7 @@ spawn-monsters=true
 spawn-animals=true
 spawn-npcs=true
 allow-flight=false
+rate-limit=0
 PROPS
       ;;
     q|Q)
@@ -129,6 +131,7 @@ spawn-monsters=true
 spawn-animals=true
 spawn-npcs=true
 allow-flight=false
+rate-limit=0
 PROPS
   echo "✅ First run - generated server.properties"
   echo ""

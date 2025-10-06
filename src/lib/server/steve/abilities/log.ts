@@ -13,8 +13,8 @@
  */
 
 import type { Bot } from "mineflayer";
-import { appendFileSync } from "fs";
-import { join } from "path";
+import { appendFileSync } from "node:fs";
+import { join } from "node:path";
 
 export type LogLevel = "info" | "success" | "warning" | "error" | "state";
 

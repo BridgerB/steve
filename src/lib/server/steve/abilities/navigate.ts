@@ -115,11 +115,7 @@ export async function followPlayer(
     await goTo(bot, player.position);
     return true;
   } catch (error) {
-    console.log(
-      `Failed to follow player: ${
-        error instanceof Error ? error.message : "Unknown error"
-      }`,
-    );
+    // Silently fail - pathfinding errors are expected when following
     return false;
   }
 }
