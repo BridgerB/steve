@@ -1,12 +1,10 @@
 import pathfinder from "mineflayer-pathfinder";
-import mcData from "minecraft-data";
 import type { Bot } from "mineflayer";
 import type { Vec3 } from "vec3";
 
 export function initializeNavigation(bot: Bot): void {
   // Initialize pathfinder plugin
   bot.loadPlugin(pathfinder.pathfinder);
-  const minecraftData = mcData(bot.version);
   const movements = new pathfinder.Movements(bot);
 
   // Configure movement options for better pathfinding
