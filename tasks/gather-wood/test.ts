@@ -1,7 +1,7 @@
 /**
  * Test: Gather Wood
  * Spawns bot(s) and attempts to gather wood logs
- * 
+ *
  * Usage:
  *   deno task test                           # runs 1 bot
  *   deno task test -- --bots=50              # runs 50 bots at different locations
@@ -47,7 +47,9 @@ async function runSingleBot(id: number): Promise<BotResult> {
     });
 
     const timeout = setTimeout(() => {
-      try { bot.quit(); } catch (_) { /* ignore */ }
+      try {
+        bot.quit();
+      } catch (_) { /* ignore */ }
       resolve({
         id,
         x,
@@ -84,7 +86,9 @@ async function runSingleBot(id: number): Promise<BotResult> {
         });
       } catch (err) {
         clearTimeout(timeout);
-        try { bot.quit(); } catch (_) { /* ignore */ }
+        try {
+          bot.quit();
+        } catch (_) { /* ignore */ }
         resolve({
           id,
           x,
@@ -99,7 +103,9 @@ async function runSingleBot(id: number): Promise<BotResult> {
 
     bot.on("error", (err: Error) => {
       clearTimeout(timeout);
-      try { bot.quit(); } catch (_) { /* ignore */ }
+      try {
+        bot.quit();
+      } catch (_) { /* ignore */ }
       resolve({
         id,
         x,
@@ -114,7 +120,9 @@ async function runSingleBot(id: number): Promise<BotResult> {
 }
 
 Deno.test({
-  name: `gather-wood: can gather logs (${BOT_COUNT} bot${BOT_COUNT > 1 ? "s" : ""})`,
+  name: `gather-wood: can gather logs (${BOT_COUNT} bot${
+    BOT_COUNT > 1 ? "s" : ""
+  })`,
   sanitizeOps: false,
   sanitizeResources: false,
   async fn() {
@@ -122,11 +130,16 @@ Deno.test({
       // Simple single bot test
       const result = await runSingleBot(0);
       assert(result.success, `Expected success but got: ${result.message}`);
-      assert(result.logsGathered >= TARGET_LOGS, `Expected ${TARGET_LOGS} logs but got ${result.logsGathered}`);
+      assert(
+        result.logsGathered >= TARGET_LOGS,
+        `Expected ${TARGET_LOGS} logs but got ${result.logsGathered}`,
+      );
     } else {
       // Multi-bot stress test
-      console.log(`\nRunning ${BOT_COUNT} bots with ${SPACING} block spacing...`);
-      
+      console.log(
+        `\nRunning ${BOT_COUNT} bots with ${SPACING} block spacing...`,
+      );
+
       const BATCH_SIZE = 10;
       const results: BotResult[] = [];
 
@@ -145,7 +158,11 @@ Deno.test({
         // Print batch results
         for (const r of batchResults) {
           const status = r.success ? "PASS" : "FAIL";
-          console.log(`[${status}] Bot ${r.id} @ (${r.x}, ${r.z}) - ${r.logsGathered} logs - ${(r.duration / 1000).toFixed(1)}s - ${r.message}`);
+          console.log(
+            `[${status}] Bot ${r.id} @ (${r.x}, ${r.z}) - ${r.logsGathered} logs - ${
+              (r.duration / 1000).toFixed(1)
+            }s - ${r.message}`,
+          );
         }
       }
 
@@ -153,8 +170,12 @@ Deno.test({
       const passed = results.filter((r) => r.success).length;
       const failed = results.filter((r) => !r.success).length;
       console.log(`\n========== SUMMARY ==========`);
-      console.log(`Total: ${results.length} | Passed: ${passed} | Failed: ${failed}`);
-      console.log(`Pass rate: ${((passed / results.length) * 100).toFixed(1)}%`);
+      console.log(
+        `Total: ${results.length} | Passed: ${passed} | Failed: ${failed}`,
+      );
+      console.log(
+        `Pass rate: ${((passed / results.length) * 100).toFixed(1)}%`,
+      );
 
       // Failure reasons
       const failReasons = new Map<string, number>();
@@ -172,12 +193,17 @@ Deno.test({
       // Write results to JSON
       await Deno.writeTextFile(
         "gather-wood-results.json",
-        JSON.stringify(results, null, 2)
+        JSON.stringify(results, null, 2),
       );
       console.log(`\nResults written to gather-wood-results.json`);
 
       // Assert at least 50% pass rate for multi-bot
-      assert(passed / results.length >= 0.5, `Pass rate ${((passed / results.length) * 100).toFixed(1)}% is below 50%`);
+      assert(
+        passed / results.length >= 0.5,
+        `Pass rate ${
+          ((passed / results.length) * 100).toFixed(1)
+        }% is below 50%`,
+      );
     }
   },
 });
