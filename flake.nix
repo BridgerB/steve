@@ -69,16 +69,66 @@
     '';
 
     opsJson = pkgs.writeText "ops.json" (builtins.toJSON [
-      { uuid = "8cf67a27-46d2-366b-b426-26e174de7007"; name = "Bird47"; level = 4; bypassesPlayerLimit = true; }
-      { uuid = "5627dd98-e6be-3c21-b8a8-e92344183641"; name = "Steve"; level = 4; bypassesPlayerLimit = true; }
-      { uuid = "62ff0b01-b491-3228-9dff-e7512ac3df09"; name = "TestWood"; level = 4; bypassesPlayerLimit = true; }
-      { uuid = "cfabfddb-9454-3464-89f6-4b9739b31378"; name = "TestMine"; level = 4; bypassesPlayerLimit = true; }
-      { uuid = "bc62a0e8-28ba-3990-bb75-3243edbaaaae"; name = "TestCraft"; level = 4; bypassesPlayerLimit = true; }
-      { uuid = "6cb83f7d-6083-337e-9f3b-fc432b78c868"; name = "TestSmelt"; level = 4; bypassesPlayerLimit = true; }
-      { uuid = "6d9e2f2c-1a69-3188-a71c-1b083e2c913a"; name = "TestCombat"; level = 4; bypassesPlayerLimit = true; }
-      { uuid = "8158f5a2-defc-329c-85bf-e0bf4cd705fd"; name = "TestWorld"; level = 4; bypassesPlayerLimit = true; }
-      { uuid = "90e75911-9640-3547-ab02-f3bf7935d34b"; name = "TestNether"; level = 4; bypassesPlayerLimit = true; }
-      { uuid = "c24246ee-47cc-3053-bbec-cf068c18fa59"; name = "TestEnd"; level = 4; bypassesPlayerLimit = true; }
+      {
+        uuid = "8cf67a27-46d2-366b-b426-26e174de7007";
+        name = "Bird47";
+        level = 4;
+        bypassesPlayerLimit = true;
+      }
+      {
+        uuid = "5627dd98-e6be-3c21-b8a8-e92344183641";
+        name = "Steve";
+        level = 4;
+        bypassesPlayerLimit = true;
+      }
+      {
+        uuid = "62ff0b01-b491-3228-9dff-e7512ac3df09";
+        name = "TestWood";
+        level = 4;
+        bypassesPlayerLimit = true;
+      }
+      {
+        uuid = "cfabfddb-9454-3464-89f6-4b9739b31378";
+        name = "TestMine";
+        level = 4;
+        bypassesPlayerLimit = true;
+      }
+      {
+        uuid = "bc62a0e8-28ba-3990-bb75-3243edbaaaae";
+        name = "TestCraft";
+        level = 4;
+        bypassesPlayerLimit = true;
+      }
+      {
+        uuid = "6cb83f7d-6083-337e-9f3b-fc432b78c868";
+        name = "TestSmelt";
+        level = 4;
+        bypassesPlayerLimit = true;
+      }
+      {
+        uuid = "6d9e2f2c-1a69-3188-a71c-1b083e2c913a";
+        name = "TestCombat";
+        level = 4;
+        bypassesPlayerLimit = true;
+      }
+      {
+        uuid = "8158f5a2-defc-329c-85bf-e0bf4cd705fd";
+        name = "TestWorld";
+        level = 4;
+        bypassesPlayerLimit = true;
+      }
+      {
+        uuid = "90e75911-9640-3547-ab02-f3bf7935d34b";
+        name = "TestNether";
+        level = 4;
+        bypassesPlayerLimit = true;
+      }
+      {
+        uuid = "c24246ee-47cc-3053-bbec-cf068c18fa59";
+        name = "TestEnd";
+        level = 4;
+        bypassesPlayerLimit = true;
+      }
     ]);
 
     # RCON client script
@@ -113,17 +163,16 @@
     # Test runner - assumes server is already running
     runTests = pkgs.writeShellScriptBin "run-tests" ''
       set -euo pipefail
-      
+
       # Check if server is running
       if ! ${pkgs.netcat}/bin/nc -z localhost ${rconPort} 2>/dev/null; then
         echo "Error: Minecraft server not running. Start it first with: nix run"
         exit 1
       fi
-      
+
       echo "Running tests..."
       ${pkgs.deno}/bin/deno test -A --parallel "$@"
     '';
-
   in {
     packages.${system} = {
       default = startServer;
@@ -148,7 +197,7 @@
     };
 
     devShells.${system}.default = pkgs.mkShell {
-      buildInputs = [ startServer rcon pkgs.jre pkgs.deno pkgs.mcrcon ];
+      buildInputs = [startServer rcon pkgs.jre pkgs.deno pkgs.mcrcon];
       shellHook = ''
         echo "Minecraft Server ${version} available"
         echo "Run: minecraft-server"

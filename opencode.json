@@ -1,0 +1,10 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "minecraft": {
+      "type": "local",
+      "command": ["deno", "run", "-A", "--no-check", "mcp/server.ts"],
+      "enabled": true
+    }
+  }
+}
