@@ -66,6 +66,10 @@ async function runSingleBot(id: number): Promise<BotResult> {
         // Wait for world to load
         await new Promise((r) => setTimeout(r, 1000));
 
+        // Clear inventory for clean test
+        bot.chat("/clear");
+        await new Promise((r) => setTimeout(r, 500));
+
         const result = await gatherWood(bot, TARGET_LOGS);
 
         const logsGathered = bot.inventory.items()
