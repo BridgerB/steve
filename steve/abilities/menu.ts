@@ -30,10 +30,12 @@ export function showMenu(
   items: MenuItem[],
   setActiveTask: (task: TaskHandler) => void,
 ): void {
-  // Display menu only in console, not in game chat
+  // Display menu in console and game chat
   console.log("What should I do?");
+  bot.chat("What should I do?");
   items.forEach((item, index) => {
     console.log(`${index + 1}. ${item.name}`);
+    bot.chat(`${index + 1}. ${item.name}`);
   });
 
   let taskSelected = false;

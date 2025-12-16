@@ -1,20 +1,20 @@
 import mineflayer from "mineflayer";
 import type { Bot } from "mineflayer";
-import { initializeMovement, walkTo } from "./abilities/move.ts";
+import { initializeMovement, walkTo } from "./steve/abilities/move.ts";
 import {
   findNearestBlock,
   followPlayer,
   goTo,
   initializeNavigation,
-} from "./abilities/navigate.ts";
+} from "./steve/abilities/navigate.ts";
 import {
   countItem,
   dropItem,
   hasItem,
   setupInventoryLogging,
-} from "./abilities/inventory.ts";
-import { showMenu } from "./abilities/menu.ts";
-import { mineBlock } from "./abilities/mine.ts";
+} from "./steve/abilities/inventory.ts";
+import { showMenu } from "./steve/abilities/menu.ts";
+import { mineBlock } from "./steve/abilities/mine.ts";
 
 // Suppress PartialReadError spam globally by filtering stderr
 const originalStderrWrite = process.stderr.write.bind(process.stderr);
