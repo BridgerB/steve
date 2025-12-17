@@ -53,115 +53,88 @@ export const gatherWood = async (
     const targetY = pos.y;
     const targetZ = pos.z;
 
-    for (let attempt = 0; attempt < 3; attempt++) {
-      // Get the EXACT block at this position
-      const block = bot.blockAt(new Vec3(targetX, targetY, targetZ));
-      if (!block || !isLog(block)) {
-        console.log(
-          `    Block at y=${targetY} is already gone (${block?.name})`,
-        );
-        return true;
-      }
-
-      console.log(
-        `    Attempt ${attempt + 1}: Mining ${block.name} at y=${targetY}`,
-      );
-
-      // Look at the CENTER of this exact block
-      const blockCenter = new Vec3(targetX + 0.5, targetY + 0.5, targetZ + 0.5);
-      await bot.lookAt(blockCenter);
-      await new Promise((r) => setTimeout(r, 150));
-
-      // VERIFY we are looking at the right block before mining
-      const looking = bot.blockAtCursor(5);
-      if (
-        !looking || looking.position.x !== targetX ||
-        looking.position.y !== targetY || looking.position.z !== targetZ
-      ) {
-        console.log(
-          `    NOT looking at target! Looking at ${looking?.name} at y=${looking?.position.y}, want y=${targetY}`,
-        );
-        // Try adjusting look angle slightly lower if we're looking too high
-        if (looking && looking.position.y > targetY) {
-          console.log(`    Adjusting aim lower...`);
-          await bot.lookAt(
-            new Vec3(targetX + 0.5, targetY + 0.2, targetZ + 0.5),
-          );
-          await new Promise((r) => setTimeout(r, 150));
-        }
-        const lookingRetry = bot.blockAtCursor(5);
-        if (!lookingRetry || lookingRetry.position.y !== targetY) {
-          console.log(`    Still not looking at target, skipping this attempt`);
-          continue;
-        }
-      }
-
-      console.log(`    Confirmed looking at y=${targetY}, digging...`);
-
-      // Dig the block - forceLook=true ensures we keep looking at it
-      try {
-        const startTime = Date.now();
-        await bot.dig(block, true); // forceLook = true
-        const elapsed = Date.now() - startTime;
-        console.log(`    Dig completed in ${elapsed}ms`);
-      } catch (e) {
-        console.log(`    Dig error: ${e}`);
-      }
-
-      // Wait and verify the EXACT position
-      await new Promise((r) => setTimeout(r, 200));
-      const after = bot.blockAt(new Vec3(targetX, targetY, targetZ));
-      console.log(`    After: block at y=${targetY} is now ${after?.name}`);
-
-      if (!after || !isLog(after)) {
-        console.log(`    SUCCESS - block gone, collecting...`);
-
-        // Walk to where the block was to collect the drop
-        const dropPos = new Vec3(targetX, targetY, targetZ);
-        await bot.lookAt(dropPos);
-
-        // Walk forward with stuck detection
-        const startPos = bot.entity.position.clone();
-        bot.setControlState("forward", true);
-
-        for (let t = 0; t < 6; t++) {
-          await new Promise((r) => setTimeout(r, 100));
-          const moved = bot.entity.position.distanceTo(startPos) > 0.1;
-          if (!moved && t >= 3) {
-            console.log(`    Stuck while collecting, stopping`);
-            break;
-          }
-        }
-
-        bot.setControlState("forward", false);
-        await new Promise((r) => setTimeout(r, 200));
-
-        console.log(`    Have ${countLogs()} logs now`);
-        return true;
-      }
-
-      console.log(`    FAILED: Block still at y=${targetY}, retrying...`);
+    // Re-fetch the block fresh (in case world changed)
+    const block = bot.blockAt(new Vec3(targetX, targetY, targetZ));
+    if (!block || !isLog(block)) {
+      console.log(`    Block at y=${targetY} is already gone (${block?.name})`);
+      return true;
     }
 
-    return false;
+    // Check distance - bot.dig() requires being within ~4.5 blocks
+    const blockCenter = new Vec3(targetX + 0.5, targetY + 0.5, targetZ + 0.5);
+    const dist = bot.entity.position.distanceTo(blockCenter);
+    console.log(
+      `    Mining ${block.name} at y=${targetY}, dist=${dist.toFixed(2)}`,
+    );
+
+    if (dist > 4.5) {
+      console.log(`    Too far to mine (${dist.toFixed(2)} > 4.5)`);
+      return false;
+    }
+
+    // Look at the block center
+    await bot.lookAt(blockCenter);
+    await new Promise((r) => setTimeout(r, 100));
+
+    // Dig the block directly (forceLook=true)
+    try {
+      await bot.dig(block, true);
+      console.log(`    Dig completed`);
+    } catch (e) {
+      console.log(`    Dig error: ${e}`);
+      return false;
+    }
+
+    // Verify it's gone
+    await new Promise((r) => setTimeout(r, 100));
+    const after = bot.blockAt(new Vec3(targetX, targetY, targetZ));
+    if (after && isLog(after)) {
+      console.log(`    Block still there after dig!`);
+      return false;
+    }
+
+    console.log(`    Block mined, collecting drop...`);
+
+    // Walk into the space where the block was to collect the drop
+    const dropPos = new Vec3(targetX + 0.5, targetY, targetZ + 0.5);
+    await bot.lookAt(dropPos);
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Use pathfinder to walk to drop position
+    try {
+      const goal = new goals.GoalNear(targetX, targetY, targetZ, 0);
+      await Promise.race([
+        botAny.pathfinder.goto(goal),
+        new Promise((r) => setTimeout(r, 3000)), // 3s timeout
+      ]);
+    } catch (_e) {
+      // Ignore pathfinding errors - just walk forward
+      bot.setControlState("forward", true);
+      await new Promise((r) => setTimeout(r, 500));
+      bot.setControlState("forward", false);
+    }
+
+    await new Promise((r) => setTimeout(r, 300));
+    console.log(`    Have ${countLogs()} logs`);
+    return true;
   };
 
   // Navigate to a position with stuck detection
   const goTo = async (pos: Vec3): Promise<boolean> => {
-    const goal = new goals.GoalNear(pos.x, pos.y, pos.z, 1);
+    const goal = new goals.GoalNear(pos.x, pos.y, pos.z, 2);
 
     // Track position to detect stuck
     let lastPos = bot.entity.position.clone();
     let stuckTime = 0;
     let stopped = false;
     const checkInterval = 100; // ms
-    const stuckThreshold = 500; // ms without moving = stuck
+    const stuckThreshold = 2000; // ms without moving = stuck (increased from 500)
 
     const stuckChecker = setInterval(() => {
       if (stopped) return;
 
       const currentPos = bot.entity.position;
-      const moved = currentPos.distanceTo(lastPos) > 0.1;
+      const moved = currentPos.distanceTo(lastPos) > 0.05;
       if (moved) {
         lastPos = currentPos.clone();
         stuckTime = 0;
@@ -171,7 +144,7 @@ export const gatherWood = async (
 
       if (stuckTime >= stuckThreshold && !stopped) {
         stopped = true;
-        console.log(`    Stuck, cancelling`);
+        console.log(`    Stuck for ${stuckThreshold}ms, cancelling`);
         clearInterval(stuckChecker);
         botAny.pathfinder.stop();
       }
@@ -185,7 +158,7 @@ export const gatherWood = async (
     } catch (_err) {
       stopped = true;
       clearInterval(stuckChecker);
-      return bot.entity.position.distanceTo(pos) <= 2;
+      return bot.entity.position.distanceTo(pos) <= 3;
     }
   };
 
@@ -217,70 +190,152 @@ export const gatherWood = async (
     }
 
     searchAttempts = 0;
-    const treeX = log.position.x;
-    const treeZ = log.position.z;
 
     try {
-      console.log(`  Found tree at x=${treeX}, z=${treeZ}`);
+      // Use this log to identify the tree column
+      const treeX = log.position.x;
+      const treeZ = log.position.z;
+      console.log(`  Found tree at column (${treeX}, ${treeZ})`);
 
-      // Mine the tree one log at a time, always getting the lowest first
-      let treeComplete = false;
-      while (!treeComplete && countLogs() < targetCount) {
-        const botY = Math.floor(bot.entity.position.y);
-
-        // Find the lowest log in this column that we can reach (within 2 blocks of our height)
-        let lowestLog: Vec3 | null = null;
-        for (let y = botY - 1; y <= botY + 2; y++) {
+      // Find ALL logs in this column (scan around the found log's position)
+      const findLogsInColumn = (): Vec3[] => {
+        const logs: Vec3[] = [];
+        // Scan from 10 below to 30 above the found log
+        const startY = Math.max(1, log.position.y - 10);
+        const endY = Math.min(255, log.position.y + 30);
+        for (let y = startY; y <= endY; y++) {
           const pos = new Vec3(treeX, y, treeZ);
           const block = bot.blockAt(pos);
           if (block && isLog(block)) {
-            lowestLog = pos;
-            break; // Found the lowest reachable, stop looking
+            logs.push(pos);
           }
         }
+        return logs;
+      };
 
-        if (!lowestLog) {
-          console.log(`  No reachable logs in column (bot at y=${botY})`);
-          treeComplete = true;
+      let logsInColumn = findLogsInColumn();
+      if (logsInColumn.length === 0) {
+        console.log(`  No logs found in column`);
+        continue;
+      }
+
+      console.log(
+        `  Found ${logsInColumn.length} logs in column (y=${
+          logsInColumn[0].y
+        } to y=${logsInColumn[logsInColumn.length - 1].y})`,
+      );
+
+      // Go stand next to the LOWEST log
+      const lowestLogY = logsInColumn[0].y;
+      const adjacent = [
+        new Vec3(treeX + 1, lowestLogY, treeZ),
+        new Vec3(treeX - 1, lowestLogY, treeZ),
+        new Vec3(treeX, lowestLogY, treeZ + 1),
+        new Vec3(treeX, lowestLogY, treeZ - 1),
+      ].sort((a, b) =>
+        bot.entity.position.distanceTo(a) - bot.entity.position.distanceTo(b)
+      );
+
+      let reached = false;
+      for (const pos of adjacent) {
+        if (await goTo(pos)) {
+          reached = true;
           break;
         }
+      }
 
-        console.log(
-          `  Lowest reachable log at y=${lowestLog.y} (bot at y=${botY})`,
-        );
+      if (!reached) {
+        console.log(`  Could not reach tree`);
+        continue;
+      }
 
-        // Go next to this log
-        const adjacent = [
-          new Vec3(treeX + 1, lowestLog.y, treeZ),
-          new Vec3(treeX - 1, lowestLog.y, treeZ),
-          new Vec3(treeX, lowestLog.y, treeZ + 1),
-          new Vec3(treeX, lowestLog.y, treeZ - 1),
-        ].sort((a, b) =>
-          bot.entity.position.distanceTo(a) - bot.entity.position.distanceTo(b)
-        );
+      const groundY = Math.floor(bot.entity.position.y);
 
-        let reached = false;
-        for (const pos of adjacent) {
-          if (await goTo(pos)) {
-            reached = true;
-            break;
+      // Phase 1: Mine bottom 2 logs from the side (at groundY and groundY+1)
+      console.log(
+        `  Phase 1: Mining bottom logs from side (groundY=${groundY})`,
+      );
+      for (const logPos of logsInColumn) {
+        if (logPos.y <= groundY + 1) {
+          const success = await mineAndCollect(logPos);
+          if (success) {
+            console.log(
+              `  Mined log at y=${logPos.y}, have ${countLogs()}/${targetCount} logs`,
+            );
           }
+          if (countLogs() >= targetCount) break;
         }
-        if (!reached) {
-          console.log(`  Could not reach log`);
-          treeComplete = true;
+      }
+
+      if (countLogs() >= targetCount) continue;
+
+      // Phase 2: Move INTO the tree column (where logs used to be) and mine the rest from below
+      // Re-scan column to see what's left
+      logsInColumn = findLogsInColumn();
+      if (logsInColumn.length === 0) {
+        console.log(`  Tree cleared`);
+        continue;
+      }
+
+      console.log(
+        `  Phase 2: Moving under tree to mine ${logsInColumn.length} remaining logs`,
+      );
+
+      // Since we've cleared the bottom logs, we can walk directly into the tree column
+      // Look at the center of the tree column at our height and walk forward
+      const treeCenter = new Vec3(
+        treeX + 0.5,
+        bot.entity.position.y + 0.5,
+        treeZ + 0.5,
+      );
+      await bot.lookAt(treeCenter);
+      await new Promise((r) => setTimeout(r, 100));
+
+      // Walk forward until we're close to the tree center
+      const targetDist = 0.5; // Want to be within 0.5 blocks of tree center (XZ plane)
+      const maxWalkTime = 2000;
+      const startTime = Date.now();
+
+      bot.setControlState("forward", true);
+      while (Date.now() - startTime < maxWalkTime) {
+        const dx = (treeX + 0.5) - bot.entity.position.x;
+        const dz = (treeZ + 0.5) - bot.entity.position.z;
+        const distXZ = Math.sqrt(dx * dx + dz * dz);
+
+        if (distXZ < targetDist) {
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      bot.setControlState("forward", false);
+      await new Promise((r) => setTimeout(r, 100));
+
+      console.log(
+        `  Now at (${bot.entity.position.x.toFixed(1)}, ${
+          bot.entity.position.y.toFixed(1)
+        }, ${bot.entity.position.z.toFixed(1)}), tree at (${treeX}, ${treeZ})`,
+      );
+
+      // Mine remaining logs from below (looking up)
+      while (countLogs() < targetCount) {
+        logsInColumn = findLogsInColumn();
+        if (logsInColumn.length === 0) {
+          console.log(`  No more logs in column`);
           break;
         }
 
-        // Mine this one log and collect it
-        const success = await mineAndCollect(lowestLog);
-        if (!success) {
-          console.log(`  Failed to mine log, moving on`);
-          treeComplete = true;
+        // Mine the lowest remaining log (should be directly above us now)
+        const success = await mineAndCollect(logsInColumn[0]);
+        if (success) {
+          console.log(
+            `  Mined log at y=${
+              logsInColumn[0].y
+            }, have ${countLogs()}/${targetCount} logs`,
+          );
+        } else {
+          console.log(`  Failed to mine log at y=${logsInColumn[0].y}`);
           break;
         }
-
-        console.log(`  Have ${countLogs()}/${targetCount} logs`);
       }
     } catch (err) {
       console.log(`  Error: ${err}`);

@@ -22,6 +22,7 @@ import {
   lookAt,
   mineBlock,
   placeBlock,
+  requireBot,
   selectSlot,
   spawnBot,
   turn,
@@ -620,6 +621,175 @@ server.tool(
           {
             type: "text",
             text: JSON.stringify({ success }),
+          },
+        ],
+      };
+    } catch (err) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              error: err instanceof Error ? err.message : "Unknown error",
+            }),
+          },
+        ],
+        isError: true,
+      };
+    }
+  },
+);
+
+// ============================================
+// SCRIPT/CODE EXECUTION TOOLS
+// ============================================
+
+server.tool(
+  "run_script",
+  "Run a TypeScript file and capture output. Useful for testing task scripts.",
+  {
+    path: z.string().describe("Path to the TypeScript file to run"),
+    timeout_ms: z.number().optional().describe(
+      "Timeout in milliseconds (default: 60000)",
+    ),
+  },
+  async ({ path, timeout_ms }) => {
+    try {
+      const timeout = timeout_ms ?? 60000;
+      const command = new Deno.Command("deno", {
+        args: ["run", "-A", "--no-check", path],
+        stdout: "piped",
+        stderr: "piped",
+      });
+
+      const process = command.spawn();
+
+      // Set up timeout
+      const timeoutId = setTimeout(() => {
+        try {
+          process.kill();
+        } catch (_e) {
+          // Process may have already exited
+        }
+      }, timeout);
+
+      const { code, stdout, stderr } = await process.output();
+      clearTimeout(timeoutId);
+
+      const stdoutStr = new TextDecoder().decode(stdout);
+      const stderrStr = new TextDecoder().decode(stderr);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: code === 0,
+              exitCode: code,
+              stdout: stdoutStr,
+              stderr: stderrStr,
+            }),
+          },
+        ],
+      };
+    } catch (err) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              error: err instanceof Error ? err.message : "Unknown error",
+            }),
+          },
+        ],
+        isError: true,
+      };
+    }
+  },
+);
+
+server.tool(
+  "run_test",
+  "Run a Deno test file and capture results. Good for running task tests.",
+  {
+    path: z.string().describe("Path to the test file to run"),
+    timeout_ms: z.number().optional().describe(
+      "Timeout in milliseconds (default: 120000)",
+    ),
+  },
+  async ({ path, timeout_ms }) => {
+    try {
+      const timeout = timeout_ms ?? 120000;
+      const command = new Deno.Command("deno", {
+        args: ["test", "-A", "--no-check", path],
+        stdout: "piped",
+        stderr: "piped",
+      });
+
+      const process = command.spawn();
+
+      // Set up timeout
+      const timeoutId = setTimeout(() => {
+        try {
+          process.kill();
+        } catch (_e) {
+          // Process may have already exited
+        }
+      }, timeout);
+
+      const { code, stdout, stderr } = await process.output();
+      clearTimeout(timeoutId);
+
+      const stdoutStr = new TextDecoder().decode(stdout);
+      const stderrStr = new TextDecoder().decode(stderr);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: code === 0,
+              exitCode: code,
+              stdout: stdoutStr,
+              stderr: stderrStr,
+            }),
+          },
+        ],
+      };
+    } catch (err) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              error: err instanceof Error ? err.message : "Unknown error",
+            }),
+          },
+        ],
+        isError: true,
+      };
+    }
+  },
+);
+
+server.tool(
+  "chat",
+  "Send a chat message in the game",
+  {
+    message: z.string().describe("Message to send"),
+  },
+  async ({ message }) => {
+    try {
+      const b = requireBot();
+      b.chat(message);
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ success: true }),
           },
         ],
       };
