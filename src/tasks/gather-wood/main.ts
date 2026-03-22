@@ -60,7 +60,12 @@ export const gatherWood = async (
 
   const botPos = () => bot.entity?.position ?? vec3(0, 64, 0);
 
-  // Find the single closest log block
+  // Skip positions we already failed to reach
+  const unreachable = new Set<string>();
+  // Key by X,Z only — blacklist entire tree column, not individual blocks
+  const posKey = (p: Vec3) => `${Math.floor(p.x)},${Math.floor(p.z)}`;
+
+  // Find the closest reachable log block
   const findClosestLog = (): { pos: Vec3; name: string } | null => {
     for (const radius of [16, 32, 48, 64]) {
       const positions = bot.findBlocks({
@@ -70,14 +75,16 @@ export const gatherWood = async (
       });
       if (positions.length === 0) continue;
 
-      const sorted = positions.sort(
-        (a, b) => distance(botPos(), a) - distance(botPos(), b)
-      );
-      const closest = sorted[0]!;
-      const block = getBlock(bot, closest);
-      if (block) {
-        logEvent("wood", "found_tree", `${block.name} dist=${distance(botPos(), closest).toFixed(1)}`, closest);
-        return { pos: closest, name: block.name };
+      const reachable = positions
+        .filter((p) => !unreachable.has(posKey(p)))
+        .sort((a, b) => distance(botPos(), a) - distance(botPos(), b));
+
+      for (const pos of reachable) {
+        const block = getBlock(bot, pos);
+        if (block) {
+          logEvent("wood", "found_tree", `${block.name} dist=${distance(botPos(), pos).toFixed(1)}`, pos);
+          return { pos, name: block.name };
+        }
       }
     }
     return null;
@@ -87,7 +94,7 @@ export const gatherWood = async (
   const navigateTo = async (target: Vec3): Promise<boolean> => {
     if (!bot.entity?.position) return false;
     const dist = distance(botPos(), target);
-    if (dist <= 4) return true;
+    if (dist <= 5) return true;
 
     const goal = createGoalNear(target.x, target.y, target.z, 3);
     pf.setGoal(goal);
@@ -99,11 +106,11 @@ export const gatherWood = async (
     let stuckTicks = 0;
 
     while (Date.now() - start < timeout) {
-      await sleep(500);
+      await sleep(250);
       if (!bot.entity?.position) { pf.stop(); return false; }
 
       const currentDist = distance(botPos(), target);
-      if (currentDist <= 4) { pf.stop(); return true; }
+      if (currentDist <= 5) { pf.stop(); return true; }
 
       // Water escape
       if (bot.entity.isInWater) {
@@ -123,7 +130,7 @@ export const gatherWood = async (
       }
       lastDist = currentDist;
 
-      if (stuckTicks >= 12) {
+      if (stuckTicks >= 10) {
         logEvent("wood", "nav_stuck", `dist=${currentDist.toFixed(1)} after ${stuckTicks} ticks`);
         pf.stop();
         // Raw walk fallback
@@ -143,7 +150,7 @@ export const gatherWood = async (
     }
 
     pf.stop();
-    return distance(botPos(), target) <= 4;
+    return distance(botPos(), target) <= 5;
   };
 
   // Mine a single block
@@ -168,15 +175,14 @@ export const gatherWood = async (
     if (!block || !isLogName(block.name)) return true; // already gone
 
     await bot.lookAt(blockCenter);
-    await sleep(100);
 
-    logEvent("wood", "dig_start", `${block.name} hardness=${block.hardness} dist=${dist.toFixed(1)}`, pos);
+    logEvent("wood", "dig_start", `${block.name} dist=${dist.toFixed(1)}`, pos);
     const logsBefore = countLogs();
 
     try {
       await Promise.race([
         bot.dig(block as any, true),
-        new Promise<void>((_, reject) => setTimeout(() => reject(new Error("dig timeout")), 8000)),
+        new Promise<void>((_, reject) => setTimeout(() => reject(new Error("dig timeout")), 5000)),
       ]);
       logEvent("wood", "dig_done", block.name, pos);
     } catch (e) {
@@ -186,14 +192,29 @@ export const gatherWood = async (
       return msg === "dig timeout"; // timeout = block probably broke, continue
     }
 
-    // Pick up the drop — pathfind to where block was
-    await sleep(300);
-    const pickupGoal = createGoalNear(pos.x, pos.y, pos.z, 0);
-    pf.setGoal(pickupGoal);
-
-    for (let i = 0; i < 10; i++) {
-      await sleep(500);
+    // Pick up the drop — find the item entity and go to it until collected
+    await sleep(200);
+    for (let attempt = 0; attempt < 12; attempt++) {
       if (countLogs() > logsBefore) break;
+
+      // Find nearest item entity
+      const items = Object.values(bot.entities).filter(
+        (e) => e.position && (e.type === "object" || e.name === "item") && distance(e.position, pos) < 6
+      );
+
+      if (items.length > 0) {
+        // Sort by distance, go to closest
+        const nearest = items.sort((a, b) => distance(botPos(), a.position) - distance(botPos(), b.position))[0]!;
+        const goal = createGoalNear(nearest.position.x, nearest.position.y, nearest.position.z, 0);
+        pf.setGoal(goal);
+        logEvent("wood", "pickup_walk", `item at dist=${distance(botPos(), nearest.position).toFixed(1)}`, nearest.position);
+      } else {
+        // No item entity visible — walk to block position
+        const goal = createGoalNear(pos.x, pos.y, pos.z, 0);
+        pf.setGoal(goal);
+      }
+
+      await sleep(300);
     }
     pf.stop();
 
@@ -234,7 +255,11 @@ export const gatherWood = async (
     }
 
     const reached = await navigateTo(target.pos);
-    if (!reached) continue;
+    if (!reached) {
+      unreachable.add(posKey(target.pos));
+      logEvent("wood", "blacklist", `${target.name} at ${posKey(target.pos)}`, target.pos);
+      continue;
+    }
 
     await mineBlock(target.pos, target.name);
   }
