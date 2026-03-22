@@ -21,7 +21,7 @@ it("end: can destroy crystals", { timeout: TIMEOUT }, async () => {
         host: "localhost",
         port: 25565,
         username: USERNAME,
-        version: "1.21",
+        version: "1.21.11",
       });
 
       await new Promise<void>((resolve, reject) => {

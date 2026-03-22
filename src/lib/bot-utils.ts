@@ -8,11 +8,28 @@ import { createPathfinder, createGoalNear, windowItems } from "typecraft";
 import { vec3, distance, offset, type Vec3 } from "typecraft";
 import type { StepResult } from "../types.ts";
 
-/** Block object returned by bot.blockAt() / bot.findBlock() */
+/** Block with position and hardness — enriched from typecraft's blockAt + registry */
 type Block = {
   position: Vec3;
   name: string;
   stateId: number;
+  hardness: number | null;
+};
+
+/** Get block at position with position and hardness attached */
+export const getBlock = (bot: Bot, pos: Vec3): Block | null => {
+  const info = bot.blockAt(pos) as { name: string; stateId?: number; properties?: Record<string, string> } | null;
+  if (!info) return null;
+
+  // Look up hardness from registry
+  let hardness: number | null = null;
+  if (bot.registry) {
+    const blockName = info.name.startsWith("minecraft:") ? info.name : `minecraft:${info.name}`;
+    const def = bot.registry.blocksByName.get(blockName) ?? bot.registry.blocksByName.get(info.name);
+    if (def) hardness = def.hardness;
+  }
+
+  return { position: pos, name: info.name, stateId: info.stateId ?? 0, hardness };
 };
 
 // =============================================================================
@@ -241,7 +258,7 @@ export const mineAndCollect = async (
   } = options;
 
   // Re-fetch the block fresh
-  const block = bot.blockAt(pos) as Block | null;
+  const block = getBlock(bot, pos);
   if (!block || block.name === "air" || !isValidBlock(block)) {
     return true; // Block already gone or invalid
   }
@@ -269,7 +286,7 @@ export const mineAndCollect = async (
 
   // Verify it's gone
   await sleep(postDigDelay);
-  const after = bot.blockAt(pos) as Block | null;
+  const after = getBlock(bot, pos);
   if (after && after.name !== "air" && isValidBlock(after)) {
     console.log(`    Block still there after dig!`);
     return false;
@@ -442,10 +459,16 @@ export const findBlock = (
     ? (name: string) => name === matcher
     : matcher;
 
-  return bot.findBlock({
+  const positions = bot.findBlocks({
     matching: matchFn,
     maxDistance,
-  }) as Block | null;
+    count: 1,
+  });
+
+  if (positions.length === 0) return null;
+
+  const pos = positions[0]!;
+  return getBlock(bot, pos);
 };
 
 /**
@@ -631,6 +654,52 @@ export const errorResult = (err: unknown, fallback: string): StepResult => ({
 });
 
 // =============================================================================
+// WATER HANDLING
+// =============================================================================
+
+/**
+ * If bot is in water, swim up and try to get to land.
+ * Holds jump to swim up, then walks forward to find shore.
+ */
+export const escapeWater = async (bot: Bot): Promise<boolean> => {
+  if (!bot.entity?.isInWater) return true; // not in water
+
+  console.log("  Swimming out of water...");
+
+  // Hold jump to swim up
+  bot.setControlState("jump", true);
+  bot.setControlState("forward", true);
+  bot.setControlState("sprint", true);
+
+  const start = Date.now();
+  const timeout = 10000;
+
+  while (Date.now() - start < timeout) {
+    await sleep(200);
+    if (!bot.entity?.isInWater) {
+      // Out of water, keep moving forward briefly to get on land
+      await sleep(500);
+      bot.setControlState("jump", false);
+      bot.setControlState("forward", false);
+      bot.setControlState("sprint", false);
+      console.log("  Escaped water!");
+      return true;
+    }
+    // Rotate randomly to find shore
+    if ((Date.now() - start) % 2000 < 200) {
+      const angle = Math.random() * Math.PI * 2;
+      await bot.look(angle, 0);
+    }
+  }
+
+  bot.setControlState("jump", false);
+  bot.setControlState("forward", false);
+  bot.setControlState("sprint", false);
+  console.log("  Failed to escape water");
+  return false;
+};
+
+// =============================================================================
 // EXPLORATION
 // =============================================================================
 
@@ -645,13 +714,14 @@ export const errorResult = (err: unknown, fallback: string): StepResult => ({
  */
 export const exploreRandom = async (
   bot: Bot,
-  distance = 30,
+  dist = 30,
 ): Promise<void> => {
+  if (!bot.entity?.position) return;
   const angle = Math.random() * Math.PI * 2;
   const target = vec3(
-    bot.entity.position.x + Math.cos(angle) * distance,
+    bot.entity.position.x + Math.cos(angle) * dist,
     bot.entity.position.y,
-    bot.entity.position.z + Math.sin(angle) * distance,
+    bot.entity.position.z + Math.sin(angle) * dist,
   );
   await goTo(bot, target, { range: 5 });
 };

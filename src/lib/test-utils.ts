@@ -85,7 +85,7 @@ export const runBotTest = async (
         host,
         port,
         username,
-        version: "1.21",
+        version: "1.21.11",
       });
 
       await new Promise<void>((resolve, reject) => {
@@ -165,7 +165,7 @@ export const runSingleBotTest = (
       host,
       port,
       username,
-      version: "1.21",
+      version: "1.21.11",
     });
 
     const timeoutId = setTimeout(() => {

@@ -1,5 +1,5 @@
 {
-  description = "Local Minecraft Server for Bot Testing";
+  description = "Steve - Minecraft Ender Dragon Speedrun Bot";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
@@ -15,18 +15,18 @@
       config.allowUnfree = true;
     };
 
-    version = "1.21.8";
+    version = "1.21.11";
     rconPassword = "minecraft-test-rcon";
     rconPort = "25575";
 
     serverJar = pkgs.fetchurl {
-      url = "https://piston-data.mojang.com/v1/objects/6bce4ef400e4efaa63a13d5e6f6b500be969ef81/server.jar";
-      sha256 = "1rxvgyz969yhc1a0fnwmwwap1c548vpr0a39wx02rgnly2ldjj93";
+      url = "https://piston-data.mojang.com/v1/objects/64bb6d763bed0a9f1d632ec347938594144943ed/server.jar";
+      sha256 = "09hpvmjnspf74k8ks9imcc3lqz8p3gjald3y3j9nz035704qwfzq";
     };
 
     jvmOpts = builtins.concatStringsSep " " [
-      "-Xmx16G"
-      "-Xms16G"
+      "-Xmx4G"
+      "-Xms4G"
       "-XX:+UseG1GC"
       "-XX:+ParallelRefProcEnabled"
       "-XX:MaxGCPauseMillis=200"
@@ -45,17 +45,20 @@
       "-XX:MaxTenuringThreshold=1"
     ];
 
+    # Optimized for single-bot testing: minimal view distance, fast ticks
     serverProperties = pkgs.writeText "server.properties" ''
-      max-players=1000
+      max-players=10
       online-mode=false
-      pvp=true
+      pvp=false
       difficulty=normal
       gamemode=survival
       enable-command-block=true
       spawn-protection=0
       view-distance=10
+      simulation-distance=6
       server-port=25565
-      motd=Local Bot Testing Server
+      level-seed=1
+      motd=Steve Bot Testing Server
       white-list=false
       spawn-monsters=true
       spawn-animals=true
@@ -113,7 +116,7 @@
       }
       {
         uuid = "8158f5a2-defc-329c-85bf-e0bf4cd705fd";
-        name = "TestWorld";
+        name = "TestFood";
         level = 4;
         bypassesPlayerLimit = true;
       }
@@ -154,13 +157,64 @@
       echo "Starting Minecraft Server ${version}..."
       echo "Server will be available at: localhost:25565"
       echo "RCON available at: localhost:${rconPort}"
-      echo "Max players: 1000 | Online mode: OFF"
       echo ""
 
       exec ${pkgs.jre}/bin/java ${jvmOpts} -jar ${serverJar} nogui
     '';
 
-    # Test runner - assumes server is already running
+    # Wait for server to be ready, then run Steve
+    runSteve = pkgs.writeShellScriptBin "run-steve" ''
+      set -euo pipefail
+
+      STEVE_DIR="''${STEVE_DIR:-$(pwd)}"
+      export NODE_PATH="$STEVE_DIR/node_modules"
+
+      echo "Waiting for Minecraft server on localhost:25565..."
+      while ! ${pkgs.netcat}/bin/nc -z localhost 25565 2>/dev/null; do
+        sleep 1
+      done
+      echo "Game port up! Waiting for RCON on localhost:${rconPort}..."
+      while ! ${pkgs.netcat}/bin/nc -z localhost ${rconPort} 2>/dev/null; do
+        sleep 1
+      done
+      echo "RCON is up! Waiting for server to finish loading..."
+
+      # Wait until RCON actually responds (world gen can take a while on first run)
+      while ! ${pkgs.mcrcon}/bin/mcrcon -H localhost -P ${rconPort} -p ${rconPassword} "list" 2>/dev/null | grep -q "players"; do
+        sleep 2
+      done
+      echo "Server is ready!"
+
+      echo "Server ready. Running at normal speed (1x)."
+
+      echo "Starting Steve bot..."
+      exec ${pkgs.nodejs}/bin/npx tsx "$STEVE_DIR/src/main.ts"
+    '';
+
+    # Start server + Steve together
+    runAll = pkgs.writeShellScriptBin "run-all" ''
+      set -euo pipefail
+
+      export STEVE_DIR="$(pwd)"
+
+      # Reset world from backup
+      rm -rf server/world
+      cp -r data/world server/world
+
+      echo "=== Starting server + Steve ==="
+
+      # Start server in background
+      ${startServer}/bin/minecraft-server &
+      SERVER_PID=$!
+
+      # Cleanup on exit
+      trap "kill $SERVER_PID 2>/dev/null; wait $SERVER_PID 2>/dev/null" EXIT
+
+      # Wait for server then run Steve
+      ${runSteve}/bin/run-steve
+    '';
+
+    # Test runner
     runTests = pkgs.writeShellScriptBin "run-tests" ''
       set -euo pipefail
 
@@ -171,12 +225,15 @@
       fi
 
       echo "Running tests..."
-      ${pkgs.deno}/bin/deno test -A --parallel "$@"
+      cd "$(pwd)"
+      ${pkgs.nodejs}/bin/node --import tsx --test "src/**/*.test.ts" "$@"
     '';
   in {
     packages.${system} = {
-      default = startServer;
+      default = runAll;
       server = startServer;
+      steve = runSteve;
+      all = runAll;
       rcon = rcon;
       test = runTests;
     };
@@ -184,7 +241,15 @@
     apps.${system} = {
       default = {
         type = "app";
-        program = "${startServer}/bin/minecraft-server";
+        program = "${runAll}/bin/run-all";
+      };
+      steve = {
+        type = "app";
+        program = "${runSteve}/bin/run-steve";
+      };
+      all = {
+        type = "app";
+        program = "${runAll}/bin/run-all";
       };
       test = {
         type = "app";
@@ -197,12 +262,24 @@
     };
 
     devShells.${system}.default = pkgs.mkShell {
-      buildInputs = [startServer rcon pkgs.jre pkgs.deno pkgs.mcrcon];
+      buildInputs = [
+        startServer
+        runSteve
+        runAll
+        rcon
+        pkgs.jre
+        pkgs.nodejs
+        pkgs.mcrcon
+      ];
       shellHook = ''
-        echo "Minecraft Server ${version} available"
-        echo "Run: minecraft-server"
-        echo "RCON: rcon <command>  (e.g., rcon 'op Bird47')"
-        echo "Test: nix run .#test"
+        echo "Steve - Minecraft Bot"
+        echo ""
+        echo "  nix run            Start MC server only"
+        echo "  nix run .#steve    Start Steve (server must be running)"
+        echo "  nix run .#all      Start server + Steve together"
+        echo "  nix run .#test     Run tests (server must be running)"
+        echo "  rcon <cmd>         Send RCON command"
+        echo ""
       '';
     };
   };

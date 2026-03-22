@@ -209,7 +209,7 @@ export const steps: readonly Step[] = [
     canExecute: (s) => s.equipment.hasBucket && !s.equipment.hasWaterBucket,
     isComplete: (s) => s.equipment.hasWaterBucket,
     execute: async (bot, _state) => {
-      const { fillWaterBucket } = await import("./tasks/world/main.ts");
+      const { fillWaterBucket } = await import("./tasks/bucket/main.ts");
       return fillWaterBucket(bot);
     },
   },
@@ -221,7 +221,7 @@ export const steps: readonly Step[] = [
     canExecute: (s) => s.equipment.sword !== "none",
     isComplete: (s) => s.inventory.food >= 20,
     execute: async (bot, _state) => {
-      const { gatherFood } = await import("./tasks/combat/main.ts");
+      const { gatherFood } = await import("./tasks/food/main.ts");
       return gatherFood(bot, 20);
     },
   },
@@ -250,7 +250,7 @@ export const steps: readonly Step[] = [
       s.world.dimension === "overworld",
     isComplete: (s) => s.world.portalBuilt,
     execute: async (bot, _state) => {
-      const { buildNetherPortal } = await import("./tasks/world/main.ts");
+      const { buildNetherPortal } = await import("./tasks/portal/build.ts");
       return buildNetherPortal(bot);
     },
   },
@@ -263,7 +263,7 @@ export const steps: readonly Step[] = [
     canExecute: (s) => s.world.portalBuilt && s.world.dimension === "overworld",
     isComplete: (s) => s.world.dimension === "nether",
     execute: async (bot, _state) => {
-      const { enterPortal } = await import("./tasks/world/main.ts");
+      const { enterPortal } = await import("./tasks/portal/enter.ts");
       return enterPortal(bot);
     },
   },
@@ -317,7 +317,7 @@ export const steps: readonly Step[] = [
       s.inventory.blazeRods >= 6 &&
       s.inventory.enderPearls >= 12,
     execute: async (bot, _state) => {
-      const { enterPortal } = await import("./tasks/world/main.ts");
+      const { enterPortal } = await import("./tasks/portal/enter.ts");
       return enterPortal(bot);
     },
   },
@@ -344,7 +344,7 @@ export const steps: readonly Step[] = [
       s.inventory.eyesOfEnder >= 12 && s.world.dimension === "overworld",
     isComplete: (s) => s.world.strongholdFound,
     execute: async (bot, _state) => {
-      const { findStronghold } = await import("./tasks/world/main.ts");
+      const { findStronghold } = await import("./tasks/stronghold/find.ts");
       return findStronghold(bot);
     },
   },
@@ -356,7 +356,7 @@ export const steps: readonly Step[] = [
     canExecute: (s) => s.world.strongholdFound && s.inventory.eyesOfEnder >= 10,
     isComplete: (s) => s.world.portalActivated,
     execute: async (bot, _state) => {
-      const { activateEndPortal } = await import("./tasks/world/main.ts");
+      const { activateEndPortal } = await import("./tasks/stronghold/activate.ts");
       return activateEndPortal(bot);
     },
   },
@@ -384,7 +384,7 @@ export const steps: readonly Step[] = [
       s.equipment.sword !== "none",
     isComplete: (s) => s.world.dimension === "end",
     execute: async (bot, _state) => {
-      const { enterEndPortal } = await import("./tasks/world/main.ts");
+      const { enterEndPortal } = await import("./tasks/portal/enter.ts");
       return enterEndPortal(bot);
     },
   },

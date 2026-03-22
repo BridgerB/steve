@@ -5,11 +5,12 @@
  * It uses a priority-based state machine to determine what to do next.
  */
 
-import { createBot as createMcBot } from "typecraft";
+import { createBot as createMcBot, ping } from "typecraft";
 import type { Bot } from "typecraft";
 
 import { getPhase, isDragonDead, syncFromBot } from "./state.ts";
 import { getNextStep, getProgress, type Step } from "./steps.ts";
+import { initLogger, startTickLogger, stopLogger, logEvent } from "./lib/logger.ts";
 
 // ============================================
 // CONFIGURATION
@@ -87,18 +88,24 @@ const runTick = async (bot: Bot): Promise<void> => {
   if (currentStep && !isExecuting) {
     isExecuting = true;
     log(`Starting: ${currentStep.name}`);
+    logEvent("step", "start", currentStep.name, bot.entity?.position);
 
     try {
       const result = await currentStep.execute(bot, state);
 
       if (result.success) {
         log(`✓ ${result.message}`);
+        logEvent("step", "success", `${currentStep.name}: ${result.message}`, bot.entity?.position);
       } else {
         log(`✗ ${result.message}`);
+        logEvent("step", "fail", `${currentStep.name}: ${result.message}`, bot.entity?.position);
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Unknown error";
-      log(`✗ Error: ${message}`);
+      const msg = err instanceof Error ? err.message : String(err);
+      log(`FATAL: ${msg}`);
+      logEvent("step", "fatal", msg, bot.entity?.position);
+      if (err instanceof Error) console.error(err.stack);
+      process.exit(1);
     }
 
     isExecuting = false;
@@ -121,24 +128,39 @@ const runTick = async (bot: Bot): Promise<void> => {
 // BOT INITIALIZATION
 // ============================================
 
-const createBot = (): Bot => {
+const createBot = async (): Promise<Bot> => {
   log("Creating bot...");
+
+  // Ping server to get exact version
+  const info = await ping({ host: CONFIG.host, port: CONFIG.port });
+  log(`Server version: ${info.version.name} (protocol ${info.version.protocol})`);
 
   const bot = createMcBot({
     host: CONFIG.host,
     port: CONFIG.port,
     username: CONFIG.username,
-    version: "1.21",
+    version: info.version.name,
+    auth: "offline",
   });
 
   return bot;
 };
 
-const startBot = (): void => {
-  const bot = createBot();
+const startBot = async (): Promise<void> => {
+  const bot = await createBot();
 
-  bot.once("spawn", () => {
+  bot.once("spawn", async () => {
     log("Steve spawned into the world");
+    logEvent("lifecycle", "spawn", `pos=${Math.floor(bot.entity.position.x)},${Math.floor(bot.entity.position.y)},${Math.floor(bot.entity.position.z)}`, bot.entity.position);
+
+    // Start SQLite tick logger
+    startTickLogger(bot);
+
+    // Wait for chunks to load before doing anything
+    await bot.waitForChunksToLoad();
+    log("Chunks loaded");
+    logEvent("lifecycle", "chunks_loaded");
+
     log(
       `Position: ${Math.floor(bot.entity.position.x)}, ${
         Math.floor(bot.entity.position.y)
@@ -172,6 +194,7 @@ const startBot = (): void => {
 
   bot.on("death", () => {
     log("Steve died! Respawning...");
+    logEvent("lifecycle", "death", undefined, bot.entity?.position);
     isExecuting = false;
     currentStep = null;
   });
@@ -179,19 +202,25 @@ const startBot = (): void => {
   bot.on("health", () => {
     if (bot.health < 5) {
       log(`⚠ Low health: ${bot.health}/20`);
+      logEvent("health", "low_health", `${bot.health}/20`, bot.entity?.position);
     }
   });
 
   bot.on("end", () => {
     log("Steve disconnected");
+    logEvent("lifecycle", "disconnected");
+    stopLogger();
   });
 
   bot.on("kicked", (reason) => {
     log(`Kicked: ${reason}`);
+    logEvent("lifecycle", "kicked", reason);
+    stopLogger();
   });
 
   bot.on("error", (err) => {
     log(`Bot error: ${err.message}`);
+    logEvent("error", "bot_error", err.message);
   });
 };
 
@@ -207,5 +236,7 @@ console.log("║  Goal: Beat Minecraft from spawn to Ender Dragon      ║");
 console.log("║  Method: Pure autonomous gameplay, no human input     ║");
 console.log("╚════════════════════════════════════════════════════════╝");
 console.log("");
+
+initLogger();
 
 startBot();

@@ -27,7 +27,14 @@ export const craftPlanks = async (bot: Bot): Promise<StepResult> => {
         bot.registry?.itemsByName.get("oak_planks")?.id;
       if (!plankId) continue;
 
-      const recipes = bot.recipesFor(plankId, null, 1, null);
+      let recipes: any[];
+      try {
+        recipes = bot.recipesFor(plankId, null, 1, null);
+      } catch (e) {
+        console.log(`[craft] recipesFor failed for ${plankName} (id=${plankId}): ${e}`);
+        if (e instanceof Error) console.log(e.stack);
+        continue;
+      }
       const recipe = recipes[0];
       if (recipe) {
         await bot.craft(recipe, Math.min(log.count, 8));
@@ -35,6 +42,7 @@ export const craftPlanks = async (bot: Bot): Promise<StepResult> => {
     }
     return success("Crafted planks from logs");
   } catch (err) {
+    console.error(err);
     return failure(
       err instanceof Error ? err.message : "Failed to craft planks",
     );
