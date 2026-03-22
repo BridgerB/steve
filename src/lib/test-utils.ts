@@ -5,7 +5,7 @@
 
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
-import { createBot, windowItems } from "typecraft";
+import { createBot, createWebViewer, windowItems } from "typecraft";
 import type { Bot } from "typecraft";
 import type { StepResult } from "../types.ts";
 
@@ -91,6 +91,9 @@ export const runBotTest = async (
       await new Promise<void>((resolve, reject) => {
         bot.once("spawn", async () => {
           try {
+            // Start web viewer so we can watch the test in the browser
+            createWebViewer(bot, { port: 3000, viewDistance: 6 });
+
             // Wait for world to load
             await sleep(spawnDelay);
 
@@ -99,6 +102,27 @@ export const runBotTest = async (
               bot.chat(cmd);
               await sleep(setupDelay);
             }
+
+            // Debug: listen for inventory packets
+            bot.client.on("set_slot", (p: any) => {
+              console.log(`[test] set_slot: window=${p.windowId} slot=${p.slot} item=${JSON.stringify(p.item)?.slice(0, 60)}`);
+            });
+            bot.client.on("set_player_inventory", (p: any) => {
+              console.log(`[test] set_player_inventory: slot=${p.slotId} item=${JSON.stringify(p.contents)?.slice(0, 60)}`);
+            });
+            bot.client.on("window_items", (p: any) => {
+              const nonEmpty = (p.items as any[])?.filter((i: any) => i?.itemCount > 0).length ?? 0;
+              console.log(`[test] window_items: window=${p.windowId} items=${(p.items as any[])?.length} nonEmpty=${nonEmpty}`);
+            });
+
+            // Wait extra for inventory to sync
+            await sleep(2000);
+
+            // Debug: dump inventory
+            const items = bot.inventory.slots
+              .map((s, i) => s && s.count > 0 ? `slot${i}:${s.name}(${s.type})x${s.count}` : null)
+              .filter(Boolean);
+            console.log(`[test] Inventory after setup: ${items.length > 0 ? items.join(", ") : "empty"}`);
 
             // Run the actual test
             await testFn(bot);

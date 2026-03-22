@@ -20,10 +20,10 @@ export const steps: readonly Step[] = [
     name: "Gather Wood",
     priority: 1,
     canExecute: (s) => s.world.dimension === "overworld" && s.alive,
-    isComplete: (s) => s.inventory.logs >= 16,
+    isComplete: (s) => s.inventory.logs >= 3 || s.inventory.planks >= 9 || s.equipment.hasCraftingTable,
     execute: async (bot, _state) => {
       const { gatherWood } = await import("./tasks/gather-wood/main.ts");
-      return gatherWood(bot, 16);
+      return gatherWood(bot, 3);
     },
   },
 
@@ -31,8 +31,8 @@ export const steps: readonly Step[] = [
     id: "craft_planks",
     name: "Craft Planks",
     priority: 2,
-    canExecute: (s) => s.inventory.logs >= 4,
-    isComplete: (s) => s.inventory.planks >= 32,
+    canExecute: (s) => s.inventory.logs >= 2,
+    isComplete: (s) => s.inventory.planks >= 8 || s.equipment.hasCraftingTable,
     execute: async (bot, _state) => {
       const { craftPlanks } = await import("./tasks/craft/main.ts");
       return craftPlanks(bot);
@@ -56,7 +56,7 @@ export const steps: readonly Step[] = [
     name: "Craft Sticks",
     priority: 4,
     canExecute: (s) => s.inventory.planks >= 2,
-    isComplete: (s) => s.inventory.sticks >= 16,
+    isComplete: (s) => s.inventory.sticks >= 4 || getPickaxeTier(s.equipment.pickaxe) >= 1,
     execute: async (bot, _state) => {
       const { craftSticks } = await import("./tasks/craft/main.ts");
       return craftSticks(bot);

@@ -5,21 +5,21 @@
  * It uses a priority-based state machine to determine what to do next.
  */
 
-import { createBot as createMcBot, ping } from "typecraft";
+import { createBot as createMcBot, createWebViewer } from "typecraft";
 import type { Bot } from "typecraft";
 
 import { getPhase, isDragonDead, syncFromBot } from "./state.ts";
 import { getNextStep, getProgress, type Step } from "./steps.ts";
-import { initLogger, startTickLogger, stopLogger, logEvent } from "./lib/logger.ts";
+import { initLogger, startTickLogger, stopLogger, logEvent } from "typecraft";
 
 // ============================================
 // CONFIGURATION
 // ============================================
 
 const CONFIG = {
-  host: "localhost",
-  port: 25565,
-  username: "Steve",
+  host: process.env.MC_HOST ?? "localhost",
+  port: parseInt(process.env.MC_PORT ?? "25565"),
+  username: process.env.MC_USERNAME ?? "Steve",
   tickInterval: 5000, // Check state every 5 seconds
 };
 
@@ -53,6 +53,7 @@ const logPhase = (
 
 let currentStep: Step | null = null;
 let isExecuting = false;
+let consecutiveFailures = 0;
 
 const runTick = async (bot: Bot): Promise<void> => {
   // Don't start new task if one is running
@@ -94,11 +95,18 @@ const runTick = async (bot: Bot): Promise<void> => {
       const result = await currentStep.execute(bot, state);
 
       if (result.success) {
+        consecutiveFailures = 0;
         log(`✓ ${result.message}`);
         logEvent("step", "success", `${currentStep.name}: ${result.message}`, bot.entity?.position);
       } else {
-        log(`✗ ${result.message}`);
+        consecutiveFailures++;
+        log(`✗ ${result.message} (fail #${consecutiveFailures})`);
         logEvent("step", "fail", `${currentStep.name}: ${result.message}`, bot.entity?.position);
+        if (consecutiveFailures >= 3) {
+          log(`ABORT: ${consecutiveFailures} consecutive failures on ${currentStep.name}`);
+          logEvent("step", "abort", `${currentStep.name}: ${consecutiveFailures} failures`, bot.entity?.position);
+          process.exit(1);
+        }
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -131,15 +139,14 @@ const runTick = async (bot: Bot): Promise<void> => {
 const createBot = async (): Promise<Bot> => {
   log("Creating bot...");
 
-  // Ping server to get exact version
-  const info = await ping({ host: CONFIG.host, port: CONFIG.port });
-  log(`Server version: ${info.version.name} (protocol ${info.version.protocol})`);
+  const version = process.env.MC_VERSION ?? "1.21.11";
+  log(`Connecting to ${CONFIG.host}:${CONFIG.port} (version ${version})`);
 
   const bot = createMcBot({
     host: CONFIG.host,
     port: CONFIG.port,
     username: CONFIG.username,
-    version: info.version.name,
+    version,
     auth: "offline",
   });
 
@@ -155,6 +162,9 @@ const startBot = async (): Promise<void> => {
 
     // Start SQLite tick logger
     startTickLogger(bot);
+
+    // Start web viewer so we can watch Steve in the browser
+    createWebViewer(bot, { port: 3000, viewDistance: 6 });
 
     // Wait for chunks to load before doing anything
     await bot.waitForChunksToLoad();

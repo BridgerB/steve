@@ -5,9 +5,8 @@
 import type { Bot } from "typecraft";
 import type { StepResult } from "../../types.ts";
 import { createGoalNear, windowItems } from "typecraft";
-import { vec3, distance, offset, type Vec3 } from "typecraft";
+import { vec3, distance, offset, type Vec3, logEvent } from "typecraft";
 import { getBlock, getPathfinder, escapeWater, sleep } from "../../lib/bot-utils.ts";
-import { logEvent } from "../../lib/logger.ts";
 
 const LOG_TYPES = [
   "oak_log", "birch_log", "spruce_log", "jungle_log",

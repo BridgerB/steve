@@ -188,7 +188,7 @@
       echo "Server ready. Running at normal speed (1x)."
 
       echo "Starting Steve bot..."
-      exec ${pkgs.nodejs}/bin/npx tsx "$STEVE_DIR/src/main.ts"
+      exec ${pkgs.nodejs_25}/bin/npx tsx "$STEVE_DIR/src/main.ts"
     '';
 
     # Start server + Steve together
@@ -214,19 +214,44 @@
       ${runSteve}/bin/run-steve
     '';
 
-    # Test runner
+    # Race N instances
+    runRace = pkgs.writeShellScriptBin "run-race" ''
+      set -euo pipefail
+      cd "$(pwd)"
+      export JAVA_BIN="${pkgs.jre}/bin/java"
+      export MC_SERVER_JAR="${serverJar}"
+      exec ${pkgs.nodejs_25}/bin/node src/race.ts "$@"
+    '';
+
+    # Test runner — starts server, runs tests, shuts down
     runTests = pkgs.writeShellScriptBin "run-tests" ''
       set -euo pipefail
 
-      # Check if server is running
-      if ! ${pkgs.netcat}/bin/nc -z localhost ${rconPort} 2>/dev/null; then
-        echo "Error: Minecraft server not running. Start it first with: nix run"
-        exit 1
-      fi
+      export STEVE_DIR="$(pwd)"
+
+      # Reset world from backup
+      rm -rf server/world
+      cp -r data/world server/world
+
+      # Start server in background
+      ${startServer}/bin/minecraft-server &
+      SERVER_PID=$!
+      trap "kill $SERVER_PID 2>/dev/null; wait $SERVER_PID 2>/dev/null" EXIT
+
+      # Wait for server
+      echo "Waiting for server..."
+      while ! ${pkgs.netcat}/bin/nc -z localhost 25565 2>/dev/null; do sleep 1; done
+      while ! ${pkgs.netcat}/bin/nc -z localhost ${rconPort} 2>/dev/null; do sleep 1; done
+      while ! ${pkgs.mcrcon}/bin/mcrcon -H localhost -P ${rconPort} -p ${rconPassword} "list" 2>/dev/null | grep -q "players"; do sleep 1; done
+      echo "Server ready."
 
       echo "Running tests..."
-      cd "$(pwd)"
-      ${pkgs.nodejs}/bin/node --import tsx --test "src/**/*.test.ts" "$@"
+      if [ -n "''${1:-}" ]; then
+        echo "Filter: $1"
+        ${pkgs.nodejs_25}/bin/node --test --test-name-pattern "$1" src/test.ts
+      else
+        ${pkgs.nodejs_25}/bin/node --test src/test.ts
+      fi
     '';
   in {
     packages.${system} = {
@@ -235,6 +260,7 @@
       steve = runSteve;
       all = runAll;
       rcon = rcon;
+      race = runRace;
       test = runTests;
     };
 
@@ -259,6 +285,10 @@
         type = "app";
         program = "${rcon}/bin/rcon";
       };
+      race = {
+        type = "app";
+        program = "${runRace}/bin/run-race";
+      };
     };
 
     devShells.${system}.default = pkgs.mkShell {
@@ -268,7 +298,7 @@
         runAll
         rcon
         pkgs.jre
-        pkgs.nodejs
+        pkgs.nodejs_25
         pkgs.mcrcon
       ];
       shellHook = ''

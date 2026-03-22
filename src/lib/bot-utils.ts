@@ -5,7 +5,7 @@
 
 import type { Bot, Pathfinder, Item } from "typecraft";
 import { createPathfinder, createGoalNear, windowItems } from "typecraft";
-import { vec3, distance, offset, type Vec3 } from "typecraft";
+import { vec3, distance, offset, type Vec3, logEvent } from "typecraft";
 import type { StepResult } from "../types.ts";
 
 /** Block with position and hardness — enriched from typecraft's blockAt + registry */
@@ -18,6 +18,8 @@ type Block = {
 
 /** Get block at position with position and hardness attached */
 export const getBlock = (bot: Bot, pos: Vec3): Block | null => {
+  // Floor position — block coords must be integers
+  pos = vec3(Math.floor(pos.x), Math.floor(pos.y), Math.floor(pos.z));
   const info = bot.blockAt(pos) as { name: string; stateId?: number; properties?: Record<string, string> } | null;
   if (!info) return null;
 
@@ -515,21 +517,63 @@ export const findBlocks = (
 export const getCraftingTable = async (bot: Bot): Promise<Block | null> => {
   // Check if one is already nearby
   const table = findBlock(bot, "crafting_table", 4);
-  if (table) return table;
+  if (table) { logEvent("craft", "table_found"); return table; }
 
   // Try to place one from inventory
   const tableItem = findItem(bot, "crafting_table");
-  if (!tableItem) return null;
+  console.log(`[craft] findItem("crafting_table") = ${tableItem ? `${tableItem.name}(${tableItem.type})` : "null"}`);
+  if (!tableItem) { logEvent("craft", "table_missing", "not in inventory"); return null; }
 
-  // Find a spot to place it
-  const ground = bot.blockAt(offset(bot.entity.position, 1, -1, 0)) as Block | null;
-  if (!ground) return null;
+  // Find a solid block to place on — try several positions
+  let ground: Block | null = null;
+  for (const [dx, dz] of [[1,0], [0,1], [-1,0], [0,-1], [0,0]]) {
+    const candidate = getBlock(bot, offset(bot.entity.position, dx, -1, dz));
+    if (candidate && candidate.name !== "air" && candidate.name !== "water" && !candidate.name.includes("leaves")) {
+      ground = candidate;
+      break;
+    }
+  }
+  if (!ground) {
+    console.log("[craft] No solid ground found for table placement");
+    logEvent("craft", "table_no_ground", "no solid block nearby");
+    return null;
+  }
+
+  console.log(`[craft] Placing table on ${ground.name} at ${ground.position.x},${ground.position.y},${ground.position.z}`);
+  logEvent("craft", "table_placing", `on ${ground.name} at ${ground.position.x},${ground.position.y},${ground.position.z}`);
 
   try {
-    await bot.equip(tableItem, "hand");
-    await bot.placeBlock(ground, vec3(0, 1, 0));
-    return findBlock(bot, "crafting_table", 4);
-  } catch {
+    // Move table to hand without losing other items — use setQuickBarSlot to the table's slot
+    const tableSlot = bot.inventory.slots.findIndex((s) => s && s.name === "crafting_table");
+    if (tableSlot >= 36 && tableSlot <= 44) {
+      // Already in hotbar — just select that slot
+      bot.setQuickBarSlot(tableSlot - 36);
+    } else if (tableSlot >= 0) {
+      // In inventory — equip it
+      await bot.equip(tableItem, "hand");
+    }
+    await sleep(200);
+    try {
+      await bot.placeBlock(ground as any, vec3(0, 1, 0));
+    } catch {
+      // placeBlock may timeout but block could still be placed
+    }
+    // Wait for the crafting window to open (placing a table opens it)
+    for (let i = 0; i < 10; i++) {
+      await sleep(500);
+      if (bot.currentWindow) break;
+    }
+    const placed = findBlock(bot, "crafting_table", 4);
+    if (placed) {
+      logEvent("craft", "table_placed");
+    } else {
+      logEvent("craft", "table_place_failed", "placed but not found");
+    }
+    return placed;
+  } catch (e) {
+    console.log(`[craft] Table place ERROR: ${e}`);
+    if (e instanceof Error) console.log(e.stack);
+    logEvent("craft", "table_place_error", String(e));
     return null;
   }
 };
@@ -556,22 +600,64 @@ export const craftItem = async (
   }
 
   const recipes = bot.recipesFor(itemId, null, 1, craftingTable ?? null);
-  const recipe = recipes[0];
 
-  if (!recipe) {
+  if (recipes.length === 0) {
+    logEvent("craft", "no_recipe", `${itemName} (id=${itemId})`);
     return { success: false, message: `No recipe for ${itemName}` };
   }
 
+  // Pick a recipe whose ingredients we actually have
+  // When a container window is open, player items are in currentWindow's inventory section
+  const win = bot.currentWindow ?? bot.inventory;
+  const invStart = win === bot.inventory ? 0 : (win as any).inventoryStart ?? 0;
+  const hasIngredient = (id: number): boolean =>
+    win.slots.some((s, i) => s && i >= invStart && s.type === id && s.count > 0);
+
+  const recipe = recipes.find((r) => {
+    if (r.inShape) {
+      return r.inShape.every((row) => row.every((item) => item.id === -1 || hasIngredient(item.id)));
+    }
+    if (r.ingredients) {
+      return r.ingredients.every((item) => hasIngredient(item.id));
+    }
+    return false;
+  });
+
+  if (!recipe) {
+    try {
+      const invTypes = Array.from(win.slots).filter(s => s && s.count > 0).map(s => `${s!.name}(${s!.type})`);
+      console.log(`[craft] No matching recipe for ${itemName}. inv=[${invTypes.join(",")}]`);
+    } catch { /* ignore debug errors */ }
+    return { success: false, message: `No matching recipe for ${itemName}` };
+  }
+
+  const ingredientIds = (recipe.inShape ?? recipe.ingredients)?.flat().filter(i => i.id !== -1).map(i => i.id);
+  console.log(`[craft] Crafting ${itemName} needs=[${ingredientIds}] currentWindow=${bot.currentWindow?.type} invSlots=${bot.inventory.slots.filter(s=>s&&s.count>0).length}`);
+
   try {
     await bot.craft(recipe, count, craftingTable ?? undefined);
+    // Close crafting window and wait for inventory to sync
+    if (bot.currentWindow) {
+      bot.closeWindow(bot.currentWindow);
+      await sleep(1000);
+    }
+    // Debug: dump inventory after craft
+    const afterSlots = bot.inventory.slots
+      .map((s, i) => s && s.count > 0 ? `${i}:${s.name}(${s.type})x${s.count}` : null)
+      .filter(Boolean);
+    console.log(`[craft] After crafting ${itemName}: ${afterSlots.join(", ") || "empty"}`);
     return { success: true, message: `Crafted ${count}x ${itemName}` };
   } catch (err) {
-    return {
-      success: false,
-      message: err instanceof Error
-        ? err.message
-        : `Failed to craft ${itemName}`,
-    };
+    const msg = err instanceof Error ? err.message : `Failed to craft ${itemName}`;
+    console.log(`[craft] ERROR: ${msg}`);
+    if (err instanceof Error) console.log(err.stack);
+    // Dump both windows
+    console.log(`[craft] currentWindow after error: type=${bot.currentWindow?.type} slots=${bot.currentWindow?.slots?.length}`);
+    const cwItems = bot.currentWindow?.slots?.map((s, i) => s && s.count > 0 ? `${i}:${s.name}(${s.type})` : null).filter(Boolean);
+    if (cwItems?.length) console.log(`[craft] window: ${cwItems.join(", ")}`);
+    const invItems = bot.inventory.slots.map((s, i) => s && s.count > 0 ? `${i}:${s.name}(${s.type})` : null).filter(Boolean);
+    console.log(`[craft] inventory: ${invItems.join(", ") || "empty"}`);
+    return { success: false, message: msg };
   }
 };
 
