@@ -71,12 +71,12 @@ it("craft: place table + craft wooden pickaxe", { timeout: 60000 }, async () => 
       "/give TestCraft crafting_table 1",
     ],
   }, async (bot) => {
-    // Debug: listen for ALL packets to see if open_window arrives
-    bot.client.on("open_window", (p: any) => {
-      console.log(`[test] OPEN_WINDOW: ${JSON.stringify(p)?.slice(0, 100)}`);
+    // Debug: listen for packets (Mojang names)
+    bot.client.on("open_screen", (p: any) => {
+      console.log(`[test] OPEN_SCREEN: ${JSON.stringify(p)?.slice(0, 100)}`);
     });
     bot.client.on("packet", (data: any, meta: any) => {
-      if (meta?.name?.includes("window") || meta?.name?.includes("container")) {
+      if (meta?.name?.includes("screen") || meta?.name?.includes("container")) {
         console.log(`[test] PACKET: ${meta.name}`);
       }
     });

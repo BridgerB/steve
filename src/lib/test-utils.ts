@@ -8,6 +8,7 @@ import { writeFile } from "node:fs/promises";
 import { createBot, createWebViewer, windowItems } from "typecraft";
 import type { Bot } from "typecraft";
 import type { StepResult } from "../types.ts";
+import { logEvent } from "./logger.ts";
 
 // =============================================================================
 // TYPES
@@ -87,6 +88,9 @@ export const runBotTest = async (
         username,
         version: "1.21.11",
       });
+      bot.on("debug", (category: string, detail: Record<string, unknown>) => {
+        logEvent(category, "debug", JSON.stringify(detail));
+      });
 
       await new Promise<void>((resolve, reject) => {
         bot.once("spawn", async () => {
@@ -104,13 +108,14 @@ export const runBotTest = async (
             }
 
             // Debug: listen for inventory packets
-            bot.client.on("set_slot", (p: any) => {
+            // Debug packet listeners (Mojang names)
+            bot.client.on("container_set_slot", (p: any) => {
               console.log(`[test] set_slot: window=${p.windowId} slot=${p.slot} item=${JSON.stringify(p.item)?.slice(0, 60)}`);
             });
             bot.client.on("set_player_inventory", (p: any) => {
               console.log(`[test] set_player_inventory: slot=${p.slotId} item=${JSON.stringify(p.contents)?.slice(0, 60)}`);
             });
-            bot.client.on("window_items", (p: any) => {
+            bot.client.on("container_set_content", (p: any) => {
               const nonEmpty = (p.items as any[])?.filter((i: any) => i?.itemCount > 0).length ?? 0;
               console.log(`[test] window_items: window=${p.windowId} items=${(p.items as any[])?.length} nonEmpty=${nonEmpty}`);
             });

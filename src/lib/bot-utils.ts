@@ -4,8 +4,9 @@
  */
 
 import type { Bot, Pathfinder, Item } from "typecraft";
-import { createPathfinder, createGoalNear, windowItems } from "typecraft";
-import { vec3, distance, offset, type Vec3, logEvent } from "typecraft";
+import { createPathfinder, createGoalNear, createGoalBlock, windowItems } from "typecraft";
+import { vec3, distance, offset, type Vec3 } from "typecraft";
+import { logEvent } from "./logger.ts";
 import type { StepResult } from "../types.ts";
 
 /** Block with position and hardness — enriched from typecraft's blockAt + registry */
@@ -42,8 +43,8 @@ export const getBlock = (bot: Bot, pos: Vec3): Block | null => {
 export interface GoToOptions {
   /** How close to get to the target (default: 2) */
   range?: number;
-  /** Timeout for stuck detection in ms (default: 2000) */
-  stuckTimeout?: number;
+  /** Max time before giving up in ms (default: 10000) */
+  timeout?: number;
   /** Whether to allow digging (default: true) */
   canDig?: boolean;
   /** Whether to allow sprinting (default: true) */
@@ -110,50 +111,22 @@ export const goTo = async (
   pos: Vec3,
   options: GoToOptions = {},
 ): Promise<boolean> => {
-  const {
-    range = 2,
-    stuckTimeout = 2000,
-  } = options;
+  const { range = 2, timeout = 10000 } = options;
 
   const pf = getPathfinder(bot);
-  const goal = createGoalNear(pos.x, pos.y, pos.z, range);
-
-  // Track position to detect stuck
-  let lastPos = vec3(bot.entity.position.x, bot.entity.position.y, bot.entity.position.z);
-  let stuckTime = 0;
-  let stopped = false;
-  const checkInterval = 100;
-
-  const stuckChecker = setInterval(() => {
-    if (stopped) return;
-
-    const currentPos = bot.entity.position;
-    const moved = distance(currentPos, lastPos) > 0.05;
-
-    if (moved) {
-      lastPos = vec3(currentPos.x, currentPos.y, currentPos.z);
-      stuckTime = 0;
-    } else {
-      stuckTime += checkInterval;
-    }
-
-    if (stuckTime >= stuckTimeout && !stopped) {
-      stopped = true;
-      console.log(`    Navigation stuck for ${stuckTimeout}ms, cancelling`);
-      clearInterval(stuckChecker);
-      pf.stop();
-    }
-  }, checkInterval);
+  const goal = range === 0
+    ? createGoalBlock(pos.x, pos.y, pos.z)
+    : createGoalNear(pos.x, pos.y, pos.z, range);
 
   try {
-    await pf.goto(goal);
-    stopped = true;
-    clearInterval(stuckChecker);
+    await Promise.race([
+      pf.goto(goal),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => { pf.stop(); reject(new Error("goTo timeout")); }, timeout),
+      ),
+    ]);
     return true;
   } catch (_err) {
-    stopped = true;
-    clearInterval(stuckChecker);
-    // Consider success if we got close enough
     return distance(bot.entity.position, pos) <= range + 1;
   }
 };
@@ -270,7 +243,7 @@ export const mineAndCollect = async (
   const dist = distance(bot.entity.position, blockCenter);
 
   if (dist > maxMineDistance) {
-    console.log(`    Too far to mine: ${dist.toFixed(2)} > ${maxMineDistance}`);
+    logEvent("mine", "too_far", `${dist.toFixed(2)} > ${maxMineDistance}`);
     return false;
   }
 
@@ -282,7 +255,7 @@ export const mineAndCollect = async (
   try {
     await bot.dig(block, true);
   } catch (e) {
-    console.log(`    Dig error: ${e}`);
+    logEvent("mine", "dig_error", String(e));
     return false;
   }
 
@@ -290,7 +263,7 @@ export const mineAndCollect = async (
   await sleep(postDigDelay);
   const after = getBlock(bot, pos);
   if (after && after.name !== "air" && isValidBlock(after)) {
-    console.log(`    Block still there after dig!`);
+    logEvent("mine", "block_still_there");
     return false;
   }
 
@@ -521,36 +494,64 @@ export const getCraftingTable = async (bot: Bot): Promise<Block | null> => {
 
   // Try to place one from inventory
   const tableItem = findItem(bot, "crafting_table");
-  console.log(`[craft] findItem("crafting_table") = ${tableItem ? `${tableItem.name}(${tableItem.type})` : "null"}`);
   if (!tableItem) { logEvent("craft", "table_missing", "not in inventory"); return null; }
 
   // Find a solid block to place on — try several positions
+  // Randomize placement positions so retries try different blocks
+  const positions = [[1,0], [0,1], [-1,0], [0,-1], [0,0], [1,1], [-1,1], [1,-1], [-1,-1]];
+  for (let i = positions.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [positions[i], positions[j]] = [positions[j]!, positions[i]!];
+  }
   let ground: Block | null = null;
-  for (const [dx, dz] of [[1,0], [0,1], [-1,0], [0,-1], [0,0]]) {
-    const candidate = getBlock(bot, offset(bot.entity.position, dx, -1, dz));
+  for (const [dx, dz] of positions) {
+    const candidate = getBlock(bot, offset(bot.entity.position, dx!, -1, dz!));
     if (candidate && candidate.name !== "air" && candidate.name !== "water" && !candidate.name.includes("leaves")) {
       ground = candidate;
       break;
     }
   }
   if (!ground) {
-    console.log("[craft] No solid ground found for table placement");
     logEvent("craft", "table_no_ground", "no solid block nearby");
     return null;
   }
 
-  console.log(`[craft] Placing table on ${ground.name} at ${ground.position.x},${ground.position.y},${ground.position.z}`);
-  logEvent("craft", "table_placing", `on ${ground.name} at ${ground.position.x},${ground.position.y},${ground.position.z}`);
+  const aboveBlock = getBlock(bot, offset(ground.position, 0, 1, 0));
+  const above2 = getBlock(bot, offset(ground.position, 0, 2, 0));
+  const botFeet = getBlock(bot, offset(bot.entity.position, 0, -1, 0));
+  const dx = bot.entity.position.x - (ground.position.x + 0.5);
+  const dz = bot.entity.position.z - (ground.position.z + 0.5);
+  const distXZ = Math.sqrt(dx * dx + dz * dz);
+  const dist3D = Math.sqrt(dx * dx + (bot.entity.position.y - ground.position.y) ** 2 + dz * dz);
+  logEvent("craft", "table_placing", JSON.stringify({
+    ground: ground.name,
+    groundPos: { x: ground.position.x, y: ground.position.y, z: ground.position.z },
+    destPos: { x: ground.position.x, y: ground.position.y + 1, z: ground.position.z },
+    above: aboveBlock?.name ?? "unloaded",
+    above2: above2?.name ?? "unloaded",
+    botPos: { x: +bot.entity.position.x.toFixed(1), y: +bot.entity.position.y.toFixed(1), z: +bot.entity.position.z.toFixed(1) },
+    botFeet: botFeet?.name ?? "unloaded",
+    held: bot.heldItem?.name ?? null,
+    heldSlot: bot.quickBarSlot,
+    distXZ: +distXZ.toFixed(1),
+    dist3D: +dist3D.toFixed(1),
+    yaw: +(bot.entity.yaw * 180 / Math.PI).toFixed(0),
+    pitch: +(bot.entity.pitch * 180 / Math.PI).toFixed(0),
+    onGround: bot.entity.onGround,
+    hasWindow: !!bot.currentWindow,
+  }));
 
   try {
-    // Move table to hand without losing other items — use setQuickBarSlot to the table's slot
+    // Move table to hand — use clickWindow to move to hotbar, then select
     const tableSlot = bot.inventory.slots.findIndex((s) => s && s.name === "crafting_table");
     if (tableSlot >= 36 && tableSlot <= 44) {
-      // Already in hotbar — just select that slot
       bot.setQuickBarSlot(tableSlot - 36);
     } else if (tableSlot >= 0) {
-      // In inventory — equip it
-      await bot.equip(tableItem, "hand");
+      try {
+        await bot.clickWindow(tableSlot, 0, 0);
+        await bot.clickWindow(36, 0, 0);
+        bot.setQuickBarSlot(0);
+      } catch {}
     }
     await sleep(200);
     try {
@@ -564,15 +565,22 @@ export const getCraftingTable = async (bot: Bot): Promise<Block | null> => {
       if (bot.currentWindow) break;
     }
     const placed = findBlock(bot, "crafting_table", 4);
+    const destBlock = getBlock(bot, offset(ground.position, 0, 1, 0));
     if (placed) {
-      logEvent("craft", "table_placed");
+      logEvent("craft", "table_placed", JSON.stringify({
+        at: { x: placed.position.x, y: placed.position.y, z: placed.position.z },
+        windowOpened: !!bot.currentWindow,
+      }));
     } else {
-      logEvent("craft", "table_place_failed", "placed but not found");
+      logEvent("craft", "table_place_failed", JSON.stringify({
+        destNow: destBlock?.name ?? "unloaded",
+        windowOpened: !!bot.currentWindow,
+        heldAfter: bot.heldItem?.name ?? null,
+        tableInInv: bot.inventory.slots.some((s) => s && s.name === "crafting_table"),
+      }));
     }
     return placed;
   } catch (e) {
-    console.log(`[craft] Table place ERROR: ${e}`);
-    if (e instanceof Error) console.log(e.stack);
     logEvent("craft", "table_place_error", String(e));
     return null;
   }
@@ -624,39 +632,18 @@ export const craftItem = async (
   });
 
   if (!recipe) {
-    try {
-      const invTypes = Array.from(win.slots).filter(s => s && s.count > 0).map(s => `${s!.name}(${s!.type})`);
-      console.log(`[craft] No matching recipe for ${itemName}. inv=[${invTypes.join(",")}]`);
-    } catch { /* ignore debug errors */ }
     return { success: false, message: `No matching recipe for ${itemName}` };
   }
 
-  const ingredientIds = (recipe.inShape ?? recipe.ingredients)?.flat().filter(i => i.id !== -1).map(i => i.id);
-  console.log(`[craft] Crafting ${itemName} needs=[${ingredientIds}] currentWindow=${bot.currentWindow?.type} invSlots=${bot.inventory.slots.filter(s=>s&&s.count>0).length}`);
-
   try {
     await bot.craft(recipe, count, craftingTable ?? undefined);
-    // Close crafting window and wait for inventory to sync
     if (bot.currentWindow) {
       bot.closeWindow(bot.currentWindow);
       await sleep(1000);
     }
-    // Debug: dump inventory after craft
-    const afterSlots = bot.inventory.slots
-      .map((s, i) => s && s.count > 0 ? `${i}:${s.name}(${s.type})x${s.count}` : null)
-      .filter(Boolean);
-    console.log(`[craft] After crafting ${itemName}: ${afterSlots.join(", ") || "empty"}`);
     return { success: true, message: `Crafted ${count}x ${itemName}` };
   } catch (err) {
     const msg = err instanceof Error ? err.message : `Failed to craft ${itemName}`;
-    console.log(`[craft] ERROR: ${msg}`);
-    if (err instanceof Error) console.log(err.stack);
-    // Dump both windows
-    console.log(`[craft] currentWindow after error: type=${bot.currentWindow?.type} slots=${bot.currentWindow?.slots?.length}`);
-    const cwItems = bot.currentWindow?.slots?.map((s, i) => s && s.count > 0 ? `${i}:${s.name}(${s.type})` : null).filter(Boolean);
-    if (cwItems?.length) console.log(`[craft] window: ${cwItems.join(", ")}`);
-    const invItems = bot.inventory.slots.map((s, i) => s && s.count > 0 ? `${i}:${s.name}(${s.type})` : null).filter(Boolean);
-    console.log(`[craft] inventory: ${invItems.join(", ") || "empty"}`);
     return { success: false, message: msg };
   }
 };
@@ -750,7 +737,7 @@ export const errorResult = (err: unknown, fallback: string): StepResult => ({
 export const escapeWater = async (bot: Bot): Promise<boolean> => {
   if (!bot.entity?.isInWater) return true; // not in water
 
-  console.log("  Swimming out of water...");
+  logEvent("nav", "swimming_out");
 
   // Hold jump to swim up
   bot.setControlState("jump", true);
@@ -768,7 +755,7 @@ export const escapeWater = async (bot: Bot): Promise<boolean> => {
       bot.setControlState("jump", false);
       bot.setControlState("forward", false);
       bot.setControlState("sprint", false);
-      console.log("  Escaped water!");
+      logEvent("nav", "escaped_water");
       return true;
     }
     // Rotate randomly to find shore
@@ -781,7 +768,7 @@ export const escapeWater = async (bot: Bot): Promise<boolean> => {
   bot.setControlState("jump", false);
   bot.setControlState("forward", false);
   bot.setControlState("sprint", false);
-  console.log("  Failed to escape water");
+  logEvent("nav", "water_escape_failed");
   return false;
 };
 

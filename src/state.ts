@@ -160,15 +160,31 @@ export const isDragonDead = (state: GameState): boolean =>
 // ============================================
 
 export const syncFromBot = (bot: Bot): GameState => {
-  const items = windowItems(bot.inventory);
+  const allSlots = bot.inventory?.slots ?? [];
+  const registry = bot.registry;
 
-  const countItem = (name: string): number =>
-    items
-      .filter((item) => item.name.includes(name))
-      .reduce((sum, item) => sum + item.count, 0);
+  // Resolve item name — use registry if item.name is "unknown"
+  const itemName = (item: { name: string; type: number }): string => {
+    if (item.name !== "unknown") return item.name;
+    if (registry) {
+      const def = registry.itemsById.get(item.type);
+      if (def) return def.name;
+    }
+    return "unknown";
+  };
+
+  const countItem = (name: string): number => {
+    let total = 0;
+    for (const item of allSlots) {
+      if (item && item.count > 0 && itemName(item).includes(name)) {
+        total += item.count;
+      }
+    }
+    return total;
+  };
 
   const hasItem = (name: string): boolean =>
-    items.some((item) => item.name.includes(name));
+    allSlots.some((item) => item && item.count > 0 && itemName(item).includes(name));
 
   // Detect best pickaxe
   const getPickaxe = (): PickaxeTier => {

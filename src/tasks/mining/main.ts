@@ -5,7 +5,8 @@
 import type { Bot } from "typecraft";
 import { distance, offset } from "typecraft";
 import type { StepResult, Block } from "../../types.ts";
-import { findBlock, moveCloser, sleep, success } from "../../lib/bot-utils.ts";
+import { findBlock, getPathfinder, goTo, moveCloser, sleep, success } from "../../lib/bot-utils.ts";
+import { logEvent } from "../../lib/logger.ts";
 
 export const mineBlock = async (
   bot: Bot,
@@ -14,79 +15,79 @@ export const mineBlock = async (
 ): Promise<StepResult> => {
   let mined = 0;
 
+  // Equip best pickaxe before mining — find it and select its hotbar slot
+  const pickSlot = bot.inventory.slots.findIndex((s) =>
+    s && s.name.includes("pickaxe"),
+  );
+  if (pickSlot >= 36 && pickSlot <= 44) {
+    bot.setQuickBarSlot(pickSlot - 36);
+  } else if (pickSlot >= 0) {
+    // Move to hotbar first via window click, then select
+    try {
+      await bot.clickWindow(pickSlot, 0, 0);   // pick up
+      await bot.clickWindow(36, 0, 0);          // place in hotbar slot 0
+      bot.setQuickBarSlot(0);
+    } catch {}
+  }
+
   // For stone, we get cobblestone drops
   const isStone = blockType === "stone";
   const searchTypes = isStone ? ["stone"] : [blockType];
 
+  // Try to find a nearby target block first, then dig blocks adjacent to bot
+  // This ensures drops land within auto-pickup range
+  const findAdjacentBlock = (): Block | null => {
+    const p = bot.entity.position;
+    const px = Math.floor(p.x), py = Math.floor(p.y), pz = Math.floor(p.z);
+    // Prioritize side blocks to avoid falling into holes
+    const offsets = [
+      [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1],  // sides at feet
+      [1, -1, 0], [-1, -1, 0], [0, -1, 1], [0, -1, -1],  // sides below
+      [0, -1, 0], [0, -2, 0],  // below feet (last resort)
+    ];
+    for (const [dx, dy, dz] of offsets) {
+      const b = bot.blockAt(offset(p, dx, dy, dz)) as Block | null;
+      if (b && searchTypes.some((type) => b.name.includes(type))) return b;
+    }
+    return null;
+  };
+
   while (mined < targetCount) {
-    const block = findBlock(
-      bot,
-      (name) => searchTypes.some((type) => name.includes(type)),
-      32,
-    );
+    // First try adjacent blocks (drops land at bot's feet)
+    let block = findAdjacentBlock();
 
     if (!block) {
-      // If looking for ore, try to dig down to find it
-      if (blockType.includes("ore")) {
-        const below = bot.blockAt(offset(bot.entity.position, 0, -1, 0)) as Block | null;
-        if (below && below.name !== "air" && below.name !== "water") {
-          try {
-            await bot.dig(below);
-            continue;
-          } catch {
-            // Keep trying
-          }
-        }
+      // No adjacent target — find one nearby and walk to it
+      block = findBlock(
+        bot,
+        (name) => searchTypes.some((type) => name.includes(type)),
+        32,
+      );
+      if (!block) {
+        return {
+          success: mined > 0,
+          message: `Could not find ${blockType} (mined ${mined}/${targetCount})`,
+        };
       }
-      return {
-        success: mined > 0,
-        message: `Could not find ${blockType} (mined ${mined}/${targetCount})`,
-      };
+      try {
+        await moveCloser(bot, block.position, { maxDistance: 2 });
+      } catch {
+        logEvent("mine", "nav_fail", "couldn't reach block");
+        continue;
+      }
+      // Re-check for adjacent blocks after moving
+      block = findAdjacentBlock() ?? block;
     }
 
     try {
-      // Move closer if needed
-      await moveCloser(bot, block.position, { maxDistance: 4 });
-
       await bot.lookAt(offset(block.position, 0.5, 0.5, 0.5));
       await bot.dig(block);
       mined++;
-      console.log(`  Mined ${blockType} ${mined}/${targetCount}`);
-
-      // Wait for item to drop then pick it up
-      await sleep(200);
-
-      // Find nearby items and collect them
-      const nearbyItems = Object.values(bot.entities).filter(
-        (e) =>
-          e.entityType === bot.registry!.entitiesByName.get("item")?.id &&
-          distance(e.position, bot.entity.position) < 10,
-      );
-
-      for (const item of nearbyItems) {
-        const dist = distance(bot.entity.position, item.position);
-        if (dist > 1.5) {
-          await bot.lookAt(item.position);
-          bot.setControlState("forward", true);
-
-          for (let i = 0; i < 30; i++) {
-            await sleep(100);
-            if (
-              !bot.entities[item.id] ||
-              distance(bot.entity.position, item.position) < 1.5
-            ) {
-              break;
-            }
-          }
-
-          bot.setControlState("forward", false);
-        }
-      }
-
+      logEvent("mine", "mined", `${blockType} ${mined}/${targetCount}`);
       await sleep(200);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "unknown";
-      console.log(`  Failed to mine: ${msg}`);
+      logEvent("mine", "fail", msg);
     }
   }
 

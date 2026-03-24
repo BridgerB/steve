@@ -5,8 +5,9 @@
 import type { Bot } from "typecraft";
 import type { StepResult } from "../../types.ts";
 import { createGoalNear, windowItems } from "typecraft";
-import { vec3, distance, offset, type Vec3, logEvent } from "typecraft";
-import { getBlock, getPathfinder, escapeWater, sleep } from "../../lib/bot-utils.ts";
+import { vec3, distance, offset, type Vec3 } from "typecraft";
+import { logEvent } from "../../lib/logger.ts";
+import { getBlock, getPathfinder, goTo, escapeWater, sleep } from "../../lib/bot-utils.ts";
 
 const LOG_TYPES = [
   "oak_log", "birch_log", "spruce_log", "jungle_log",
@@ -191,42 +192,16 @@ export const gatherWood = async (
       return msg === "dig timeout"; // timeout = block probably broke, continue
     }
 
-    // Pick up the drop — find the item entity and go to it until collected
-    await sleep(200);
-    for (let attempt = 0; attempt < 12; attempt++) {
-      if (countLogs() > logsBefore) break;
-
-      // Find nearest item entity
-      const items = Object.values(bot.entities).filter(
-        (e) => e.position && (e.type === "object" || e.name === "item") && distance(e.position, pos) < 6
-      );
-
-      if (items.length > 0) {
-        // Sort by distance, go to closest
-        const nearest = items.sort((a, b) => distance(botPos(), a.position) - distance(botPos(), b.position))[0]!;
-        const goal = createGoalNear(nearest.position.x, nearest.position.y, nearest.position.z, 0);
-        pf.setGoal(goal);
-        logEvent("wood", "pickup_walk", `item at dist=${distance(botPos(), nearest.position).toFixed(1)}`, nearest.position);
-      } else {
-        // No item entity visible — walk to block position
-        const goal = createGoalNear(pos.x, pos.y, pos.z, 0);
-        pf.setGoal(goal);
-      }
-
-      await sleep(300);
-    }
-    pf.stop();
+    // Navigate to dropped item for pickup
+    await bot.collectDrops(6, 3000, async (p) => {
+      await goTo(bot, p, { range: 1.4, stuckTimeout: 3000 });
+    });
 
     const logsNow = countLogs();
     if (logsNow > logsBefore) {
       logEvent("wood", "pickup_ok", `${logsBefore} → ${logsNow}`, pos);
     } else {
-      // Debug: dump actual slot contents
-      const slotDump = bot.inventory.slots
-        .map((s, i) => s && s.count > 0 ? `slot${i}:${s.name}(type=${s.type})x${s.count}` : null)
-        .filter(Boolean)
-        .join(", ");
-      logEvent("wood", "pickup_fail", `still ${logsNow} | slots: ${slotDump || "empty"}`, pos);
+      logEvent("wood", "pickup_miss", `dug but didn't collect (${logsNow} logs)`, pos);
     }
 
     return true;
@@ -234,10 +209,11 @@ export const gatherWood = async (
 
   // ── MAIN LOOP ──
 
-  console.log(`[wood] Gathering ${targetCount} logs...`);
+  logEvent("wood", "start", `gathering ${targetCount} logs`);
   let attempts = 0;
+  let blocksDug = 0;
 
-  while (countLogs() < targetCount && attempts < 50) {
+  while (countLogs() < targetCount && attempts < 50 && blocksDug < targetCount * 3) {
     attempts++;
 
     const target = findClosestLog();
@@ -260,11 +236,12 @@ export const gatherWood = async (
       continue;
     }
 
-    await mineBlock(target.pos, target.name);
+    const dug = await mineBlock(target.pos, target.name);
+    if (dug) blocksDug++;
   }
 
   const logs = countLogs();
-  console.log(`[wood] Done: ${logs}/${targetCount} logs`);
+  logEvent("wood", "done", `${logs}/${targetCount} logs`);
   return {
     success: logs >= targetCount,
     message: `Gathered ${logs}/${targetCount} logs`,

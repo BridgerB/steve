@@ -3,3 +3,4 @@ node_modules
 result
 test-results.xml
 /data/
+/debug/

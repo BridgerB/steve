@@ -47,10 +47,10 @@
 
     # Optimized for single-bot testing: minimal view distance, fast ticks
     serverProperties = pkgs.writeText "server.properties" ''
-      max-players=10
+      max-players=100
       online-mode=false
       pvp=false
-      difficulty=normal
+      difficulty=peaceful
       gamemode=survival
       enable-command-block=true
       spawn-protection=0
@@ -162,65 +162,70 @@
       exec ${pkgs.jre}/bin/java ${jvmOpts} -jar ${serverJar} nogui
     '';
 
-    # Wait for server to be ready, then run Steve
+    # Start server + run Steve bots
+    # Usage: nix run             (1 bot, 300s timeout)
+    #        nix run -- 5 180    (5 bots, 180s timeout)
     runSteve = pkgs.writeShellScriptBin "run-steve" ''
       set -euo pipefail
+      cd "$(pwd)"
 
-      STEVE_DIR="''${STEVE_DIR:-$(pwd)}"
-      export NODE_PATH="$STEVE_DIR/node_modules"
-
-      echo "Waiting for Minecraft server on localhost:25565..."
-      while ! ${pkgs.netcat}/bin/nc -z localhost 25565 2>/dev/null; do
-        sleep 1
-      done
-      echo "Game port up! Waiting for RCON on localhost:${rconPort}..."
-      while ! ${pkgs.netcat}/bin/nc -z localhost ${rconPort} 2>/dev/null; do
-        sleep 1
-      done
-      echo "RCON is up! Waiting for server to finish loading..."
-
-      # Wait until RCON actually responds (world gen can take a while on first run)
-      while ! ${pkgs.mcrcon}/bin/mcrcon -H localhost -P ${rconPort} -p ${rconPassword} "list" 2>/dev/null | grep -q "players"; do
-        sleep 2
-      done
-      echo "Server is ready!"
-
-      echo "Server ready. Running at normal speed (1x)."
-
-      echo "Starting Steve bot..."
-      exec ${pkgs.nodejs_25}/bin/npx tsx "$STEVE_DIR/src/main.ts"
-    '';
-
-    # Start server + Steve together
-    runAll = pkgs.writeShellScriptBin "run-all" ''
-      set -euo pipefail
-
-      export STEVE_DIR="$(pwd)"
+      # Kill any lingering server and wait for ports to free
+      ${pkgs.procps}/bin/pkill -9 -f "server.jar nogui" 2>/dev/null || true
+      ${pkgs.procps}/bin/pkill -9 -f "STEVE_BOT_MODE" 2>/dev/null || true
+      sleep 2
 
       # Reset world from backup
       rm -rf server/world
       cp -r data/world server/world
 
-      echo "=== Starting server + Steve ==="
-
-      # Start server in background
-      ${startServer}/bin/minecraft-server &
+      # Start server (logs to file, not terminal)
+      ${startServer}/bin/minecraft-server > server/server.log 2>&1 &
       SERVER_PID=$!
-
-      # Cleanup on exit
       trap "kill $SERVER_PID 2>/dev/null; wait $SERVER_PID 2>/dev/null" EXIT
 
-      # Wait for server then run Steve
-      ${runSteve}/bin/run-steve
+      # Wait for RCON
+      while ! ${pkgs.netcat}/bin/nc -z localhost 25565 2>/dev/null; do sleep 1; done
+      while ! ${pkgs.netcat}/bin/nc -z localhost ${rconPort} 2>/dev/null; do sleep 1; done
+      while ! ${pkgs.mcrcon}/bin/mcrcon -H localhost -P ${rconPort} -p ${rconPassword} "list" 2>/dev/null | grep -q "players"; do sleep 1; done
+
+      export MCRCON_BIN="${pkgs.mcrcon}/bin/mcrcon"
+      export MC_RCON_PORT="${rconPort}"
+      export MC_RCON_PASS="${rconPassword}"
+
+      # Open browser once viewer is ready (single window)
+      (while ! ${pkgs.netcat}/bin/nc -z localhost 3000 2>/dev/null; do sleep 1; done
+       sleep 2
+       ${pkgs.chromium}/bin/chromium http://localhost:3000 2>/dev/null &) &
+
+      exec ${pkgs.nodejs_25}/bin/node src/main.ts "$@"
     '';
 
-    # Race N instances
-    runRace = pkgs.writeShellScriptBin "run-race" ''
+    # Bench runner — starts server, runs step benchmark
+    # Usage: nix run .#bench -- mine_stone 10 120
+    runBench = pkgs.writeShellScriptBin "run-bench" ''
       set -euo pipefail
       cd "$(pwd)"
-      export JAVA_BIN="${pkgs.jre}/bin/java"
-      export MC_SERVER_JAR="${serverJar}"
-      exec ${pkgs.nodejs_25}/bin/node src/race.ts "$@"
+
+      # Kill any lingering server
+      ${pkgs.procps}/bin/pkill -9 -f "server.jar nogui" 2>/dev/null || true
+      ${pkgs.procps}/bin/pkill -9 -f "STEVE_BOT_MODE" 2>/dev/null || true
+      sleep 2
+
+      # Reset world from backup
+      rm -rf server/world
+      cp -r data/world server/world
+
+      # Start server
+      ${startServer}/bin/minecraft-server > server/server.log 2>&1 &
+      SERVER_PID=$!
+      trap "kill $SERVER_PID 2>/dev/null; wait $SERVER_PID 2>/dev/null" EXIT
+
+      # Wait for RCON
+      while ! ${pkgs.netcat}/bin/nc -z localhost 25565 2>/dev/null; do sleep 1; done
+      while ! ${pkgs.netcat}/bin/nc -z localhost ${rconPort} 2>/dev/null; do sleep 1; done
+      while ! ${pkgs.mcrcon}/bin/mcrcon -H localhost -P ${rconPort} -p ${rconPassword} "list" 2>/dev/null | grep -q "players"; do sleep 1; done
+
+      exec ${pkgs.nodejs_25}/bin/node src/bench.ts "$@"
     '';
 
     # Test runner — starts server, runs tests, shuts down
@@ -228,6 +233,11 @@
       set -euo pipefail
 
       export STEVE_DIR="$(pwd)"
+
+      # Kill any lingering server and wait for ports to free
+      ${pkgs.procps}/bin/pkill -9 -f "server.jar nogui" 2>/dev/null || true
+      ${pkgs.procps}/bin/pkill -9 -f "STEVE_BOT_MODE" 2>/dev/null || true
+      sleep 2
 
       # Reset world from backup
       rm -rf server/world
@@ -255,39 +265,34 @@
     '';
   in {
     packages.${system} = {
-      default = runAll;
+      default = runSteve;
       server = startServer;
       steve = runSteve;
-      all = runAll;
+      bench = runBench;
       rcon = rcon;
-      race = runRace;
       test = runTests;
     };
 
     apps.${system} = {
       default = {
         type = "app";
-        program = "${runAll}/bin/run-all";
+        program = "${runSteve}/bin/run-steve";
       };
       steve = {
         type = "app";
         program = "${runSteve}/bin/run-steve";
       };
-      all = {
-        type = "app";
-        program = "${runAll}/bin/run-all";
-      };
       test = {
         type = "app";
         program = "${runTests}/bin/run-tests";
       };
+      bench = {
+        type = "app";
+        program = "${runBench}/bin/run-bench";
+      };
       rcon = {
         type = "app";
         program = "${rcon}/bin/rcon";
-      };
-      race = {
-        type = "app";
-        program = "${runRace}/bin/run-race";
       };
     };
 
@@ -295,7 +300,6 @@
       buildInputs = [
         startServer
         runSteve
-        runAll
         rcon
         pkgs.jre
         pkgs.nodejs_25
@@ -304,11 +308,11 @@
       shellHook = ''
         echo "Steve - Minecraft Bot"
         echo ""
-        echo "  nix run            Start MC server only"
-        echo "  nix run .#steve    Start Steve (server must be running)"
-        echo "  nix run .#all      Start server + Steve together"
-        echo "  nix run .#test     Run tests (server must be running)"
-        echo "  rcon <cmd>         Send RCON command"
+        echo "  nix run              1 bot (default)"
+        echo "  nix run -- 5 180     5 bots, 3min timeout"
+        echo "  nix run .#test       Run tests"
+        echo "  nix run .#server     Server only"
+        echo "  rcon <cmd>           Send RCON command"
         echo ""
       '';
     };

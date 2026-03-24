@@ -20,10 +20,10 @@ export const steps: readonly Step[] = [
     name: "Gather Wood",
     priority: 1,
     canExecute: (s) => s.world.dimension === "overworld" && s.alive,
-    isComplete: (s) => s.inventory.logs >= 3 || s.inventory.planks >= 9 || s.equipment.hasCraftingTable,
+    isComplete: (s) => s.inventory.logs >= 5 || s.inventory.planks >= 12 || s.equipment.hasCraftingTable,
     execute: async (bot, _state) => {
       const { gatherWood } = await import("./tasks/gather-wood/main.ts");
-      return gatherWood(bot, 3);
+      return gatherWood(bot, 5);
     },
   },
 
@@ -421,11 +421,11 @@ export const steps: readonly Step[] = [
 // STEP FUNCTIONS
 // ============================================
 
-export const getNextStep = (state: GameState): Step | null => {
+export const getNextStep = (state: GameState, completed?: Set<string>): Step | null => {
   const sortedSteps = [...steps].sort((a, b) => a.priority - b.priority);
   return (
     sortedSteps.find(
-      (step) => step.canExecute(state) && !step.isComplete(state),
+      (step) => !completed?.has(step.id) && step.canExecute(state) && !step.isComplete(state),
     ) ?? null
   );
 };

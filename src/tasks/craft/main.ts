@@ -30,9 +30,7 @@ export const craftPlanks = async (bot: Bot): Promise<StepResult> => {
       let recipes: any[];
       try {
         recipes = bot.recipesFor(plankId, null, 1, null);
-      } catch (e) {
-        console.log(`[craft] recipesFor failed for ${plankName} (id=${plankId}): ${e}`);
-        if (e instanceof Error) console.log(e.stack);
+      } catch {
         continue;
       }
       const recipe = recipes[0];
@@ -54,7 +52,7 @@ export const craftCraftingTable = (bot: Bot): Promise<StepResult> => {
 };
 
 export const craftSticks = (bot: Bot): Promise<StepResult> => {
-  return craftItem(bot, "stick", 8);
+  return craftItem(bot, "stick", 1);
 };
 
 export const craftWoodenPickaxe = async (bot: Bot): Promise<StepResult> => {
