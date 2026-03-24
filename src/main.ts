@@ -10,7 +10,7 @@
  * Otherwise, acts as the orchestrator that spawns bot child processes.
  */
 
-import { createBot as createMcBot, createWebViewer, createDashboard, addBotToDashboard } from "typecraft";
+import { createBot as createMcBot, createWebViewer } from "typecraft";
 import type { Bot } from "typecraft";
 
 import { getPhase, isDragonDead, syncFromBot } from "./state.ts";
@@ -173,6 +173,14 @@ const startBot = async (): Promise<void> => {
     version,
     auth: "offline",
   });
+
+  // Start web viewer if port assigned (first 4 bots get viewers)
+  const viewerPort = parseInt(process.env.STEVE_VIEWER_PORT ?? "0");
+  if (viewerPort > 0) {
+    bot.once("spawn", () => {
+      createWebViewer(bot, { port: viewerPort, viewDistance: 4 });
+    });
+  }
 
   bot.on("debug", (category: string, detail: Record<string, unknown>) => {
     if (category === "packet_rx" || category === "packet_tx") return; // too noisy for SQLite
@@ -388,6 +396,7 @@ const runRace = async (count: number, timeoutMs: number) => {
         STEVE_DB_PATH: RACE_DB,
         STEVE_BOT_MODE: "1",
         STEVE_TIMEOUT: String(timeoutMs / 1000),
+        STEVE_VIEWER_PORT: idx < NUM_VIEWERS ? String(3001 + idx) : "",
       },
       stdio: ["ignore", "ignore", "ignore"],
     });
@@ -434,32 +443,21 @@ const runRace = async (count: number, timeoutMs: number) => {
   }
   await sleep(1000);
 
-  // Dashboard — single WebGL context, grid of camera bots with periodic tp
-  const dashboard = createDashboard({ port: 3000, viewDistance: 4 });
+  // Each child bot runs its own viewer — 4 iframes, no camera bots needed
   const NUM_VIEWERS = Math.min(count, 4);
-  for (let i = 0; i < NUM_VIEWERS; i++) {
-    const viewerName = `Cam${i}`;
-    await rcon(`op ${viewerName}`);
-    const viewer = createMcBot({
-      host: "localhost",
-      port: SERVER_PORT,
-      username: viewerName,
-      version: process.env.MC_VERSION ?? "1.21.11",
-      auth: "offline",
-    });
-    viewer.on("error", () => {});
-    viewer.once("spawn", async () => {
-      await viewer.waitForChunksToLoad();
-      addBotToDashboard(dashboard, viewer, `Steve${i}`);
-      await rcon(`gamemode spectator ${viewerName}`);
-      const doTp = async () => { try { await rcon(`tp ${viewerName} Steve${i}`); } catch {} };
-      await doTp();
-      const tpInterval = setInterval(doTp, 500);
-      viewer.once("end", () => clearInterval(tpInterval));
-    });
-    viewerBots.push(viewer);
-    await sleep(500);
-  }
+  const { createServer: createHttpServer } = await import("node:http");
+  const gridHtml = `<!DOCTYPE html>
+<html><head><title>Steve Race</title>
+<style>
+body { margin: 0; background: #111; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; width: 100vw; height: 100vh; gap: 2px; }
+iframe { width: 100%; height: 100%; border: none; background: #222; }
+.cell { position: relative; }
+.label { position: absolute; top: 4px; left: 8px; color: #fff; font: bold 14px monospace; z-index: 1; text-shadow: 0 0 4px #000; }
+</style></head><body>
+${Array.from({ length: NUM_VIEWERS }, (_, i) => `<div class="cell"><div class="label">Steve${i}</div><iframe src="http://localhost:${3001 + i}"></iframe></div>`).join("\n")}
+</body></html>`;
+  const gridServer = createHttpServer((_req, res) => { res.writeHead(200, { "Content-Type": "text/html" }); res.end(gridHtml); });
+  gridServer.listen(3000, () => console.log(`[grid] http://localhost:3000 (${NUM_VIEWERS} viewers)`));
 
   const results = await Promise.all(
     Array.from({ length: count }, (_, i) => runBot(i))

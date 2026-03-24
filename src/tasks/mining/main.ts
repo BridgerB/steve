@@ -24,6 +24,7 @@ export const mineBlock = async (
   targetCount: number,
 ): Promise<StepResult> => {
   let mined = 0;
+  const deadline = Date.now() + 110_000; // Return cleanly before 120s step timeout
 
   // Equip best pickaxe before mining — find it and select its hotbar slot
   const pickSlot = bot.inventory.slots.findIndex((s) =>
@@ -85,7 +86,12 @@ export const mineBlock = async (
     return { success: false, message: `Could not find ${blockType}` };
   }
   try {
-    await moveCloser(bot, startBlock.position, { maxDistance: 2 });
+    const startDist = distance(bot.entity.position, startBlock.position);
+    if (startDist > 4) {
+      await goTo(bot, startBlock.position, { range: 2, timeout: 15000 });
+    } else {
+      await moveCloser(bot, startBlock.position, { maxDistance: 2 });
+    }
   } catch {}
 
   // Pick a direction and mine in a straight line at the same Y level
@@ -106,7 +112,7 @@ export const mineBlock = async (
   const [dirX, dirZ] = bestDir;
   logEvent("mine", "direction", `dx=${dirX} dz=${dirZ} ahead=${bestCount}`);
 
-  while (mined < targetCount) {
+  while (mined < targetCount && Date.now() < deadline) {
     // Mine the block at feet level in our direction, or below feet
     const px = Math.floor(bot.entity.position.x);
     const py = Math.floor(bot.entity.position.y);
@@ -131,9 +137,14 @@ export const mineBlock = async (
       if (remembered) {
         const remBlock = bot.blockAt(remembered as any) as Block | null;
         if (remBlock && isTarget(remBlock.name)) {
-          logEvent("mine", "from_memory", `${blockType} at ${remembered.x},${remembered.y},${remembered.z}`);
+          const remDist = distance(bot.entity.position, remBlock.position);
+          logEvent("mine", "from_memory", `${blockType} at ${remembered.x},${remembered.y},${remembered.z} dist=${remDist.toFixed(0)}`);
           try {
-            await moveCloser(bot, remBlock.position, { maxDistance: 2 });
+            if (remDist > 4) {
+              await goTo(bot, remBlock.position, { range: 2, timeout: 15000 });
+            } else {
+              await moveCloser(bot, remBlock.position, { maxDistance: 2 });
+            }
             block = remBlock;
           } catch {
             forgetResource(bot, blockType, remembered);
@@ -151,7 +162,7 @@ export const mineBlock = async (
       }
       if (!block) {
         return {
-          success: mined > 0,
+          success: false,
           message: `Could not find ${blockType} (mined ${mined}/${targetCount})`,
         };
       }
