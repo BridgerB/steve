@@ -8,6 +8,16 @@ import type { StepResult, Block } from "../../types.ts";
 import { findBlock, getPathfinder, getRememberedResource, forgetResource, goTo, moveCloser, sleep, success } from "../../lib/bot-utils.ts";
 import { logEvent } from "../../lib/logger.ts";
 
+/** Dig with timeout — bot.dig() can hang silently */
+const safeDig = async (bot: Bot, block: Block, timeout = 8000): Promise<void> => {
+  await Promise.race([
+    bot.dig(block),
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("dig timeout")), timeout),
+    ),
+  ]);
+};
+
 export const mineBlock = async (
   bot: Bot,
   blockType: string,
@@ -111,8 +121,13 @@ export const mineBlock = async (
           message: `Could not find ${blockType} (mined ${mined}/${targetCount})`,
         };
       }
+      const dist = distance(bot.entity.position, block.position);
       try {
-        await moveCloser(bot, block.position, { maxDistance: 2 });
+        if (dist > 4) {
+          await goTo(bot, block.position, { range: 2, timeout: 8000 });
+        } else {
+          await moveCloser(bot, block.position, { maxDistance: 2 });
+        }
       } catch {
         logEvent("mine", "nav_fail", "couldn't reach block");
         continue;
@@ -124,14 +139,14 @@ export const mineBlock = async (
     if (above && above.name !== "air" && above.name !== "water" && block.position.y >= py) {
       try {
         await bot.lookAt(offset(above.position, 0.5, 0.5, 0.5));
-        await bot.dig(above);
+        await safeDig(bot, above);
         await sleep(100);
       } catch {}
     }
 
     try {
       await bot.lookAt(offset(block.position, 0.5, 0.5, 0.5));
-      await bot.dig(block);
+      await safeDig(bot, block);
       mined++;
       logEvent("mine", "mined", `${blockType} ${mined}/${targetCount}`);
       await sleep(100);

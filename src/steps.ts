@@ -68,7 +68,6 @@ export const steps: readonly Step[] = [
     name: "Craft Wooden Pickaxe",
     priority: 5,
     canExecute: (s) =>
-      s.equipment.hasCraftingTable &&
       s.inventory.planks >= 3 &&
       s.inventory.sticks >= 2,
     isComplete: (s) => getPickaxeTier(s.equipment.pickaxe) >= 1,
@@ -96,7 +95,6 @@ export const steps: readonly Step[] = [
     name: "Craft Stone Pickaxe",
     priority: 7,
     canExecute: (s) =>
-      s.equipment.hasCraftingTable &&
       s.inventory.cobblestone >= 3 &&
       s.inventory.sticks >= 2,
     isComplete: (s) => getPickaxeTier(s.equipment.pickaxe) >= 2,
@@ -111,7 +109,6 @@ export const steps: readonly Step[] = [
     name: "Craft Stone Sword",
     priority: 8,
     canExecute: (s) =>
-      s.equipment.hasCraftingTable &&
       s.inventory.cobblestone >= 2 &&
       s.inventory.sticks >= 1,
     isComplete: (s) => s.equipment.sword !== "none",
@@ -125,8 +122,7 @@ export const steps: readonly Step[] = [
     id: "craft_furnace",
     name: "Craft Furnace",
     priority: 9,
-    canExecute: (s) =>
-      s.equipment.hasCraftingTable && s.inventory.cobblestone >= 8,
+    canExecute: (s) => s.inventory.cobblestone >= 8,
     isComplete: (s) => s.equipment.hasFurnace,
     execute: async (bot, _state) => {
       const { craftFurnace } = await import("./tasks/craft/main.ts");
@@ -179,7 +175,6 @@ export const steps: readonly Step[] = [
     name: "Craft Iron Pickaxe",
     priority: 13,
     canExecute: (s) =>
-      s.equipment.hasCraftingTable &&
       s.inventory.ironIngots >= 3 &&
       s.inventory.sticks >= 2,
     isComplete: (s) => getPickaxeTier(s.equipment.pickaxe) >= 3,
@@ -194,7 +189,7 @@ export const steps: readonly Step[] = [
     name: "Craft Bucket",
     priority: 14,
     canExecute: (s) =>
-      s.equipment.hasCraftingTable && s.inventory.ironIngots >= 3,
+      s.inventory.ironIngots >= 3,
     isComplete: (s) => s.equipment.hasBucket,
     execute: async (bot, _state) => {
       const { craftBucket } = await import("./tasks/craft/main.ts");
@@ -232,7 +227,7 @@ export const steps: readonly Step[] = [
     name: "Get Flint and Steel",
     priority: 17,
     canExecute: (s) =>
-      s.equipment.hasCraftingTable && s.inventory.ironIngots >= 1,
+      s.inventory.ironIngots >= 1,
     isComplete: (s) => s.inventory.flintAndSteel >= 1,
     execute: async (bot, _state) => {
       const { craftFlintAndSteel } = await import("./tasks/craft/main.ts");

@@ -540,7 +540,13 @@ export const getCraftingTable = async (bot: Bot): Promise<Block | null> => {
     if (d < 50) {
       const remembered = getBlock(bot, vec3(mem.craftingTablePos.x, mem.craftingTablePos.y, mem.craftingTablePos.z));
       if (remembered && remembered.name === "crafting_table") {
-        try { await moveCloser(bot, remembered.position, { maxDistance: 3 }); } catch {}
+        try {
+          if (d > 4) {
+            await goTo(bot, remembered.position, { range: 2, timeout: 15000 });
+          } else {
+            await moveCloser(bot, remembered.position, { maxDistance: 3 });
+          }
+        } catch {}
         logEvent("craft", "table_remembered", JSON.stringify({ dist: Math.floor(d) }));
         return remembered;
       }
@@ -562,6 +568,19 @@ export const getCraftingTable = async (bot: Bot): Promise<Block | null> => {
   if (!tableItem) { logEvent("craft", "table_missing", "not in inventory"); return null; }
 
   // Find a solid block to place on — try several positions
+  // Blocks that are NOT solid ground for table placement
+  const NON_SOLID = new Set([
+    "air", "cave_air", "water", "lava", "short_grass", "tall_grass", "fern",
+    "large_fern", "dead_bush", "dandelion", "poppy", "blue_orchid", "allium",
+    "azure_bluet", "red_tulip", "orange_tulip", "white_tulip", "pink_tulip",
+    "oxeye_daisy", "cornflower", "lily_of_the_valley", "vine", "snow_layer",
+    "torch", "wall_torch", "leaf_litter",
+  ]);
+  const isSolidGround = (name: string) =>
+    !NON_SOLID.has(name) && !name.includes("leaves") && !name.includes("sapling");
+  const isSpaceClear = (name: string) =>
+    name === "air" || name === "cave_air" || NON_SOLID.has(name);
+
   // Randomize placement positions so retries try different blocks
   const positions = [[1,0], [0,1], [-1,0], [0,-1], [0,0], [1,1], [-1,1], [1,-1], [-1,-1]];
   for (let i = positions.length - 1; i > 0; i--) {
@@ -571,9 +590,27 @@ export const getCraftingTable = async (bot: Bot): Promise<Block | null> => {
   let ground: Block | null = null;
   for (const [dx, dz] of positions) {
     const candidate = getBlock(bot, offset(bot.entity.position, dx!, -1, dz!));
-    if (candidate && candidate.name !== "air" && candidate.name !== "water" && !candidate.name.includes("leaves")) {
-      ground = candidate;
-      break;
+    if (!candidate || !isSolidGround(candidate.name)) continue;
+    const above = getBlock(bot, offset(candidate.position, 0, 1, 0));
+    if (!above || !isSpaceClear(above.name)) continue;
+    ground = candidate;
+    break;
+  }
+  // Fallback: try to clear space above a solid block
+  if (!ground) {
+    for (const [dx, dz] of positions) {
+      const candidate = getBlock(bot, offset(bot.entity.position, dx!, -1, dz!));
+      if (!candidate || !isSolidGround(candidate.name)) continue;
+      const above = getBlock(bot, offset(candidate.position, 0, 1, 0));
+      if (above && above.name !== "air") {
+        try {
+          await bot.lookAt(offset(above.position, 0.5, 0.5, 0.5));
+          await bot.dig(above as any);
+          await sleep(200);
+          ground = candidate;
+          break;
+        } catch {}
+      }
     }
   }
   if (!ground) {
