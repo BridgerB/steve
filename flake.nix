@@ -182,8 +182,8 @@
         (cd ../typecraft && ${pkgs.nodejs_25}/bin/npx tsx src/registry/datagen.ts 2>/dev/null || true)
       fi
 
-      # Ensure steve node_modules exist
-      if [ ! -d node_modules ]; then
+      # Ensure steve node_modules exist (always use nix node so native modules match)
+      if [ ! -d node_modules ] || ! ${pkgs.nodejs_25}/bin/node -e "require('better-sqlite3')" 2>/dev/null; then
         echo "Installing steve dependencies..."
         ${pkgs.nodejs_25}/bin/npm install
       fi
