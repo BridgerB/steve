@@ -25,8 +25,6 @@
     };
 
     jvmOpts = builtins.concatStringsSep " " [
-      "-Xmx4G"
-      "-Xms4G"
       "-XX:+UseG1GC"
       "-XX:+ParallelRefProcEnabled"
       "-XX:MaxGCPauseMillis=200"
@@ -159,7 +157,8 @@
       echo "RCON available at: localhost:${rconPort}"
       echo ""
 
-      exec ${pkgs.jre}/bin/java ${jvmOpts} -jar ${serverJar} nogui
+      MEM=''${MC_MEMORY:-4G}
+      exec ${pkgs.jre}/bin/java -Xmx$MEM -Xms$MEM ${jvmOpts} -jar ${serverJar} nogui
     '';
 
     # Start server + run Steve bots
@@ -169,14 +168,58 @@
       set -euo pipefail
       cd "$(pwd)"
 
-      # Kill any lingering server and wait for ports to free
+      # Ensure typecraft is cloned + has deps + datagen
+      if [ ! -d ../typecraft ]; then
+        echo "Cloning typecraft..."
+        ${pkgs.git}/bin/git clone https://github.com/BridgerB/typecraft.git ../typecraft
+      fi
+      if [ ! -d ../typecraft/node_modules ]; then
+        echo "Installing typecraft dependencies..."
+        (cd ../typecraft && ${pkgs.nodejs_25}/bin/npm install)
+      fi
+      if [ ! -d ../typecraft/src/data/blocks-raw ]; then
+        echo "Running typecraft datagen..."
+        (cd ../typecraft && ${pkgs.nodejs_25}/bin/npx tsx src/registry/datagen.ts 2>/dev/null || true)
+      fi
+
+      # Ensure steve node_modules exist
+      if [ ! -d node_modules ]; then
+        echo "Installing steve dependencies..."
+        ${pkgs.nodejs_25}/bin/npm install
+      fi
+
+      # Kill any lingering processes and free ports
       ${pkgs.procps}/bin/pkill -9 -f "server.jar nogui" 2>/dev/null || true
       ${pkgs.procps}/bin/pkill -9 -f "STEVE_BOT_MODE" 2>/dev/null || true
+      for port in 3000 25565 25575; do
+        ${pkgs.util-linux}/bin/fuser -k $port/tcp 2>/dev/null || true
+      done
       sleep 2
+
+      mkdir -p data server
+
+      # Generate world backup if it doesn't exist
+      if [ ! -d data/world ]; then
+        echo "No world backup found — generating one..."
+        ${startServer}/bin/minecraft-server > server/server.log 2>&1 &
+        GEN_PID=$!
+        while ! ${pkgs.netcat}/bin/nc -z localhost ${rconPort} 2>/dev/null; do sleep 1; done
+        while ! ${pkgs.mcrcon}/bin/mcrcon -H localhost -P ${rconPort} -p ${rconPassword} "list" 2>/dev/null | grep -q "players"; do sleep 1; done
+        echo "World generated. Saving backup..."
+        kill $GEN_PID 2>/dev/null; wait $GEN_PID 2>/dev/null || true
+        sleep 2
+        cp -r server/world data/world
+        echo "Backup saved to data/world"
+      fi
 
       # Reset world from backup
       rm -rf server/world
       cp -r data/world server/world
+
+      # Load .env if it exists
+      if [ -f .env ]; then
+        set -a; source .env; set +a
+      fi
 
       # Start server (logs to file, not terminal)
       ${startServer}/bin/minecraft-server > server/server.log 2>&1 &
@@ -188,14 +231,15 @@
       while ! ${pkgs.netcat}/bin/nc -z localhost ${rconPort} 2>/dev/null; do sleep 1; done
       while ! ${pkgs.mcrcon}/bin/mcrcon -H localhost -P ${rconPort} -p ${rconPassword} "list" 2>/dev/null | grep -q "players"; do sleep 1; done
 
-      export MCRCON_BIN="${pkgs.mcrcon}/bin/mcrcon"
       export MC_RCON_PORT="${rconPort}"
       export MC_RCON_PASS="${rconPassword}"
 
-      # Open browser once viewer is ready (single window)
-      (while ! ${pkgs.netcat}/bin/nc -z localhost 3000 2>/dev/null; do sleep 1; done
-       sleep 2
-       ${pkgs.chromium}/bin/chromium http://localhost:3000 2>/dev/null &) &
+      # Open browser if available (skip on headless servers)
+      if command -v ${pkgs.chromium}/bin/chromium &>/dev/null && [ -n "''${DISPLAY:-}" ]; then
+        (while ! ${pkgs.netcat}/bin/nc -z localhost 3000 2>/dev/null; do sleep 1; done
+         sleep 2
+         ${pkgs.chromium}/bin/chromium http://localhost:3000 2>/dev/null &) &
+      fi
 
       exec ${pkgs.nodejs_25}/bin/node src/main.ts "$@"
     '';
@@ -206,16 +250,29 @@
       set -euo pipefail
       cd "$(pwd)"
 
-      # Kill any lingering server
       ${pkgs.procps}/bin/pkill -9 -f "server.jar nogui" 2>/dev/null || true
       ${pkgs.procps}/bin/pkill -9 -f "STEVE_BOT_MODE" 2>/dev/null || true
       sleep 2
 
-      # Reset world from backup
+      mkdir -p data server
+
+      # Generate world backup if missing
+      if [ ! -d data/world ]; then
+        echo "No world backup — generating..."
+        ${startServer}/bin/minecraft-server > server/server.log 2>&1 &
+        GEN_PID=$!
+        while ! ${pkgs.netcat}/bin/nc -z localhost ${rconPort} 2>/dev/null; do sleep 1; done
+        while ! ${pkgs.mcrcon}/bin/mcrcon -H localhost -P ${rconPort} -p ${rconPassword} "list" 2>/dev/null | grep -q "players"; do sleep 1; done
+        kill $GEN_PID 2>/dev/null; wait $GEN_PID 2>/dev/null || true
+        sleep 2
+        cp -r server/world data/world
+      fi
+
       rm -rf server/world
       cp -r data/world server/world
 
-      # Start server
+      if [ -f .env ]; then set -a; source .env; set +a; fi
+
       ${startServer}/bin/minecraft-server > server/server.log 2>&1 &
       SERVER_PID=$!
       trap "kill $SERVER_PID 2>/dev/null; wait $SERVER_PID 2>/dev/null" EXIT
