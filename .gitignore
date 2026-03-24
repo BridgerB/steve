@@ -4,3 +4,4 @@ result
 test-results.xml
 /data/
 /debug/
+.env

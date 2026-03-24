@@ -397,6 +397,8 @@ const runRace = async (count: number, timeoutMs: number) => {
         const elapsed = Math.round((Date.now() - start) / 1000);
         winner = idx;
         console.log(`\n${username} WINS — ${GOAL} in ${elapsed}s (db: ${RACE_DB})\n`);
+        const { notify } = await import("./lib/notify.ts");
+        await notify("Steve Bot", `${username} got ${GOAL} in ${elapsed}s`);
         await rcon(`title ${username} title {"text":"WINNER!","color":"gold"}`);
         await sleep(10000);
         await killAll();
