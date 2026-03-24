@@ -317,13 +317,16 @@ const runRace = async (count: number, timeoutMs: number) => {
     }
   };
 
-  const GOAL = "stone_pickaxe";
+  const GOAL = "iron_ingot";
 
   const MILESTONES = [
     { name: "wood", query: "item_name LIKE '%_log'" },
     { name: "wooden pickaxe", query: "item_name = 'wooden_pickaxe'" },
     { name: "stone pickaxe", query: "item_name = 'stone_pickaxe'" },
     { name: "furnace", query: "item_name = 'furnace'" },
+    { name: "coal", query: "item_name = 'coal'" },
+    { name: "raw iron", query: "item_name = 'raw_iron'" },
+    { name: "iron ingot", query: "item_name = 'iron_ingot'" },
   ];
   const milestonesHit = new Set<string>();
   const raceStart = Date.now();
