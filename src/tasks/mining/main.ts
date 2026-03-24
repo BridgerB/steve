@@ -5,7 +5,7 @@
 import type { Bot } from "typecraft";
 import { distance, offset } from "typecraft";
 import type { StepResult, Block } from "../../types.ts";
-import { findBlock, getPathfinder, goTo, moveCloser, sleep, success } from "../../lib/bot-utils.ts";
+import { findBlock, getPathfinder, getRememberedResource, forgetResource, goTo, moveCloser, sleep, success } from "../../lib/bot-utils.ts";
 import { logEvent } from "../../lib/logger.ts";
 
 export const mineBlock = async (
@@ -82,8 +82,29 @@ export const mineBlock = async (
     }
 
     if (!block) {
-      // No target blocks nearby — find one further away
-      block = findBlock(bot, isTarget, 32);
+      // Check memory first — did we see this resource earlier?
+      const remembered = getRememberedResource(bot, blockType);
+      if (remembered) {
+        const remBlock = bot.blockAt(remembered as any) as Block | null;
+        if (remBlock && isTarget(remBlock.name)) {
+          logEvent("mine", "from_memory", `${blockType} at ${remembered.x},${remembered.y},${remembered.z}`);
+          try {
+            await moveCloser(bot, remBlock.position, { maxDistance: 2 });
+            block = remBlock;
+          } catch {
+            forgetResource(bot, blockType, remembered);
+            continue;
+          }
+        } else {
+          // Resource gone — forget it
+          forgetResource(bot, blockType, remembered);
+        }
+      }
+
+      // Search if memory didn't help
+      if (!block) {
+        block = findBlock(bot, isTarget, 32);
+      }
       if (!block) {
         return {
           success: mined > 0,
@@ -96,7 +117,6 @@ export const mineBlock = async (
         logEvent("mine", "nav_fail", "couldn't reach block");
         continue;
       }
-      continue; // Re-check candidates after moving
     }
 
     // Also dig the block above if it's not air (clear headroom for walking)

@@ -487,10 +487,75 @@ export const findBlocks = (
  * }
  * ```
  */
+// ── Bot memory: remember resource locations and placed infrastructure ──
+
+interface BotMemory {
+  craftingTablePos: { x: number; y: number; z: number } | null;
+  resources: Map<string, { x: number; y: number; z: number }[]>;
+}
+const botMemory = new WeakMap<Bot, BotMemory>();
+
+export const getMemory = (bot: Bot): BotMemory => {
+  if (!botMemory.has(bot)) botMemory.set(bot, { craftingTablePos: null, resources: new Map() });
+  return botMemory.get(bot)!;
+};
+
+export const rememberResource = (bot: Bot, name: string, pos: { x: number; y: number; z: number }) => {
+  const mem = getMemory(bot);
+  const list = mem.resources.get(name) ?? [];
+  if (!list.some((p) => Math.abs(p.x - pos.x) + Math.abs(p.y - pos.y) + Math.abs(p.z - pos.z) < 3)) {
+    list.push({ x: Math.floor(pos.x), y: Math.floor(pos.y), z: Math.floor(pos.z) });
+    mem.resources.set(name, list);
+  }
+};
+
+export const getRememberedResource = (bot: Bot, name: string): { x: number; y: number; z: number } | null => {
+  const mem = getMemory(bot);
+  const list = mem.resources.get(name);
+  if (!list || list.length === 0) return null;
+  // Return nearest
+  let nearest = list[0]!;
+  let nearestDist = Infinity;
+  for (const p of list) {
+    const d = distance(bot.entity.position, vec3(p.x, p.y, p.z));
+    if (d < nearestDist) { nearestDist = d; nearest = p; }
+  }
+  return nearest;
+};
+
+export const forgetResource = (bot: Bot, name: string, pos: { x: number; y: number; z: number }) => {
+  const mem = getMemory(bot);
+  const list = mem.resources.get(name);
+  if (!list) return;
+  const idx = list.findIndex((p) => Math.abs(p.x - pos.x) + Math.abs(p.y - pos.y) + Math.abs(p.z - pos.z) < 3);
+  if (idx >= 0) list.splice(idx, 1);
+};
+
 export const getCraftingTable = async (bot: Bot): Promise<Block | null> => {
+  const mem = getMemory(bot);
+
+  // Check remembered position — if <50 blocks away, walk back to it
+  if (mem.craftingTablePos) {
+    const d = distance(bot.entity.position, vec3(mem.craftingTablePos.x, mem.craftingTablePos.y, mem.craftingTablePos.z));
+    if (d < 50) {
+      const remembered = getBlock(bot, vec3(mem.craftingTablePos.x, mem.craftingTablePos.y, mem.craftingTablePos.z));
+      if (remembered && remembered.name === "crafting_table") {
+        try { await moveCloser(bot, remembered.position, { maxDistance: 3 }); } catch {}
+        logEvent("craft", "table_remembered", JSON.stringify({ dist: Math.floor(d) }));
+        return remembered;
+      }
+    }
+    // Table gone or too far — forget it
+    mem.craftingTablePos = null;
+  }
+
   // Check if one is already nearby
-  const table = findBlock(bot, "crafting_table", 4);
-  if (table) { logEvent("craft", "table_found"); return table; }
+  const table = findBlock(bot, "crafting_table", 16);
+  if (table) {
+    mem.craftingTablePos = { x: table.position.x, y: table.position.y, z: table.position.z };
+    logEvent("craft", "table_found");
+    return table;
+  }
 
   // Try to place one from inventory
   const tableItem = findItem(bot, "crafting_table");
@@ -567,8 +632,9 @@ export const getCraftingTable = async (bot: Bot): Promise<Block | null> => {
     const placed = findBlock(bot, "crafting_table", 4);
     const destBlock = getBlock(bot, offset(ground.position, 0, 1, 0));
     if (placed) {
+      mem.craftingTablePos = { x: placed.position.x, y: placed.position.y, z: placed.position.z };
       logEvent("craft", "table_placed", JSON.stringify({
-        at: { x: placed.position.x, y: placed.position.y, z: placed.position.z },
+        at: mem.craftingTablePos,
         windowOpened: !!bot.currentWindow,
       }));
     } else {

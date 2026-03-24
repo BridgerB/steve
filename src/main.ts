@@ -16,6 +16,7 @@ import type { Bot } from "typecraft";
 import { getPhase, isDragonDead, syncFromBot } from "./state.ts";
 import { getNextStep, getProgress, steps, type Step } from "./steps.ts";
 import { initLogger, startTickLogger, stopLogger, logEvent } from "./lib/logger.ts";
+import { findBlock, rememberResource } from "./lib/bot-utils.ts";
 
 // ============================================
 // CONFIGURATION
@@ -56,9 +57,19 @@ let consecutiveFailures = 0;
 const completedSteps = new Set<string>();
 const succeededSteps = new Set<string>(); // steps that returned success — never remove
 
+// Passive memory: notice important blocks nearby every tick
+const NOTABLE_BLOCKS = ["coal_ore", "iron_ore", "diamond_ore", "copper_ore", "lapis_ore", "redstone_ore", "gold_ore"];
+const updateMemory = (bot: Bot) => {
+  for (const name of NOTABLE_BLOCKS) {
+    const block = findBlock(bot, name, 8);
+    if (block) rememberResource(bot, name, block.position);
+  }
+};
+
 const runTick = async (bot: Bot): Promise<void> => {
   if (isExecuting) return;
 
+  updateMemory(bot);
   const state = syncFromBot(bot);
 
   if (isDragonDead(state)) {
