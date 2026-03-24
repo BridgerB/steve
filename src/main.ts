@@ -16,7 +16,7 @@ import type { Bot } from "typecraft";
 import { getPhase, isDragonDead, syncFromBot } from "./state.ts";
 import { getNextStep, getProgress, steps, type Step } from "./steps.ts";
 import { initLogger, startTickLogger, stopLogger, logEvent } from "./lib/logger.ts";
-import { findBlock, rememberResource } from "./lib/bot-utils.ts";
+import { rememberResource } from "./lib/bot-utils.ts";
 
 // ============================================
 // CONFIGURATION
@@ -57,19 +57,8 @@ let consecutiveFailures = 0;
 const completedSteps = new Set<string>();
 const succeededSteps = new Set<string>(); // steps that returned success — never remove
 
-// Passive memory: notice important blocks nearby every tick
-const NOTABLE_BLOCKS = ["coal_ore", "iron_ore", "diamond_ore", "copper_ore", "lapis_ore", "redstone_ore", "gold_ore"];
-const updateMemory = (bot: Bot) => {
-  for (const name of NOTABLE_BLOCKS) {
-    const block = findBlock(bot, name, 8);
-    if (block) rememberResource(bot, name, block.position);
-  }
-};
-
 const runTick = async (bot: Bot): Promise<void> => {
   if (isExecuting) return;
-
-  updateMemory(bot);
   const state = syncFromBot(bot);
 
   if (isDragonDead(state)) {
@@ -190,10 +179,19 @@ const startBot = async (): Promise<void> => {
     logEvent(category, "debug", JSON.stringify(detail), bot.entity?.position);
   });
 
+  // Passive memory — remember blocks relevant to current goal (iron_ingot)
+  for (const name of [
+    "oak_log", "birch_log", "spruce_log", "jungle_log", "acacia_log", "dark_oak_log",
+    "coal_ore", "deepslate_coal_ore",
+    "iron_ore", "deepslate_iron_ore",
+  ]) bot.watchBlocks.add(name);
+  bot.on("blockSeen", (name: string, pos: any) => {
+    rememberResource(bot, name, pos);
+  });
+
   bot.once("spawn", async () => {
     log("Spawned into the world");
     logEvent("lifecycle", "spawn", `pos=${Math.floor(bot.entity.position.x)},${Math.floor(bot.entity.position.y)},${Math.floor(bot.entity.position.z)}`, bot.entity.position);
-
 
     startTickLogger(bot);
 
@@ -501,7 +499,7 @@ if (isBotMode) {
 } else {
   // Orchestrator — parse args, spawn bot(s)
   const count = parseInt(process.argv[2] ?? "20");
-  const timeout = parseInt(process.argv[3] ?? "240") * 1000;
+  const timeout = parseInt(process.argv[3] ?? "600") * 1000;
 
   console.log("");
   console.log("╔════════════════════════════════════════════════════════╗");

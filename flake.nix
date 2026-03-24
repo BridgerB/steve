@@ -177,7 +177,7 @@
         echo "Installing typecraft dependencies..."
         (cd ../typecraft && ${pkgs.nodejs_25}/bin/npm install)
       fi
-      if [ ! -d ../typecraft/src/data/blocks-raw ]; then
+      if [ ! -f ../typecraft/src/data/blocks.json ]; then
         echo "Running typecraft datagen..."
         (cd ../typecraft && ${pkgs.nodejs_25}/bin/npx tsx src/registry/datagen.ts 2>/dev/null || true)
       fi

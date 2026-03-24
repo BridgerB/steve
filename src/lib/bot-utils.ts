@@ -668,8 +668,10 @@ export const getCraftingTable = async (bot: Bot): Promise<Block | null> => {
     }
     const placed = findBlock(bot, "crafting_table", 4);
     const destBlock = getBlock(bot, offset(ground.position, 0, 1, 0));
-    if (placed) {
-      mem.craftingTablePos = { x: placed.position.x, y: placed.position.y, z: placed.position.z };
+    // findBlock may miss the table due to exposed filter — fall back to direct check
+    const result = placed ?? (destBlock?.name === "crafting_table" ? destBlock : null);
+    if (result) {
+      mem.craftingTablePos = { x: result.position.x, y: result.position.y, z: result.position.z };
       logEvent("craft", "table_placed", JSON.stringify({
         at: mem.craftingTablePos,
         windowOpened: !!bot.currentWindow,
@@ -682,7 +684,7 @@ export const getCraftingTable = async (bot: Bot): Promise<Block | null> => {
         tableInInv: bot.inventory.slots.some((s) => s && s.name === "crafting_table"),
       }));
     }
-    return placed;
+    return result;
   } catch (e) {
     logEvent("craft", "table_place_error", String(e));
     return null;

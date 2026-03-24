@@ -5,7 +5,7 @@
 import type { Bot } from "typecraft";
 import { distance, offset } from "typecraft";
 import type { StepResult, Block } from "../../types.ts";
-import { findBlock, getPathfinder, getRememberedResource, forgetResource, goTo, moveCloser, sleep, success } from "../../lib/bot-utils.ts";
+import { exploreRandom, findBlock, getPathfinder, getRememberedResource, forgetResource, goTo, moveCloser, sleep, success } from "../../lib/bot-utils.ts";
 import { logEvent } from "../../lib/logger.ts";
 
 /** Dig with timeout — bot.dig() can hang silently */
@@ -45,8 +45,42 @@ export const mineBlock = async (
   const searchTypes = isStone ? ["stone"] : [blockType];
   const isTarget = (name: string) => searchTypes.some((t) => name.includes(t));
 
-  // Find initial stone to start mining
-  let startBlock = findBlock(bot, isTarget, 32);
+  // Find initial block — check memory first, then scan
+  const remembered = getRememberedResource(bot, blockType);
+  let startBlock: Block | null = null;
+  if (remembered) {
+    const remBlock = bot.blockAt(remembered as any) as Block | null;
+    if (remBlock && isTarget(remBlock.name)) {
+      startBlock = remBlock;
+      logEvent("mine", "from_memory", `${blockType} at ${remembered.x},${remembered.y},${remembered.z}`);
+    } else {
+      forgetResource(bot, blockType, remembered);
+    }
+  }
+  if (!startBlock) {
+    startBlock = findBlock(bot, isTarget, 64);
+  }
+  // Explore before giving up — walk around and search wider
+  if (!startBlock) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      logEvent("mine", "exploring", `${blockType} attempt ${attempt + 1}/3`);
+      await exploreRandom(bot, 40);
+      // Check memory again — blockSeen may have fired during exploration
+      const newRemembered = getRememberedResource(bot, blockType);
+      if (newRemembered) {
+        const remBlock = bot.blockAt(newRemembered as any) as Block | null;
+        if (remBlock && isTarget(remBlock.name)) {
+          startBlock = remBlock;
+          logEvent("mine", "found_exploring_memory", `${blockType} at ${newRemembered.x},${newRemembered.y},${newRemembered.z}`);
+          break;
+        } else {
+          forgetResource(bot, blockType, newRemembered);
+        }
+      }
+      startBlock = findBlock(bot, isTarget, 64);
+      if (startBlock) break;
+    }
+  }
   if (!startBlock) {
     return { success: false, message: `Could not find ${blockType}` };
   }
