@@ -33,36 +33,57 @@ export const mineBlock = async (
   // For stone, we get cobblestone drops
   const isStone = blockType === "stone";
   const searchTypes = isStone ? ["stone"] : [blockType];
+  const isTarget = (name: string) => searchTypes.some((t) => name.includes(t));
 
-  // Try to find a nearby target block first, then dig blocks adjacent to bot
-  // This ensures drops land within auto-pickup range
-  const findAdjacentBlock = (): Block | null => {
-    const p = bot.entity.position;
-    const px = Math.floor(p.x), py = Math.floor(p.y), pz = Math.floor(p.z);
-    // Prioritize side blocks to avoid falling into holes
-    const offsets = [
-      [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1],  // sides at feet
-      [1, -1, 0], [-1, -1, 0], [0, -1, 1], [0, -1, -1],  // sides below
-      [0, -1, 0], [0, -2, 0],  // below feet (last resort)
-    ];
-    for (const [dx, dy, dz] of offsets) {
-      const b = bot.blockAt(offset(p, dx, dy, dz)) as Block | null;
-      if (b && searchTypes.some((type) => b.name.includes(type))) return b;
+  // Find initial stone to start mining
+  let startBlock = findBlock(bot, isTarget, 32);
+  if (!startBlock) {
+    return { success: false, message: `Could not find ${blockType}` };
+  }
+  try {
+    await moveCloser(bot, startBlock.position, { maxDistance: 2 });
+  } catch {}
+
+  // Pick a direction and mine in a straight line at the same Y level
+  const p = bot.entity.position;
+  const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  // Pick the direction with the most target blocks ahead
+  let bestDir = dirs[0]!;
+  let bestCount = 0;
+  for (const [dx, dz] of dirs) {
+    let count = 0;
+    for (let i = 1; i <= 8; i++) {
+      const b = bot.blockAt(offset(p, dx * i, 0, dz * i)) as Block | null;
+      const bBelow = bot.blockAt(offset(p, dx * i, -1, dz * i)) as Block | null;
+      if ((b && isTarget(b.name)) || (bBelow && isTarget(bBelow.name))) count++;
     }
-    return null;
-  };
+    if (count > bestCount) { bestCount = count; bestDir = [dx, dz]; }
+  }
+  const [dirX, dirZ] = bestDir;
+  logEvent("mine", "direction", `dx=${dirX} dz=${dirZ} ahead=${bestCount}`);
 
   while (mined < targetCount) {
-    // First try adjacent blocks (drops land at bot's feet)
-    let block = findAdjacentBlock();
+    // Mine the block at feet level in our direction, or below feet
+    const px = Math.floor(bot.entity.position.x);
+    const py = Math.floor(bot.entity.position.y);
+    const pz = Math.floor(bot.entity.position.z);
+
+    // Check: ahead at feet, ahead below, directly below
+    const candidates = [
+      bot.blockAt(offset(bot.entity.position, dirX, 0, dirZ)),    // ahead at feet
+      bot.blockAt(offset(bot.entity.position, dirX, -1, dirZ)),   // ahead below
+      bot.blockAt(offset(bot.entity.position, 0, -1, 0)),         // below feet
+      bot.blockAt(offset(bot.entity.position, -dirX, 0, -dirZ)),  // behind (if stuck)
+    ] as (Block | null)[];
+
+    let block: Block | null = null;
+    for (const b of candidates) {
+      if (b && isTarget(b.name)) { block = b; break; }
+    }
 
     if (!block) {
-      // No adjacent target — find one nearby and walk to it
-      block = findBlock(
-        bot,
-        (name) => searchTypes.some((type) => name.includes(type)),
-        32,
-      );
+      // No target blocks nearby — find one further away
+      block = findBlock(bot, isTarget, 32);
       if (!block) {
         return {
           success: mined > 0,
@@ -75,8 +96,17 @@ export const mineBlock = async (
         logEvent("mine", "nav_fail", "couldn't reach block");
         continue;
       }
-      // Re-check for adjacent blocks after moving
-      block = findAdjacentBlock() ?? block;
+      continue; // Re-check candidates after moving
+    }
+
+    // Also dig the block above if it's not air (clear headroom for walking)
+    const above = bot.blockAt(offset(block.position, 0, 1, 0)) as Block | null;
+    if (above && above.name !== "air" && above.name !== "water" && block.position.y >= py) {
+      try {
+        await bot.lookAt(offset(above.position, 0.5, 0.5, 0.5));
+        await bot.dig(above);
+        await sleep(100);
+      } catch {}
     }
 
     try {
@@ -84,7 +114,12 @@ export const mineBlock = async (
       await bot.dig(block);
       mined++;
       logEvent("mine", "mined", `${blockType} ${mined}/${targetCount}`);
+      await sleep(100);
+
+      // Step forward into the cleared space
+      bot.setControlState("forward", true);
       await sleep(200);
+      bot.setControlState("forward", false);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "unknown";
       logEvent("mine", "fail", msg);
