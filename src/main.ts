@@ -306,7 +306,7 @@ const runRace = async (count: number, timeoutMs: number) => {
     }
   };
 
-  const GOAL = "furnace";
+  const GOAL = "stone_pickaxe";
 
   const MILESTONES = [
     { name: "wood", query: "item_name LIKE '%_log'" },
