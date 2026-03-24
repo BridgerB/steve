@@ -10,12 +10,17 @@ import { logEvent } from "../../lib/logger.ts";
 
 /** Dig with timeout — bot.dig() can hang silently */
 const safeDig = async (bot: Bot, block: Block, timeout = 8000): Promise<void> => {
-  await Promise.race([
-    bot.dig(block),
-    new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error("dig timeout")), timeout),
-    ),
-  ]);
+  let timer: ReturnType<typeof setTimeout>;
+  try {
+    await Promise.race([
+      bot.dig(block),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("dig timeout")), timeout);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer!);
+  }
 };
 
 export const mineBlock = async (

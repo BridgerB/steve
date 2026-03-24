@@ -54,6 +54,7 @@ const logPhase = (
 let currentStep: Step | null = null;
 let isExecuting = false;
 let consecutiveFailures = 0;
+let generation = 0; // increments on death — stale step results are ignored
 const completedSteps = new Set<string>();
 const succeededSteps = new Set<string>(); // steps that returned success — never remove
 
@@ -88,15 +89,25 @@ const runTick = async (bot: Bot): Promise<void> => {
 
   if (currentStep && !isExecuting) {
     isExecuting = true;
-    log(`Starting: ${currentStep.name}`);
-    logEvent("step", "start", currentStep.name, bot.entity?.position);
+    const stepId = currentStep.id;
+    const stepName = currentStep.name;
+    const stepGen = generation;
+    log(`Starting: ${stepName}`);
+    logEvent("step", "start", stepName, bot.entity?.position);
 
     try {
       // Timeout step execution at 120s to prevent hangs
       const timeout = new Promise<{ success: false; message: string }>((resolve) =>
-        setTimeout(() => resolve({ success: false, message: `${currentStep!.name} timed out (120s)` }), 120000),
+        setTimeout(() => resolve({ success: false, message: `${stepName} timed out (120s)` }), 120000),
       );
       const result = await Promise.race([currentStep.execute(bot, state), timeout]);
+
+      // Ignore stale results from before a death
+      if (stepGen !== generation) {
+        logEvent("step", "stale", `${stepName} result from gen ${stepGen}, now ${generation}`);
+        isExecuting = false;
+        return;
+      }
 
       // Close any stuck windows
       if (bot.currentWindow) {
@@ -106,23 +117,24 @@ const runTick = async (bot: Bot): Promise<void> => {
       if (result.success) {
         consecutiveFailures = 0;
         log(`✓ ${result.message}`);
-        logEvent("step", "success", `${currentStep.name}: ${result.message}`, bot.entity?.position);
-        completedSteps.add(currentStep.id);
-        succeededSteps.add(currentStep.id);
+        logEvent("step", "success", `${stepName}: ${result.message}`, bot.entity?.position);
+        completedSteps.add(stepId);
+        succeededSteps.add(stepId);
       } else {
         consecutiveFailures++;
         log(`✗ ${result.message} (fail #${consecutiveFailures})`);
-        logEvent("step", "fail", `${currentStep.name}: ${result.message}`, bot.entity?.position);
+        logEvent("step", "fail", `${stepName}: ${result.message}`, bot.entity?.position);
         if (consecutiveFailures >= 5) {
-          log(`ABORT: ${consecutiveFailures} consecutive failures on ${currentStep.name}`);
-          logEvent("step", "abort", `${currentStep.name}: ${consecutiveFailures} failures`, bot.entity?.position);
+          log(`ABORT: ${consecutiveFailures} consecutive failures on ${stepName}`);
+          logEvent("step", "abort", `${stepName}: ${consecutiveFailures} failures`, bot.entity?.position);
           process.exit(1);
         }
       }
     } catch (err) {
+      if (stepGen !== generation) { isExecuting = false; return; }
       const msg = err instanceof Error ? err.message : String(err);
       log(`✗ ${msg}`);
-      logEvent("step", "error", `${currentStep.name}: ${msg}`, bot.entity?.position);
+      logEvent("step", "error", `${stepName}: ${msg}`, bot.entity?.position);
       consecutiveFailures++;
       // Close any stuck windows
       if (bot.currentWindow) {
@@ -227,8 +239,10 @@ const startBot = async (): Promise<void> => {
   bot.on("death", () => {
     log("Died! Respawning...");
     logEvent("lifecycle", "death", undefined, bot.entity?.position);
+    generation++; // invalidate any in-flight step results
     isExecuting = false;
     currentStep = null;
+    consecutiveFailures = 0;
     completedSteps.clear();
     succeededSteps.clear();
   });

@@ -513,10 +513,12 @@ export const getRememberedResource = (bot: Bot, name: string): { x: number; y: n
   const mem = getMemory(bot);
   const list = mem.resources.get(name);
   if (!list || list.length === 0) return null;
-  // Return nearest
-  let nearest = list[0]!;
+  // Return nearest reachable — skip blocks >10 Y away (can't pathfind through solid rock)
+  const botY = bot.entity.position.y;
+  let nearest: { x: number; y: number; z: number } | null = null;
   let nearestDist = Infinity;
   for (const p of list) {
+    if (Math.abs(p.y - botY) > 10) continue;
     const d = distance(bot.entity.position, vec3(p.x, p.y, p.z));
     if (d < nearestDist) { nearestDist = d; nearest = p; }
   }
@@ -547,8 +549,14 @@ export const getCraftingTable = async (bot: Bot): Promise<Block | null> => {
             await moveCloser(bot, remembered.position, { maxDistance: 3 });
           }
         } catch {}
-        logEvent("craft", "table_remembered", JSON.stringify({ dist: Math.floor(d) }));
-        return remembered;
+        const actualDist = distance(bot.entity.position, remembered.position);
+        logEvent("craft", "table_remembered", JSON.stringify({ dist: Math.floor(d), actualDist: Math.floor(actualDist) }));
+        if (actualDist <= 6) {
+          return remembered;
+        }
+        // Still too far — forget and place a new one
+        logEvent("craft", "table_too_far", JSON.stringify({ actualDist: Math.floor(actualDist) }));
+        mem.craftingTablePos = null;
       }
     }
     // Table gone or too far — forget it
@@ -563,9 +571,20 @@ export const getCraftingTable = async (bot: Bot): Promise<Block | null> => {
     return table;
   }
 
-  // Try to place one from inventory
-  const tableItem = findItem(bot, "crafting_table");
-  if (!tableItem) { logEvent("craft", "table_missing", "not in inventory"); return null; }
+  // Try to place one from inventory — craft one from planks if needed
+  let tableItem = findItem(bot, "crafting_table");
+  if (!tableItem) {
+    // Try crafting a new table from planks (need 4)
+    const planks = countItems(bot, "planks");
+    if (planks >= 4) {
+      logEvent("craft", "table_crafting", "crafting new table from planks");
+      const result = await craftItem(bot, "crafting_table", 1);
+      if (result.success) {
+        tableItem = findItem(bot, "crafting_table");
+      }
+    }
+    if (!tableItem) { logEvent("craft", "table_missing", "not in inventory"); return null; }
+  }
 
   // Find a solid block to place on — try several positions
   // Blocks that are NOT solid ground for table placement
