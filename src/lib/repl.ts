@@ -38,7 +38,9 @@ bot.on("debug", (category: string, detail: Record<string, unknown>) => {
 bot.once("spawn", async () => {
 	const p = bot.entity.position;
 	console.log(
-		`READY ${USERNAME} at ${Math.floor(p.x)}, ${Math.floor(p.y)}, ${Math.floor(p.z)}`,
+		`READY ${USERNAME} at ${Math.floor(p.x)}, ${Math.floor(p.y)}, ${Math.floor(
+			p.z,
+		)}`,
 	);
 	await bot.waitForChunksToLoad();
 	console.log(`chunks loaded, watching ${CMD_FILE}`);

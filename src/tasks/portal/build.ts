@@ -71,7 +71,9 @@ export const buildNetherPortal = async (bot: Bot): Promise<StepResult> => {
 
 		return {
 			success: true,
-			message: `Portal frame ready at ${Math.floor(pos.x)}, ${Math.floor(pos.y)}, ${Math.floor(pos.z)}`,
+			message: `Portal frame ready at ${Math.floor(pos.x)}, ${Math.floor(
+				pos.y,
+			)}, ${Math.floor(pos.z)}`,
 		};
 	} catch (err) {
 		return {

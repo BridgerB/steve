@@ -252,8 +252,9 @@ const startBot = async (): Promise<void> => {
 		"deepslate_coal_ore",
 		"iron_ore",
 		"deepslate_iron_ore",
-	])
+	]) {
 		bot.watchBlocks.add(name);
+	}
 	bot.on(
 		"blockSeen",
 		(name: string, pos: { x: number; y: number; z: number }) => {
@@ -266,7 +267,9 @@ const startBot = async (): Promise<void> => {
 		logEvent(
 			"lifecycle",
 			"spawn",
-			`pos=${Math.floor(bot.entity.position.x)},${Math.floor(bot.entity.position.y)},${Math.floor(bot.entity.position.z)}`,
+			`pos=${Math.floor(bot.entity.position.x)},${Math.floor(
+				bot.entity.position.y,
+			)},${Math.floor(bot.entity.position.z)}`,
 			bot.entity.position,
 		);
 
@@ -277,7 +280,9 @@ const startBot = async (): Promise<void> => {
 		logEvent("lifecycle", "chunks_loaded");
 
 		log(
-			`Position: ${Math.floor(bot.entity.position.x)}, ${Math.floor(bot.entity.position.y)}, ${Math.floor(bot.entity.position.z)}`,
+			`Position: ${Math.floor(bot.entity.position.x)}, ${Math.floor(
+				bot.entity.position.y,
+			)}, ${Math.floor(bot.entity.position.z)}`,
 		);
 
 		const state = syncFromBot(bot);
@@ -569,7 +574,9 @@ const runRace = async (count: number, timeoutMs: number) => {
 	};
 
 	console.log(
-		`Run ${RACE_ID} — ${count} bot${count > 1 ? "s" : ""} (timeout=${timeoutMs / 1000}s)\n`,
+		`Run ${RACE_ID} — ${count} bot${count > 1 ? "s" : ""} (timeout=${
+			timeoutMs / 1000
+		}s)\n`,
 	);
 
 	// Op all bot usernames
@@ -589,7 +596,13 @@ iframe { width: 100%; height: 100%; border: none; background: #222; }
 .cell { position: relative; }
 .label { position: absolute; top: 4px; left: 8px; color: #fff; font: bold 14px monospace; z-index: 1; text-shadow: 0 0 4px #000; }
 </style></head><body>
-${Array.from({ length: NUM_VIEWERS }, (_, i) => `<div class="cell"><div class="label">Steve${i}</div><iframe src="http://localhost:${3001 + i}"></iframe></div>`).join("\n")}
+${Array.from(
+	{ length: NUM_VIEWERS },
+	(_, i) =>
+		`<div class="cell"><div class="label">Steve${i}</div><iframe src="http://localhost:${
+			3001 + i
+		}"></iframe></div>`,
+).join("\n")}
 </body></html>`;
 	const gridServer = createHttpServer((_req, res) => {
 		res.writeHead(200, { "Content-Type": "text/html" });
@@ -607,7 +620,9 @@ ${Array.from({ length: NUM_VIEWERS }, (_, i) => `<div class="cell"><div class="l
 	console.log(`Run ${RACE_ID}`);
 	console.log(`${"─".repeat(70)}`);
 	console.log(
-		`${"#".padEnd(4)} ${"bot".padEnd(10)} ${"time".padEnd(8)} ${"result".padEnd(10)} inventory`,
+		`${"#".padEnd(4)} ${"bot".padEnd(10)} ${"time".padEnd(8)} ${"result".padEnd(
+			10,
+		)} inventory`,
 	);
 	console.log(`${"─".repeat(70)}`);
 	const hasWinner = results.some((r) => r.won);
@@ -618,7 +633,9 @@ ${Array.from({ length: NUM_VIEWERS }, (_, i) => `<div class="cell"><div class="l
 				? "racing"
 				: "timeout";
 		console.log(
-			`${String(r.idx).padEnd(4)} ${r.username.padEnd(10)} ${(`${r.elapsed}s`).padEnd(8)} ${status.padEnd(10)} ${r.inventory}`,
+			`${String(r.idx).padEnd(4)} ${r.username.padEnd(10)} ${(
+				`${r.elapsed}s`
+			).padEnd(8)} ${status.padEnd(10)} ${r.inventory}`,
 		);
 	}
 	console.log(`${"─".repeat(70)}`);
@@ -626,7 +643,9 @@ ${Array.from({ length: NUM_VIEWERS }, (_, i) => `<div class="cell"><div class="l
 	const winners = results.filter((r) => r.won);
 	if (winners.length > 0) {
 		console.log(
-			`${winners.length}/${count} ${GOAL} — fastest: ${Math.min(...winners.map((r) => r.elapsed))}s`,
+			`${winners.length}/${count} ${GOAL} — fastest: ${Math.min(
+				...winners.map((r) => r.elapsed),
+			)}s`,
 		);
 	} else {
 		console.log(`0/${count} got ${GOAL}`);

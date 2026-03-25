@@ -119,7 +119,9 @@ export const runBotTest = async (
 							)
 							.filter(Boolean);
 						console.log(
-							`[test] Inventory after setup: ${items.length > 0 ? items.join(", ") : "empty"}`,
+							`[test] Inventory after setup: ${
+								items.length > 0 ? items.join(", ") : "empty"
+							}`,
 						);
 
 						// Run the actual test

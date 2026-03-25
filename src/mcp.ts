@@ -86,7 +86,9 @@ const connectBot = async (): Promise<Bot> => {
 
 			const p = b.entity.position;
 			log(
-				`Bot ready at ${Math.floor(p.x)}, ${Math.floor(p.y)}, ${Math.floor(p.z)}`,
+				`Bot ready at ${Math.floor(p.x)}, ${Math.floor(p.y)}, ${Math.floor(
+					p.z,
+				)}`,
 			);
 
 			// Passive memory — same setup as main.ts
@@ -101,8 +103,9 @@ const connectBot = async (): Promise<Bot> => {
 				"deepslate_coal_ore",
 				"iron_ore",
 				"deepslate_iron_ore",
-			])
+			]) {
 				b.watchBlocks.add(name);
+			}
 			b.on(
 				"blockSeen",
 				(name: string, pos: { x: number; y: number; z: number }) => {
@@ -131,8 +134,9 @@ const connectBot = async (): Promise<Bot> => {
 };
 
 const requireBot = (): Bot => {
-	if (!bot || !botReady)
+	if (!bot || !botReady) {
 		throw new Error("Bot not connected. Is the MC server running?");
+	}
 	return bot;
 };
 
@@ -336,7 +340,9 @@ Long-running operations block until complete (mining ~30-60s, navigation ~10s).`
 					? "(no return value)"
 					: JSON.stringify(result, null, 2);
 			const p = b.entity.position;
-			const summary = `\n\n--- Post-execution ---\nPos: ${Math.floor(p.x)}, ${Math.floor(p.y)}, ${Math.floor(p.z)} | HP: ${b.health}/20 | Food: ${b.food}/20`;
+			const summary = `\n\n--- Post-execution ---\nPos: ${Math.floor(p.x)}, ${Math.floor(
+				p.y,
+			)}, ${Math.floor(p.z)} | HP: ${b.health}/20 | Food: ${b.food}/20`;
 
 			return { content: [{ type: "text" as const, text: text + summary }] };
 		} catch (err) {
@@ -369,7 +375,9 @@ server.tool(
 			content: [
 				{
 					type: "text" as const,
-					text: `Sent: ${message}\nPos: ${Math.floor(pos.x)}, ${Math.floor(pos.y)}, ${Math.floor(pos.z)} | HP: ${b.health}/20`,
+					text: `Sent: ${message}\nPos: ${Math.floor(pos.x)}, ${Math.floor(
+						pos.y,
+					)}, ${Math.floor(pos.z)} | HP: ${b.health}/20`,
 				},
 			],
 		};

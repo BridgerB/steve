@@ -99,8 +99,9 @@ export const smeltItems = async (
 
 		// Put items to smelt
 		const toSmelt = itemsToSmelt[0];
-		if (!toSmelt)
+		if (!toSmelt) {
 			return { success: false, message: `No ${inputItem} in inventory` };
+		}
 		const smeltCount = Math.min(toSmelt.count, count);
 		await furnaceWindow.putInput(toSmelt.type, null, smeltCount);
 

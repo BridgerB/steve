@@ -182,7 +182,9 @@ export const mineBlock = async (
 					logEvent(
 						"mine",
 						"from_memory",
-						`${blockType} at ${remembered.x},${remembered.y},${remembered.z} dist=${remDist.toFixed(0)}`,
+						`${blockType} at ${remembered.x},${remembered.y},${remembered.z} dist=${remDist.toFixed(
+							0,
+						)}`,
 					);
 					try {
 						if (remDist > 4) {

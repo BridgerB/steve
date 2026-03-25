@@ -153,7 +153,9 @@ const runBot = async (
 							} catch {}
 						}
 						console.log(
-							`[${name}] pickaxe in slot ${pickSlot}, held: ${bot.heldItem?.name ?? "null"}`,
+							`[${name}] pickaxe in slot ${pickSlot}, held: ${
+								bot.heldItem?.name ?? "null"
+							}`,
 						);
 					} else {
 						console.log(`[${name}] NO PICKAXE FOUND in inventory`);
@@ -233,7 +235,9 @@ const main = async () => {
 	const count = parseInt(process.argv[3] ?? "10", 10);
 	const timeoutSec = parseInt(process.argv[4] ?? "120", 10);
 
-	const dbPath = `data/bench-${stepId}-${new Date().toISOString().replace(/:/g, "-")}.db`;
+	const dbPath = `data/bench-${stepId}-${new Date()
+		.toISOString()
+		.replace(/:/g, "-")}.db`;
 	initLogger(dbPath);
 	console.log(
 		`Bench: ${step.name} (${stepId}) — ${count} bots, ${timeoutSec}s timeout`,
@@ -270,7 +274,9 @@ const main = async () => {
 	for (const r of allResults.sort((a, b) => a.name.localeCompare(b.name))) {
 		const tag = r === winner ? "WINNER" : r.success ? "OK" : "FAIL";
 		console.log(
-			`${r.name.padEnd(10)} ${(`${r.elapsed}s`).padEnd(8)} ${tag.padEnd(8)} ${r.message}`,
+			`${r.name.padEnd(10)} ${(`${r.elapsed}s`).padEnd(8)} ${tag.padEnd(
+				8,
+			)} ${r.message}`,
 		);
 	}
 	console.log(`${"─".repeat(70)}`);
