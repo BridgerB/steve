@@ -50,7 +50,7 @@ export const gatherFood = async (
 		// Get closest animal
 		const animal = findNearestEntity(
 			bot,
-			(e) => e.name && FOOD_ANIMALS.includes(e.name),
+			(e) => !!e.name && FOOD_ANIMALS.includes(e.name),
 		);
 
 		if (!animal) continue;

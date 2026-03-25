@@ -144,7 +144,7 @@ const logTick = (bot: Bot): void => {
 			x: Math.floor(p.x),
 			y: Math.floor(p.y) - 1,
 			z: Math.floor(p.z),
-		} as any) as any;
+		} as { x: number; y: number; z: number }) as { name?: string } | null;
 		if (below) blockBelow = below.name ?? "unknown";
 	} catch {
 		/* ignore */
@@ -152,7 +152,7 @@ const logTick = (bot: Bot): void => {
 
 	let blockCursor = "air";
 	try {
-		const cursor = bot.blockAtCursor?.(5) as any;
+		const cursor = bot.blockAtCursor?.(5) as { name?: string } | null;
 		if (cursor) blockCursor = cursor.name ?? "air";
 	} catch {
 		/* ignore */

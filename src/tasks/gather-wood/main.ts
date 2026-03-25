@@ -4,7 +4,7 @@
 
 import type { Bot } from "typecraft";
 import type { StepResult } from "../../types.ts";
-import { createGoalNear, windowItems } from "typecraft";
+import { createGoalNear } from "typecraft";
 import { vec3, distance, offset, type Vec3 } from "typecraft";
 import { logEvent } from "../../lib/logger.ts";
 import {
@@ -181,7 +181,7 @@ export const gatherWood = async (
 	};
 
 	// Mine a single block
-	const mineBlock = async (pos: Vec3, blockName: string): Promise<boolean> => {
+	const mineBlock = async (pos: Vec3, _blockName: string): Promise<boolean> => {
 		const blockCenter = offset(pos, 0.5, 0.5, 0.5);
 		let dist = distance(botPos(), blockCenter);
 
@@ -208,7 +208,7 @@ export const gatherWood = async (
 
 		try {
 			await Promise.race([
-				bot.dig(block as any, true),
+				bot.dig(block, true),
 				new Promise<void>((_, reject) =>
 					setTimeout(() => reject(new Error("dig timeout")), 5000),
 				),
@@ -223,7 +223,7 @@ export const gatherWood = async (
 
 		// Navigate to dropped item for pickup
 		await bot.collectDrops(6, 3000, async (p) => {
-			await goTo(bot, p, { range: 1.4, stuckTimeout: 3000 });
+			await goTo(bot, p, { range: 1.4, timeout: 3000 });
 		});
 
 		const logsNow = countLogs();

@@ -174,6 +174,7 @@ export const killBlazes = async (
 				distance(bot.entity.position, a.position) -
 				distance(bot.entity.position, b.position),
 		)[0];
+		if (!blaze) continue;
 
 		try {
 			// Blazes fly - try to get closer

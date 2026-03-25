@@ -8,7 +8,7 @@
  *   rcon.close();
  */
 
-import { createConnection, type Socket } from "net";
+import { createConnection, type Socket } from "node:net";
 
 interface RconOptions {
 	host?: string;

@@ -2,14 +2,9 @@
  * Shared type definitions for Steve - Ender Dragon Speedrun Bot
  */
 
-import type { Bot, Vec3 } from "typecraft";
+import type { Block, Bot } from "typecraft";
 
-/** Block object returned by bot.blockAt() / bot.findBlock() */
-export type Block = {
-	position: Vec3;
-	name: string;
-	stateId: number;
-};
+export type { Block };
 
 // ============================================
 // TIER TYPES

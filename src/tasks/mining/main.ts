@@ -3,12 +3,11 @@
  */
 
 import type { Bot } from "typecraft";
-import { distance, offset } from "typecraft";
+import { distance, offset, vec3 } from "typecraft";
 import type { StepResult, Block } from "../../types.ts";
 import {
 	exploreRandom,
 	findBlock,
-	getPathfinder,
 	getRememberedResource,
 	forgetResource,
 	goTo,
@@ -24,7 +23,7 @@ const safeDig = async (
 	block: Block,
 	timeout = 8000,
 ): Promise<void> => {
-	let timer: ReturnType<typeof setTimeout>;
+	let timer: ReturnType<typeof setTimeout> | undefined;
 	try {
 		await Promise.race([
 			bot.dig(block),
@@ -33,7 +32,7 @@ const safeDig = async (
 			}),
 		]);
 	} finally {
-		clearTimeout(timer!);
+		if (timer) clearTimeout(timer);
 	}
 };
 
@@ -46,8 +45,8 @@ export const mineBlock = async (
 	const deadline = Date.now() + 110_000; // Return cleanly before 120s step timeout
 
 	// Equip best pickaxe before mining — find it and select its hotbar slot
-	const pickSlot = bot.inventory.slots.findIndex(
-		(s) => s && s.name.includes("pickaxe"),
+	const pickSlot = bot.inventory.slots.findIndex((s) =>
+		s?.name.includes("pickaxe"),
 	);
 	if (pickSlot >= 36 && pickSlot <= 44) {
 		bot.setQuickBarSlot(pickSlot - 36);
@@ -69,7 +68,9 @@ export const mineBlock = async (
 	const remembered = getRememberedResource(bot, blockType);
 	let startBlock: Block | null = null;
 	if (remembered) {
-		const remBlock = bot.blockAt(remembered as any) as Block | null;
+		const remBlock = bot.blockAt(
+			vec3(remembered.x, remembered.y, remembered.z),
+		);
 		if (remBlock && isTarget(remBlock.name)) {
 			startBlock = remBlock;
 			logEvent(
@@ -92,7 +93,9 @@ export const mineBlock = async (
 			// Check memory again — blockSeen may have fired during exploration
 			const newRemembered = getRememberedResource(bot, blockType);
 			if (newRemembered) {
-				const remBlock = bot.blockAt(newRemembered as any) as Block | null;
+				const remBlock = bot.blockAt(
+					vec3(newRemembered.x, newRemembered.y, newRemembered.z),
+				);
 				if (remBlock && isTarget(remBlock.name)) {
 					startBlock = remBlock;
 					logEvent(
@@ -123,14 +126,14 @@ export const mineBlock = async (
 
 	// Pick a direction and mine in a straight line at the same Y level
 	const p = bot.entity.position;
-	const dirs = [
+	const dirs: [number, number][] = [
 		[1, 0],
 		[-1, 0],
 		[0, 1],
 		[0, -1],
 	];
 	// Pick the direction with the most target blocks ahead
-	let bestDir = dirs[0]!;
+	let bestDir: [number, number] = dirs[0] ?? [1, 0];
 	let bestCount = 0;
 	for (const [dx, dz] of dirs) {
 		let count = 0;
@@ -149,9 +152,7 @@ export const mineBlock = async (
 
 	while (mined < targetCount && Date.now() < deadline) {
 		// Mine the block at feet level in our direction, or below feet
-		const px = Math.floor(bot.entity.position.x);
 		const py = Math.floor(bot.entity.position.y);
-		const pz = Math.floor(bot.entity.position.z);
 
 		// Check: ahead at feet, ahead below, directly below
 		const candidates = [
@@ -173,7 +174,9 @@ export const mineBlock = async (
 			// Check memory first — did we see this resource earlier?
 			const remembered = getRememberedResource(bot, blockType);
 			if (remembered) {
-				const remBlock = bot.blockAt(remembered as any) as Block | null;
+				const remBlock = bot.blockAt(
+					vec3(remembered.x, remembered.y, remembered.z),
+				);
 				if (remBlock && isTarget(remBlock.name)) {
 					const remDist = distance(bot.entity.position, remBlock.position);
 					logEvent(

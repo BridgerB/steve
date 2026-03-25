@@ -59,7 +59,8 @@ const runBot = async (
 	count: number,
 	timeoutMs: number,
 ): Promise<Result> => {
-	const step = steps.find((s) => s.id === stepId)!;
+	const step = steps.find((s) => s.id === stepId);
+	if (!step) throw new Error(`Unknown step: ${stepId}`);
 	const name = `Bench${idx}`;
 
 	// Stagger connections
@@ -69,7 +70,7 @@ const runBot = async (
 
 	const bot: Bot = createBot({
 		host: "localhost",
-		port: parseInt(process.env.MC_PORT ?? "25565"),
+		port: parseInt(process.env.MC_PORT ?? "25565", 10),
 		username: name,
 		version: "1.21.11",
 		auth: "offline",
@@ -84,8 +85,8 @@ const runBot = async (
 		const timer = setTimeout(() => {
 			const inv =
 				bot.inventory?.slots
-					?.filter((s) => s && s.count > 0)
-					.map((s) => `${s!.name}x${s!.count}`)
+					?.filter((s): s is NonNullable<typeof s> => s != null && s.count > 0)
+					.map((s) => `${s.name}x${s.count}`)
 					.join(", ") ?? "";
 			try {
 				bot.end();
@@ -138,8 +139,8 @@ const runBot = async (
 
 				// For mining — find the pickaxe and select it
 				if (stepId.startsWith("mine")) {
-					pickSlot = bot.inventory.slots.findIndex(
-						(s) => s && s.name?.includes("pickaxe"),
+					pickSlot = bot.inventory.slots.findIndex((s) =>
+						s?.name?.includes("pickaxe"),
 					);
 					if (pickSlot >= 0) {
 						if (pickSlot >= 36 && pickSlot <= 44) {
@@ -158,8 +159,10 @@ const runBot = async (
 						console.log(`[${name}] NO PICKAXE FOUND in inventory`);
 						// Dump what we have
 						const slots = bot.inventory.slots
-							.filter((s) => s && s.count > 0)
-							.map((s, i) => `${i}:${s!.name}`);
+							.filter(
+								(s): s is NonNullable<typeof s> => s != null && s.count > 0,
+							)
+							.map((s, i) => `${i}:${s.name}`);
 						console.log(`[${name}] slots: ${slots.join(", ") || "empty"}`);
 					}
 				}
@@ -174,8 +177,8 @@ const runBot = async (
 				const s = syncFromBot(bot);
 				const complete = step.isComplete(s);
 				const inv = bot.inventory.slots
-					.filter((s) => s && s.count > 0)
-					.map((s) => `${s!.name}x${s!.count}`)
+					.filter((s): s is NonNullable<typeof s> => s != null && s.count > 0)
+					.map((s) => `${s.name}x${s.count}`)
 					.join(", ");
 				try {
 					bot.end();
@@ -227,8 +230,8 @@ const main = async () => {
 		process.exit(1);
 	}
 
-	const count = parseInt(process.argv[3] ?? "10");
-	const timeoutSec = parseInt(process.argv[4] ?? "120");
+	const count = parseInt(process.argv[3] ?? "10", 10);
+	const timeoutSec = parseInt(process.argv[4] ?? "120", 10);
 
 	const dbPath = `data/bench-${stepId}-${new Date().toISOString().replace(/:/g, "-")}.db`;
 	initLogger(dbPath);
@@ -267,14 +270,17 @@ const main = async () => {
 	for (const r of allResults.sort((a, b) => a.name.localeCompare(b.name))) {
 		const tag = r === winner ? "WINNER" : r.success ? "OK" : "FAIL";
 		console.log(
-			`${r.name.padEnd(10)} ${(r.elapsed + "s").padEnd(8)} ${tag.padEnd(8)} ${r.message}`,
+			`${r.name.padEnd(10)} ${(`${r.elapsed}s`).padEnd(8)} ${tag.padEnd(8)} ${r.message}`,
 		);
 	}
 	console.log(`${"─".repeat(70)}`);
 
 	const ok = allResults.filter((r) => r.success);
 	console.log(`${ok.length}/${count} completed`);
-	if (winner) console.log(`winner: ${winner.name} in ${winner.elapsed}s`);
+	if (winner) {
+		const w = winner as Result;
+		console.log(`winner: ${w.name} in ${w.elapsed}s`);
+	}
 	process.exit(0);
 };
 

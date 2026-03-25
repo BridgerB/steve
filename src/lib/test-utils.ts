@@ -107,27 +107,6 @@ export const runBotTest = async (
 							await sleep(setupDelay);
 						}
 
-						// Debug: listen for inventory packets
-						// Debug packet listeners (Mojang names)
-						bot.client.on("container_set_slot", (p: any) => {
-							console.log(
-								`[test] set_slot: window=${p.windowId} slot=${p.slot} item=${JSON.stringify(p.item)?.slice(0, 60)}`,
-							);
-						});
-						bot.client.on("set_player_inventory", (p: any) => {
-							console.log(
-								`[test] set_player_inventory: slot=${p.slotId} item=${JSON.stringify(p.contents)?.slice(0, 60)}`,
-							);
-						});
-						bot.client.on("container_set_content", (p: any) => {
-							const nonEmpty =
-								(p.items as any[])?.filter((i: any) => i?.itemCount > 0)
-									.length ?? 0;
-							console.log(
-								`[test] window_items: window=${p.windowId} items=${(p.items as any[])?.length} nonEmpty=${nonEmpty}`,
-							);
-						});
-
 						// Wait extra for inventory to sync
 						await sleep(2000);
 
@@ -174,7 +153,7 @@ export const assertTaskSuccess = async (
 	const result = await taskFn();
 	assert.ok(
 		result.success,
-		`${errorPrefix ? errorPrefix + ": " : ""}${result.message}`,
+		`${errorPrefix ? `${errorPrefix}: ` : ""}${result.message}`,
 	);
 	return result;
 };
@@ -311,6 +290,7 @@ export const runMultiBotTest = async (
 		// Log batch results
 		for (let i = 0; i < batchResults.length; i++) {
 			const r = batchResults[i];
+			if (!r) continue;
 			const globalIdx = batchStart + i;
 			const status = r.success ? "PASS" : "FAIL";
 			console.log(

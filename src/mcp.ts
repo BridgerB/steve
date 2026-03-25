@@ -13,20 +13,19 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { createBot as createMcBot } from "typecraft";
+import { createBot as createMcBot, vec3, windowItems } from "typecraft";
 import type { Bot } from "typecraft";
-import { windowItems } from "typecraft";
 import { syncFromBot } from "./state.ts";
 import { rememberResource } from "./lib/bot-utils.ts";
-import { writeFileSync } from "fs";
-import { fileURLToPath } from "url";
-import { dirname, join } from "path";
+import { writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 
 // ── stdio transport — NO console.log anywhere ──
 const log = (...args: unknown[]) => console.error("[mcp]", ...args);
 
 const HOST = process.env.MC_HOST ?? "localhost";
-const PORT = parseInt(process.env.MC_PORT ?? "25565");
+const PORT = parseInt(process.env.MC_PORT ?? "25565", 10);
 const USERNAME = process.env.MC_USERNAME ?? "McpBot";
 const VERSION = process.env.MC_VERSION ?? "1.21.11";
 
@@ -104,9 +103,12 @@ const connectBot = async (): Promise<Bot> => {
 				"deepslate_iron_ore",
 			])
 				b.watchBlocks.add(name);
-			b.on("blockSeen", (name: string, pos: any) => {
-				rememberResource(b, name, pos);
-			});
+			b.on(
+				"blockSeen",
+				(name: string, pos: { x: number; y: number; z: number }) => {
+					rememberResource(b, name, pos);
+				},
+			);
 
 			b.on("kicked", (reason) => {
 				log("Bot kicked:", reason);
@@ -208,11 +210,13 @@ server.tool(
 		for (let dx = -r; dx <= r; dx++) {
 			for (let dy = -r; dy <= r; dy++) {
 				for (let dz = -r; dz <= r; dz++) {
-					const block = b.blockAt({
-						x: Math.floor(pos.x) + dx,
-						y: Math.floor(pos.y) + dy,
-						z: Math.floor(pos.z) + dz,
-					} as any) as any;
+					const block = b.blockAt(
+						vec3(
+							Math.floor(pos.x) + dx,
+							Math.floor(pos.y) + dy,
+							Math.floor(pos.z) + dz,
+						),
+					);
 					if (block && block.name !== "air" && block.name !== "cave_air") {
 						blocks[block.name] = (blocks[block.name] ?? 0) + 1;
 					}
@@ -221,9 +225,9 @@ server.tool(
 		}
 
 		const entities = Object.values(b.entities)
-			.filter((e: any) => e.id !== b.entity.id)
-			.map((e: any) => ({
-				name: e.name ?? e.type,
+			.filter((e) => e.id !== b.entity.id)
+			.map((e) => ({
+				name: e.name ?? String(e.type),
 				position: {
 					x: +e.position.x.toFixed(1),
 					y: +e.position.y.toFixed(1),
@@ -235,8 +239,8 @@ server.tool(
 						(e.position.z - pos.z) ** 2,
 				).toFixed(1),
 			}))
-			.filter((e: any) => e.distance <= r * 2)
-			.sort((a: any, b: any) => a.distance - b.distance)
+			.filter((e) => e.distance <= r * 2)
+			.sort((a, b) => a.distance - b.distance)
 			.slice(0, 20);
 
 		return {
@@ -254,7 +258,7 @@ server.tool(
 								.sort((a, b) => b[1] - a[1])
 								.slice(0, 30),
 							entities: entities.length > 0 ? entities : "none visible",
-							dimension: String((b.game as any)?.dimension ?? "overworld"),
+							dimension: String(b.game?.dimension ?? "overworld"),
 						},
 						null,
 						2,
@@ -339,7 +343,7 @@ Long-running operations block until complete (mining ~30-60s, navigation ~10s).`
 			const msg = err instanceof Error ? err.message : String(err);
 			const stack =
 				err instanceof Error && err.stack
-					? "\n" + err.stack.split("\n").slice(0, 5).join("\n")
+					? `\n${err.stack.split("\n").slice(0, 5).join("\n")}`
 					: "";
 			return {
 				content: [{ type: "text" as const, text: `ERROR: ${msg}${stack}` }],

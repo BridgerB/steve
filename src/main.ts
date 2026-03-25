@@ -29,7 +29,7 @@ import { rememberResource } from "./lib/bot-utils.ts";
 
 const CONFIG = {
 	host: process.env.MC_HOST ?? "localhost",
-	port: parseInt(process.env.MC_PORT ?? "25565"),
+	port: parseInt(process.env.MC_PORT ?? "25565", 10),
 	username: process.env.MC_USERNAME ?? "Steve",
 	tickInterval: 5000,
 };
@@ -39,7 +39,7 @@ const CONFIG = {
 // ============================================
 
 const log = (message: string) => {
-	const timestamp = new Date().toISOString().split("T")[1]!.split(".")[0];
+	const timestamp = new Date().toISOString().split("T")[1]?.split(".")[0];
 	console.log(`[${timestamp}] ${message}`);
 };
 
@@ -209,7 +209,7 @@ const runTick = async (bot: Bot): Promise<void> => {
 
 const startBot = async (): Promise<void> => {
 	// Bot lifetime timeout — exit cleanly if we've been running too long
-	const lifetimeMs = parseInt(process.env.STEVE_TIMEOUT ?? "120") * 1000;
+	const lifetimeMs = parseInt(process.env.STEVE_TIMEOUT ?? "120", 10) * 1000;
 	setTimeout(() => {
 		log(`Lifetime timeout (${lifetimeMs / 1000}s) — exiting`);
 		logEvent("lifecycle", "timeout", `${lifetimeMs / 1000}s`);
@@ -229,7 +229,7 @@ const startBot = async (): Promise<void> => {
 	});
 
 	// Start web viewer if port assigned (first 4 bots get viewers)
-	const viewerPort = parseInt(process.env.STEVE_VIEWER_PORT ?? "0");
+	const viewerPort = parseInt(process.env.STEVE_VIEWER_PORT ?? "0", 10);
 	if (viewerPort > 0) {
 		bot.once("spawn", () => {
 			createWebViewer(bot, { port: viewerPort, viewDistance: 4 });
@@ -255,9 +255,12 @@ const startBot = async (): Promise<void> => {
 		"deepslate_iron_ore",
 	])
 		bot.watchBlocks.add(name);
-	bot.on("blockSeen", (name: string, pos: any) => {
-		rememberResource(bot, name, pos);
-	});
+	bot.on(
+		"blockSeen",
+		(name: string, pos: { x: number; y: number; z: number }) => {
+			rememberResource(bot, name, pos);
+		},
+	);
 
 	bot.once("spawn", async () => {
 		log("Spawned into the world");
@@ -356,8 +359,8 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 const runRace = async (count: number, timeoutMs: number) => {
 	const ROOT = process.cwd();
-	const SERVER_PORT = parseInt(process.env.MC_PORT ?? "25565");
-	const RCON_PORT = parseInt(process.env.MC_RCON_PORT ?? "25575");
+	const SERVER_PORT = parseInt(process.env.MC_PORT ?? "25565", 10);
+	const RCON_PORT = parseInt(process.env.MC_RCON_PORT ?? "25575", 10);
 	const RCON_PASS = process.env.MC_RCON_PASS ?? "minecraft-test-rcon";
 	const SPREAD_RADIUS = 50;
 
@@ -616,7 +619,7 @@ ${Array.from({ length: NUM_VIEWERS }, (_, i) => `<div class="cell"><div class="l
 				? "racing"
 				: "timeout";
 		console.log(
-			`${String(r.idx).padEnd(4)} ${r.username.padEnd(10)} ${(r.elapsed + "s").padEnd(8)} ${status.padEnd(10)} ${r.inventory}`,
+			`${String(r.idx).padEnd(4)} ${r.username.padEnd(10)} ${(`${r.elapsed}s`).padEnd(8)} ${status.padEnd(10)} ${r.inventory}`,
 		);
 	}
 	console.log(`${"─".repeat(70)}`);
@@ -644,8 +647,8 @@ if (isBotMode) {
 	startBot();
 } else {
 	// Orchestrator — parse args, spawn bot(s)
-	const count = parseInt(process.argv[2] ?? "20");
-	const timeout = parseInt(process.argv[3] ?? "600") * 1000;
+	const count = parseInt(process.argv[2] ?? "20", 10);
+	const timeout = parseInt(process.argv[3] ?? "600", 10) * 1000;
 
 	console.log("");
 	console.log("╔════════════════════════════════════════════════════════╗");

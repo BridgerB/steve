@@ -4,7 +4,6 @@
  */
 
 import type { Bot } from "typecraft";
-import { windowItems } from "typecraft";
 import type {
 	ArmorTier,
 	Dimension,

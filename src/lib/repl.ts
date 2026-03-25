@@ -11,12 +11,12 @@
 
 import { createBot } from "typecraft";
 import type { Bot } from "typecraft";
-import { readFileSync, writeFileSync, watchFile } from "fs";
+import { readFileSync, writeFileSync, watchFile } from "node:fs";
 import { initLogger, logEvent } from "./logger.ts";
 
 const CMD_FILE = "/tmp/steve-cmd.txt";
 const HOST = process.env.MC_HOST ?? "localhost";
-const PORT = parseInt(process.env.MC_PORT ?? "25565");
+const PORT = parseInt(process.env.MC_PORT ?? "25565", 10);
 const USERNAME = process.env.MC_USERNAME ?? "InlineBot";
 const VERSION = process.env.MC_VERSION ?? "1.21.11";
 
@@ -52,7 +52,7 @@ bot.once("spawn", async () => {
 		if (!cmd) return;
 		writeFileSync(CMD_FILE, "");
 		busy = true;
-		console.log("> " + cmd);
+		console.log(`> ${cmd}`);
 		try {
 			// Write a temp module that exports a run(bot) function, then import and call it
 			const tmpFile = new URL("../../.repl-exec.ts", import.meta.url).pathname;

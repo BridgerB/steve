@@ -80,19 +80,6 @@ it("craft: place table + craft wooden pickaxe", {
 			],
 		},
 		async (bot) => {
-			// Debug: listen for packets (Mojang names)
-			bot.client.on("open_screen", (p: any) => {
-				console.log(`[test] OPEN_SCREEN: ${JSON.stringify(p)?.slice(0, 100)}`);
-			});
-			bot.client.on("packet", (data: any, meta: any) => {
-				if (
-					meta?.name?.includes("screen") ||
-					meta?.name?.includes("container")
-				) {
-					console.log(`[test] PACKET: ${meta.name}`);
-				}
-			});
-
 			const result = await craftWoodenPickaxe(bot);
 			assert.ok(result.success, `craftWoodenPickaxe: ${result.message}`);
 			const picks = countInventoryItems(bot, "pickaxe");

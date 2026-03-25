@@ -3,7 +3,7 @@
  * Reduces code duplication across task implementations
  */
 
-import type { Bot, Pathfinder, Item } from "typecraft";
+import type { Bot, Entity, Pathfinder, Item } from "typecraft";
 import {
 	createPathfinder,
 	createGoalNear,
@@ -15,22 +15,15 @@ import { logEvent } from "./logger.ts";
 import type { StepResult } from "../types.ts";
 
 /** Block with position and hardness — enriched from typecraft's blockAt + registry */
-type Block = {
-	position: Vec3;
-	name: string;
-	stateId: number;
-	hardness: number | null;
-};
+import type { Block as TypecraftBlock } from "typecraft";
+
+type Block = TypecraftBlock & { hardness: number | null };
 
 /** Get block at position with position and hardness attached */
 export const getBlock = (bot: Bot, pos: Vec3): Block | null => {
 	// Floor position — block coords must be integers
 	pos = vec3(Math.floor(pos.x), Math.floor(pos.y), Math.floor(pos.z));
-	const info = bot.blockAt(pos) as {
-		name: string;
-		stateId?: number;
-		properties?: Record<string, string>;
-	} | null;
+	const info = bot.blockAt(pos);
 	if (!info) return null;
 
 	// Look up hardness from registry
@@ -46,9 +39,8 @@ export const getBlock = (bot: Bot, pos: Vec3): Block | null => {
 	}
 
 	return {
+		...info,
 		position: pos,
-		name: info.name,
-		stateId: info.stateId ?? 0,
 		hardness,
 	};
 };
@@ -389,7 +381,7 @@ export const equipItem = async (
  * const endermen = findEntities(bot, "enderman");
  * ```
  */
-export const findEntities = (bot: Bot, name: string): any[] => {
+export const findEntities = (bot: Bot, name: string): Entity[] => {
 	return Object.values(bot.entities).filter((e) => e.name === name);
 };
 
@@ -401,7 +393,7 @@ export const findEntities = (bot: Bot, name: string): any[] => {
  * const animals = findEntitiesByNames(bot, ["pig", "cow", "sheep", "chicken"]);
  * ```
  */
-export const findEntitiesByNames = (bot: Bot, names: string[]): any[] => {
+export const findEntitiesByNames = (bot: Bot, names: string[]): Entity[] => {
 	return Object.values(bot.entities).filter(
 		(e) => e.name && names.includes(e.name),
 	);
@@ -417,16 +409,18 @@ export const findEntitiesByNames = (bot: Bot, names: string[]): any[] => {
  */
 export const findNearestEntity = (
 	bot: Bot,
-	filter: (entity: any) => boolean,
-): any | null => {
+	filter: (entity: Entity) => boolean,
+): Entity | null => {
 	const entities = Object.values(bot.entities).filter(filter);
 	if (entities.length === 0) return null;
 
-	return entities.sort(
-		(a: any, b: any) =>
-			distance(bot.entity.position, a.position) -
-			distance(bot.entity.position, b.position),
-	)[0];
+	return (
+		entities.sort(
+			(a, b) =>
+				distance(bot.entity.position, a.position) -
+				distance(bot.entity.position, b.position),
+		)[0] ?? null
+	);
 };
 
 // =============================================================================
@@ -457,9 +451,8 @@ export const findBlock = (
 		count: 1,
 	});
 
-	if (positions.length === 0) return null;
-
-	const pos = positions[0]!;
+	const pos = positions[0];
+	if (!pos) return null;
 	return getBlock(bot, pos);
 };
 
@@ -512,9 +505,12 @@ interface BotMemory {
 const botMemory = new WeakMap<Bot, BotMemory>();
 
 export const getMemory = (bot: Bot): BotMemory => {
-	if (!botMemory.has(bot))
-		botMemory.set(bot, { craftingTablePos: null, resources: new Map() });
-	return botMemory.get(bot)!;
+	let mem = botMemory.get(bot);
+	if (!mem) {
+		mem = { craftingTablePos: null, resources: new Map() };
+		botMemory.set(bot, mem);
+	}
+	return mem;
 };
 
 export const rememberResource = (
@@ -700,7 +696,7 @@ export const getCraftingTable = async (bot: Bot): Promise<Block | null> => {
 		name === "air" || name === "cave_air" || NON_SOLID.has(name);
 
 	// Randomize placement positions so retries try different blocks
-	const positions = [
+	const positions: [number, number][] = [
 		[1, 0],
 		[0, 1],
 		[-1, 0],
@@ -713,11 +709,12 @@ export const getCraftingTable = async (bot: Bot): Promise<Block | null> => {
 	];
 	for (let i = positions.length - 1; i > 0; i--) {
 		const j = Math.floor(Math.random() * (i + 1));
-		[positions[i], positions[j]] = [positions[j]!, positions[i]!];
+		const a = positions[i], b = positions[j];
+		if (a && b) { positions[i] = b; positions[j] = a; }
 	}
 	let ground: Block | null = null;
 	for (const [dx, dz] of positions) {
-		const candidate = getBlock(bot, offset(bot.entity.position, dx!, -1, dz!));
+		const candidate = getBlock(bot, offset(bot.entity.position, dx, -1, dz));
 		if (!candidate || !isSolidGround(candidate.name)) continue;
 		const above = getBlock(bot, offset(candidate.position, 0, 1, 0));
 		if (!above || !isSpaceClear(above.name)) continue;
@@ -727,16 +724,13 @@ export const getCraftingTable = async (bot: Bot): Promise<Block | null> => {
 	// Fallback: try to clear space above a solid block
 	if (!ground) {
 		for (const [dx, dz] of positions) {
-			const candidate = getBlock(
-				bot,
-				offset(bot.entity.position, dx!, -1, dz!),
-			);
+			const candidate = getBlock(bot, offset(bot.entity.position, dx, -1, dz));
 			if (!candidate || !isSolidGround(candidate.name)) continue;
 			const above = getBlock(bot, offset(candidate.position, 0, 1, 0));
 			if (above && above.name !== "air") {
 				try {
 					await bot.lookAt(offset(above.position, 0.5, 0.5, 0.5));
-					await bot.dig(above as any);
+					await bot.dig(above);
 					await sleep(200);
 					ground = candidate;
 					break;
@@ -808,7 +802,7 @@ export const getCraftingTable = async (bot: Bot): Promise<Block | null> => {
 		}
 		await sleep(200);
 		try {
-			await bot.placeBlock(ground as any, vec3(0, 1, 0));
+			await bot.placeBlock(ground, vec3(0, 1, 0));
 		} catch {
 			// placeBlock may timeout but block could still be placed
 		}
@@ -871,14 +865,14 @@ export const craftItem = async (
 	bot: Bot,
 	itemName: string,
 	count = 1,
-	craftingTable?: any,
+	craftingTable?: Block | null,
 ): Promise<StepResult> => {
 	const itemId = bot.registry?.itemsByName.get(itemName)?.id;
 	if (!itemId) {
 		return { success: false, message: `Unknown item: ${itemName}` };
 	}
 
-	const recipes = bot.recipesFor(itemId, null, 1, craftingTable ?? null);
+	const recipes = bot.recipesFor(itemId, null, 1, craftingTable ? true : null);
 
 	if (recipes.length === 0) {
 		logEvent("craft", "no_recipe", `${itemName} (id=${itemId})`);
@@ -889,7 +883,9 @@ export const craftItem = async (
 	// When a container window is open, player items are in currentWindow's inventory section
 	const win = bot.currentWindow ?? bot.inventory;
 	const invStart =
-		win === bot.inventory ? 0 : ((win as any).inventoryStart ?? 0);
+		win === bot.inventory
+			? 0
+			: ((win as { inventoryStart?: number }).inventoryStart ?? 0);
 	const hasIngredient = (id: number): boolean =>
 		win.slots.some(
 			(s, i) => s && i >= invStart && s.type === id && s.count > 0,
@@ -939,7 +935,7 @@ export const craftItem = async (
  */
 export const attackUntilDead = async (
 	bot: Bot,
-	entity: any,
+	entity: Entity,
 	options: { maxHits?: number; hitDelay?: number; lookHeight?: number } = {},
 ): Promise<boolean> => {
 	const { maxHits = 10, hitDelay = 400, lookHeight = 1 } = options;

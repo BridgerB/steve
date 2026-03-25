@@ -2,7 +2,7 @@
  * Crafting tasks - create items from materials
  */
 
-import type { Bot } from "typecraft";
+import type { Bot, Recipe } from "typecraft";
 import { windowItems } from "typecraft";
 import type { StepResult } from "../../types.ts";
 import {
@@ -30,7 +30,7 @@ export const craftPlanks = async (bot: Bot): Promise<StepResult> => {
 				bot.registry?.itemsByName.get("oak_planks")?.id;
 			if (!plankId) continue;
 
-			let recipes: any[];
+			let recipes: Recipe[];
 			try {
 				recipes = bot.recipesFor(plankId, null, 1, null);
 			} catch {
@@ -134,7 +134,7 @@ export const craftEyesOfEnder = async (
 				const powderRecipes = bot.recipesFor(powderId, null, 1, null);
 				const powderRecipe = powderRecipes[0];
 				if (powderRecipe) {
-					await bot.craft(powderRecipe, Math.min(blazeRods[0].count, 7));
+					await bot.craft(powderRecipe, Math.min(blazeRods[0]?.count ?? 1, 7));
 				}
 			}
 		}
