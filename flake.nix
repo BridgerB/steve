@@ -372,8 +372,14 @@
             pass_filenames = false;
             language = "system";
           };
-          # tsc disabled in pre-commit until typecraft fixes its type errors
-          # run manually: npm run check
+          tsc = {
+            enable = true;
+            name = "tsc";
+            entry = "${pkgs.nodejs_25}/bin/npx tsc --noEmit";
+            pass_filenames = false;
+            language = "system";
+            types = [ "ts" ];
+          };
         };
       };
     in
