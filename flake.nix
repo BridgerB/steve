@@ -352,6 +352,81 @@
         exec ${pkgs.nodejs_25}/bin/node src/mcp.ts
       '';
 
+      # Bot-only race — assumes server is already running
+      runRace = pkgs.writeShellScriptBin "run-race" ''
+        set -euo pipefail
+        cd "$(pwd)"
+
+        # Ensure deps
+        if [ ! -d ../typecraft/node_modules ]; then
+          (cd ../typecraft && ${pkgs.nodejs_25}/bin/npm install)
+        fi
+        if [ ! -d node_modules ] || ! ${pkgs.nodejs_25}/bin/node -e "require('better-sqlite3')" 2>/dev/null; then
+          ${pkgs.nodejs_25}/bin/npm install
+        fi
+
+        # Verify server is running
+        if ! ${pkgs.netcat}/bin/nc -z localhost 25565 2>/dev/null; then
+          echo "Error: MC server not running on localhost:25565"
+          echo "Start it first: nix run .#server"
+          exit 1
+        fi
+
+        if [ -f .env ]; then set -a; source .env; set +a; fi
+
+        export MC_RCON_PORT="${rconPort}"
+        export MC_RCON_PASS="${rconPassword}"
+
+        # Open browser if available
+        if command -v ${pkgs.chromium}/bin/chromium &>/dev/null && [ -n "''${DISPLAY:-}" ]; then
+          (while ! ${pkgs.netcat}/bin/nc -z localhost 3000 2>/dev/null; do sleep 1; done
+           sleep 2
+           ${pkgs.chromium}/bin/chromium http://localhost:3000 2>/dev/null &) &
+        fi
+
+        exec ${pkgs.nodejs_25}/bin/node src/main.ts "$@"
+      '';
+
+      # Reset world — stops server, copies fresh world, restarts
+      runReset = pkgs.writeShellScriptBin "run-reset" ''
+        set -euo pipefail
+        cd "$(pwd)"
+
+        mkdir -p data server
+
+        # Generate world backup if missing
+        if [ ! -d data/world ]; then
+          echo "No world backup — generating..."
+          ${startServer}/bin/minecraft-server > server/server.log 2>&1 &
+          GEN_PID=$!
+          while ! ${pkgs.netcat}/bin/nc -z localhost ${rconPort} 2>/dev/null; do sleep 1; done
+          while ! ${pkgs.mcrcon}/bin/mcrcon -H localhost -P ${rconPort} -p ${rconPassword} "list" 2>/dev/null | grep -q "players"; do sleep 1; done
+          kill $GEN_PID 2>/dev/null; wait $GEN_PID 2>/dev/null || true
+          sleep 2
+          cp -r server/world data/world
+          echo "Backup saved to data/world"
+        fi
+
+        # Kill running server
+        ${pkgs.procps}/bin/pkill -9 -f "server.jar nogui" 2>/dev/null || true
+        sleep 2
+
+        # Reset world
+        rm -rf server/world
+        cp -r data/world server/world
+        echo "World reset."
+
+        # Restart server
+        ${startServer}/bin/minecraft-server > server/server.log 2>&1 &
+        SERVER_PID=$!
+
+        while ! ${pkgs.netcat}/bin/nc -z localhost 25565 2>/dev/null; do sleep 1; done
+        while ! ${pkgs.netcat}/bin/nc -z localhost ${rconPort} 2>/dev/null; do sleep 1; done
+        while ! ${pkgs.mcrcon}/bin/mcrcon -H localhost -P ${rconPort} -p ${rconPassword} "list" 2>/dev/null | grep -q "players"; do sleep 1; done
+        echo "Server ready. (PID $SERVER_PID)"
+        wait $SERVER_PID
+      '';
+
       treefmtEval = treefmt-nix.lib.evalModule pkgs {
         projectRootFile = "flake.nix";
         programs.biome.enable = true;
@@ -391,21 +466,27 @@
         inherit pre-commit-check;
       };
       packages.${system} = {
-        default = runSteve;
+        default = runRace;
         server = startServer;
-        steve = runSteve;
+        race = runRace;
+        full = runSteve;
         bench = runBench;
         rcon = rcon;
         test = runTests;
         mcp = runMcp;
+        reset = runReset;
       };
 
       apps.${system} = {
         default = {
           type = "app";
-          program = "${runSteve}/bin/run-steve";
+          program = "${runRace}/bin/run-race";
         };
-        steve = {
+        race = {
+          type = "app";
+          program = "${runRace}/bin/run-race";
+        };
+        full = {
           type = "app";
           program = "${runSteve}/bin/run-steve";
         };
@@ -425,6 +506,10 @@
           type = "app";
           program = "${runMcp}/bin/run-mcp";
         };
+        reset = {
+          type = "app";
+          program = "${runReset}/bin/run-reset";
+        };
       };
 
       devShells.${system}.default = pkgs.mkShell {
@@ -433,8 +518,10 @@
           echo ""
           echo "  steve — minecraft speedrun bot"
           echo ""
-          echo "  nix run . -- 20 600     race 20 bots, 10min"
-          echo "  nix run .#server        server only (for MCP)"
+          echo "  nix run .#server        start server (persistent)"
+          echo "  nix run . -- 20 600     race bots (server must be running)"
+          echo "  nix run .#full          full run (server + world reset + bots)"
+          echo "  nix run .#reset         reset world + restart server"
           echo "  nix run .#test          run tests"
           echo "  nix run .#bench         benchmark a step"
           echo "  nix fmt                 format (biome + nixfmt)"
