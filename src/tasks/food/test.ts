@@ -9,11 +9,14 @@ import { giveCommands, runBotTest } from "../../lib/test-utils.ts";
 import { gatherFood } from "./main.ts";
 
 it("food: can gather food from animals", { timeout: 60000 }, async () => {
-  await runBotTest({
-    username: "TestFood",
-    setupCommands: giveCommands.combatStarter("TestFood"),
-  }, async (bot) => {
-    const result = await gatherFood(bot, 3);
-    assert.ok(result.success, `Expected success but got: ${result.message}`);
-  });
+	await runBotTest(
+		{
+			username: "TestFood",
+			setupCommands: giveCommands.combatStarter("TestFood"),
+		},
+		async (bot) => {
+			const result = await gatherFood(bot, 3);
+			assert.ok(result.success, `Expected success but got: ${result.message}`);
+		},
+	);
 });

@@ -15,7 +15,12 @@ import type { Bot } from "typecraft";
 
 import { getPhase, isDragonDead, syncFromBot } from "./state.ts";
 import { getNextStep, getProgress, steps, type Step } from "./steps.ts";
-import { initLogger, startTickLogger, stopLogger, logEvent } from "./lib/logger.ts";
+import {
+	initLogger,
+	startTickLogger,
+	stopLogger,
+	logEvent,
+} from "./lib/logger.ts";
 import { rememberResource } from "./lib/bot-utils.ts";
 
 // ============================================
@@ -23,10 +28,10 @@ import { rememberResource } from "./lib/bot-utils.ts";
 // ============================================
 
 const CONFIG = {
-  host: process.env.MC_HOST ?? "localhost",
-  port: parseInt(process.env.MC_PORT ?? "25565"),
-  username: process.env.MC_USERNAME ?? "Steve",
-  tickInterval: 5000,
+	host: process.env.MC_HOST ?? "localhost",
+	port: parseInt(process.env.MC_PORT ?? "25565"),
+	username: process.env.MC_USERNAME ?? "Steve",
+	tickInterval: 5000,
 };
 
 // ============================================
@@ -34,17 +39,17 @@ const CONFIG = {
 // ============================================
 
 const log = (message: string) => {
-  const timestamp = new Date().toISOString().split("T")[1]!.split(".")[0];
-  console.log(`[${timestamp}] ${message}`);
+	const timestamp = new Date().toISOString().split("T")[1]!.split(".")[0];
+	console.log(`[${timestamp}] ${message}`);
 };
 
 const logPhase = (
-  phase: string,
-  step: Step | null,
-  progress: { completed: number; total: number; percent: number },
+	phase: string,
+	step: Step | null,
+	progress: { completed: number; total: number; percent: number },
 ) => {
-  const stepInfo = step ? `→ ${step.name}` : "→ (no available step)";
-  log(`[${phase}] ${stepInfo} (${progress.completed}/${progress.total})`);
+	const stepInfo = step ? `→ ${step.name}` : "→ (no available step)";
+	log(`[${phase}] ${stepInfo} (${progress.completed}/${progress.total})`);
 };
 
 // ============================================
@@ -58,215 +63,276 @@ let generation = 0; // increments on death — stale step results are ignored
 const completedSteps = new Set<string>();
 
 const runTick = async (bot: Bot): Promise<void> => {
-  if (isExecuting) return;
-  const state = syncFromBot(bot);
+	if (isExecuting) return;
+	const state = syncFromBot(bot);
 
-  if (isDragonDead(state)) {
-    log("VICTORY! The Ender Dragon has been defeated!");
-    bot.chat("I have slain the Ender Dragon!");
-    return;
-  }
+	if (isDragonDead(state)) {
+		log("VICTORY! The Ender Dragon has been defeated!");
+		bot.chat("I have slain the Ender Dragon!");
+		return;
+	}
 
-  // Sync completedSteps with actual state — add newly complete, remove regressed
-  // BUT never remove steps that explicitly returned success
-  for (const step of steps) {
-    if (step.isComplete(state)) {
-      completedSteps.add(step.id);
-    } else {
-      completedSteps.delete(step.id);
-    }
-  }
+	// Sync completedSteps with actual state — add newly complete, remove regressed
+	// BUT never remove steps that explicitly returned success
+	for (const step of steps) {
+		if (step.isComplete(state)) {
+			completedSteps.add(step.id);
+		} else {
+			completedSteps.delete(step.id);
+		}
+	}
 
-  const phase = getPhase(state);
-  const progress = getProgress(state);
-  const nextStep = getNextStep(state, completedSteps);
+	const phase = getPhase(state);
+	const progress = getProgress(state);
+	const nextStep = getNextStep(state, completedSteps);
 
-  if (nextStep?.id !== currentStep?.id) {
-    currentStep = nextStep;
-    logPhase(phase, currentStep, progress);
-  }
+	if (nextStep?.id !== currentStep?.id) {
+		currentStep = nextStep;
+		logPhase(phase, currentStep, progress);
+	}
 
-  if (currentStep && !isExecuting) {
-    isExecuting = true;
-    const stepId = currentStep.id;
-    const stepName = currentStep.name;
-    const stepGen = generation;
-    log(`Starting: ${stepName}`);
-    logEvent("step", "start", stepName, bot.entity?.position);
+	if (currentStep && !isExecuting) {
+		isExecuting = true;
+		const stepId = currentStep.id;
+		const stepName = currentStep.name;
+		const stepGen = generation;
+		log(`Starting: ${stepName}`);
+		logEvent("step", "start", stepName, bot.entity?.position);
 
-    try {
-      // Timeout step execution at 120s to prevent hangs
-      const timeout = new Promise<{ success: false; message: string }>((resolve) =>
-        setTimeout(() => resolve({ success: false, message: `${stepName} timed out (120s)` }), 120000),
-      );
-      const result = await Promise.race([currentStep.execute(bot, state), timeout]);
+		try {
+			// Timeout step execution at 120s to prevent hangs
+			const timeout = new Promise<{ success: false; message: string }>(
+				(resolve) =>
+					setTimeout(
+						() =>
+							resolve({
+								success: false,
+								message: `${stepName} timed out (120s)`,
+							}),
+						120000,
+					),
+			);
+			const result = await Promise.race([
+				currentStep.execute(bot, state),
+				timeout,
+			]);
 
-      // Ignore stale results from before a death
-      if (stepGen !== generation) {
-        logEvent("step", "stale", `${stepName} result from gen ${stepGen}, now ${generation}`);
-        isExecuting = false;
-        return;
-      }
+			// Ignore stale results from before a death
+			if (stepGen !== generation) {
+				logEvent(
+					"step",
+					"stale",
+					`${stepName} result from gen ${stepGen}, now ${generation}`,
+				);
+				isExecuting = false;
+				return;
+			}
 
-      // Close any stuck windows
-      if (bot.currentWindow) {
-        try { bot.closeWindow(bot.currentWindow); } catch {}
-      }
+			// Close any stuck windows
+			if (bot.currentWindow) {
+				try {
+					bot.closeWindow(bot.currentWindow);
+				} catch {}
+			}
 
-      if (result.success) {
-        consecutiveFailures = 0;
-        log(`✓ ${result.message}`);
-        logEvent("step", "success", `${stepName}: ${result.message}`, bot.entity?.position);
-        completedSteps.add(stepId);
-      } else {
-        consecutiveFailures++;
-        log(`✗ ${result.message} (fail #${consecutiveFailures})`);
-        logEvent("step", "fail", `${stepName}: ${result.message}`, bot.entity?.position);
-        if (consecutiveFailures >= 8) {
-          log(`ABORT: ${consecutiveFailures} consecutive failures on ${stepName}`);
-          logEvent("step", "abort", `${stepName}: ${consecutiveFailures} failures`, bot.entity?.position);
-          process.exit(1);
-        }
-      }
-    } catch (err) {
-      if (stepGen !== generation) { isExecuting = false; return; }
-      const msg = err instanceof Error ? err.message : String(err);
-      log(`✗ ${msg}`);
-      logEvent("step", "error", `${stepName}: ${msg}`, bot.entity?.position);
-      consecutiveFailures++;
-      // Close any stuck windows
-      if (bot.currentWindow) {
-        try { bot.closeWindow(bot.currentWindow); } catch {}
-      }
-    }
+			if (result.success) {
+				consecutiveFailures = 0;
+				log(`✓ ${result.message}`);
+				logEvent(
+					"step",
+					"success",
+					`${stepName}: ${result.message}`,
+					bot.entity?.position,
+				);
+				completedSteps.add(stepId);
+			} else {
+				consecutiveFailures++;
+				log(`✗ ${result.message} (fail #${consecutiveFailures})`);
+				logEvent(
+					"step",
+					"fail",
+					`${stepName}: ${result.message}`,
+					bot.entity?.position,
+				);
+				if (consecutiveFailures >= 8) {
+					log(
+						`ABORT: ${consecutiveFailures} consecutive failures on ${stepName}`,
+					);
+					logEvent(
+						"step",
+						"abort",
+						`${stepName}: ${consecutiveFailures} failures`,
+						bot.entity?.position,
+					);
+					process.exit(1);
+				}
+			}
+		} catch (err) {
+			if (stepGen !== generation) {
+				isExecuting = false;
+				return;
+			}
+			const msg = err instanceof Error ? err.message : String(err);
+			log(`✗ ${msg}`);
+			logEvent("step", "error", `${stepName}: ${msg}`, bot.entity?.position);
+			consecutiveFailures++;
+			// Close any stuck windows
+			if (bot.currentWindow) {
+				try {
+					bot.closeWindow(bot.currentWindow);
+				} catch {}
+			}
+		}
 
-    isExecuting = false;
+		isExecuting = false;
 
-    // Re-check completed steps after execution
-    const newState = syncFromBot(bot);
-    for (const step of steps) {
-      if (step.isComplete(newState)) {
-        completedSteps.add(step.id);
-      } else {
-        completedSteps.delete(step.id);
-      }
-    }
+		// Re-check completed steps after execution
+		const newState = syncFromBot(bot);
+		for (const step of steps) {
+			if (step.isComplete(newState)) {
+				completedSteps.add(step.id);
+			} else {
+				completedSteps.delete(step.id);
+			}
+		}
 
-    const newStep = getNextStep(newState, completedSteps);
+		const newStep = getNextStep(newState, completedSteps);
 
-    if (newStep?.id !== currentStep?.id) {
-      currentStep = newStep;
-      const newPhase = getPhase(newState);
-      const newProgress = getProgress(newState);
-      logPhase(newPhase, currentStep, newProgress);
-    }
-  }
+		if (newStep?.id !== currentStep?.id) {
+			currentStep = newStep;
+			const newPhase = getPhase(newState);
+			const newProgress = getProgress(newState);
+			logPhase(newPhase, currentStep, newProgress);
+		}
+	}
 };
 
 const startBot = async (): Promise<void> => {
-  // Bot lifetime timeout — exit cleanly if we've been running too long
-  const lifetimeMs = parseInt(process.env.STEVE_TIMEOUT ?? "120") * 1000;
-  setTimeout(() => {
-    log(`Lifetime timeout (${lifetimeMs / 1000}s) — exiting`);
-    logEvent("lifecycle", "timeout", `${lifetimeMs / 1000}s`);
-    process.exit(0);
-  }, lifetimeMs);
+	// Bot lifetime timeout — exit cleanly if we've been running too long
+	const lifetimeMs = parseInt(process.env.STEVE_TIMEOUT ?? "120") * 1000;
+	setTimeout(() => {
+		log(`Lifetime timeout (${lifetimeMs / 1000}s) — exiting`);
+		logEvent("lifecycle", "timeout", `${lifetimeMs / 1000}s`);
+		process.exit(0);
+	}, lifetimeMs);
 
-  log("Creating bot...");
-  const version = process.env.MC_VERSION ?? "1.21.11";
-  log(`Connecting to ${CONFIG.host}:${CONFIG.port} (version ${version})`);
+	log("Creating bot...");
+	const version = process.env.MC_VERSION ?? "1.21.11";
+	log(`Connecting to ${CONFIG.host}:${CONFIG.port} (version ${version})`);
 
-  const bot = createMcBot({
-    host: CONFIG.host,
-    port: CONFIG.port,
-    username: CONFIG.username,
-    version,
-    auth: "offline",
-  });
+	const bot = createMcBot({
+		host: CONFIG.host,
+		port: CONFIG.port,
+		username: CONFIG.username,
+		version,
+		auth: "offline",
+	});
 
-  // Start web viewer if port assigned (first 4 bots get viewers)
-  const viewerPort = parseInt(process.env.STEVE_VIEWER_PORT ?? "0");
-  if (viewerPort > 0) {
-    bot.once("spawn", () => {
-      createWebViewer(bot, { port: viewerPort, viewDistance: 4 });
-    });
-  }
+	// Start web viewer if port assigned (first 4 bots get viewers)
+	const viewerPort = parseInt(process.env.STEVE_VIEWER_PORT ?? "0");
+	if (viewerPort > 0) {
+		bot.once("spawn", () => {
+			createWebViewer(bot, { port: viewerPort, viewDistance: 4 });
+		});
+	}
 
-  bot.on("debug", (category: string, detail: Record<string, unknown>) => {
-    if (category === "packet_rx" || category === "packet_tx") return; // too noisy for SQLite
-    logEvent(category, "debug", JSON.stringify(detail), bot.entity?.position);
-  });
+	bot.on("debug", (category: string, detail: Record<string, unknown>) => {
+		if (category === "packet_rx" || category === "packet_tx") return; // too noisy for SQLite
+		logEvent(category, "debug", JSON.stringify(detail), bot.entity?.position);
+	});
 
-  // Passive memory — remember blocks relevant to current goal (iron_ingot)
-  for (const name of [
-    "oak_log", "birch_log", "spruce_log", "jungle_log", "acacia_log", "dark_oak_log",
-    "coal_ore", "deepslate_coal_ore",
-    "iron_ore", "deepslate_iron_ore",
-  ]) bot.watchBlocks.add(name);
-  bot.on("blockSeen", (name: string, pos: any) => {
-    rememberResource(bot, name, pos);
-  });
+	// Passive memory — remember blocks relevant to current goal (iron_ingot)
+	for (const name of [
+		"oak_log",
+		"birch_log",
+		"spruce_log",
+		"jungle_log",
+		"acacia_log",
+		"dark_oak_log",
+		"coal_ore",
+		"deepslate_coal_ore",
+		"iron_ore",
+		"deepslate_iron_ore",
+	])
+		bot.watchBlocks.add(name);
+	bot.on("blockSeen", (name: string, pos: any) => {
+		rememberResource(bot, name, pos);
+	});
 
-  bot.once("spawn", async () => {
-    log("Spawned into the world");
-    logEvent("lifecycle", "spawn", `pos=${Math.floor(bot.entity.position.x)},${Math.floor(bot.entity.position.y)},${Math.floor(bot.entity.position.z)}`, bot.entity.position);
+	bot.once("spawn", async () => {
+		log("Spawned into the world");
+		logEvent(
+			"lifecycle",
+			"spawn",
+			`pos=${Math.floor(bot.entity.position.x)},${Math.floor(bot.entity.position.y)},${Math.floor(bot.entity.position.z)}`,
+			bot.entity.position,
+		);
 
-    startTickLogger(bot);
+		startTickLogger(bot);
 
-    await bot.waitForChunksToLoad();
-    log("Chunks loaded");
-    logEvent("lifecycle", "chunks_loaded");
+		await bot.waitForChunksToLoad();
+		log("Chunks loaded");
+		logEvent("lifecycle", "chunks_loaded");
 
-    log(`Position: ${Math.floor(bot.entity.position.x)}, ${Math.floor(bot.entity.position.y)}, ${Math.floor(bot.entity.position.z)}`);
+		log(
+			`Position: ${Math.floor(bot.entity.position.x)}, ${Math.floor(bot.entity.position.y)}, ${Math.floor(bot.entity.position.z)}`,
+		);
 
-    const state = syncFromBot(bot);
-    logPhase(getPhase(state), getNextStep(state), getProgress(state));
+		const state = syncFromBot(bot);
+		logPhase(getPhase(state), getNextStep(state), getProgress(state));
 
-    log(`Starting tick loop (every ${CONFIG.tickInterval / 1000}s)`);
-    setInterval(() => {
-      runTick(bot).catch((err) => {
-        log(`Tick error: ${err instanceof Error ? err.message : "unknown"}`);
-      });
-    }, CONFIG.tickInterval);
+		log(`Starting tick loop (every ${CONFIG.tickInterval / 1000}s)`);
+		setInterval(() => {
+			runTick(bot).catch((err) => {
+				log(`Tick error: ${err instanceof Error ? err.message : "unknown"}`);
+			});
+		}, CONFIG.tickInterval);
 
-    runTick(bot).catch((err) => {
-      log(`Initial tick error: ${err instanceof Error ? err.message : "unknown"}`);
-    });
-  });
+		runTick(bot).catch((err) => {
+			log(
+				`Initial tick error: ${err instanceof Error ? err.message : "unknown"}`,
+			);
+		});
+	});
 
-  bot.on("death", () => {
-    log("Died! Respawning...");
-    logEvent("lifecycle", "death", undefined, bot.entity?.position);
-    generation++; // invalidate any in-flight step results
-    isExecuting = false;
-    currentStep = null;
-    consecutiveFailures = 0;
-    completedSteps.clear();
-  });
+	bot.on("death", () => {
+		log("Died! Respawning...");
+		logEvent("lifecycle", "death", undefined, bot.entity?.position);
+		generation++; // invalidate any in-flight step results
+		isExecuting = false;
+		currentStep = null;
+		consecutiveFailures = 0;
+		completedSteps.clear();
+	});
 
-  bot.on("health", () => {
-    if (bot.health < 5) {
-      log(`Low health: ${bot.health}/20`);
-      logEvent("health", "low_health", `${bot.health}/20`, bot.entity?.position);
-    }
-  });
+	bot.on("health", () => {
+		if (bot.health < 5) {
+			log(`Low health: ${bot.health}/20`);
+			logEvent(
+				"health",
+				"low_health",
+				`${bot.health}/20`,
+				bot.entity?.position,
+			);
+		}
+	});
 
-  bot.on("end", () => {
-    log("Disconnected");
-    logEvent("lifecycle", "disconnected");
-    stopLogger();
-  });
+	bot.on("end", () => {
+		log("Disconnected");
+		logEvent("lifecycle", "disconnected");
+		stopLogger();
+	});
 
-  bot.on("kicked", (reason) => {
-    log(`Kicked: ${reason}`);
-    logEvent("lifecycle", "kicked", reason);
-    stopLogger();
-  });
+	bot.on("kicked", (reason) => {
+		log(`Kicked: ${reason}`);
+		logEvent("lifecycle", "kicked", reason);
+		stopLogger();
+	});
 
-  bot.on("error", (err) => {
-    log(`Bot error: ${err.message}`);
-    logEvent("error", "bot_error", err.message);
-  });
+	bot.on("error", (err) => {
+		log(`Bot error: ${err.message}`);
+		logEvent("error", "bot_error", err.message);
+	});
 };
 
 // ============================================
@@ -279,185 +345,241 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 
 interface InstanceResult {
-  idx: number;
-  username: string;
-  elapsed: number;
-  won: boolean;
-  inventory: string;
+	idx: number;
+	username: string;
+	elapsed: number;
+	won: boolean;
+	inventory: string;
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 const runRace = async (count: number, timeoutMs: number) => {
-  const ROOT = process.cwd();
-  const SERVER_PORT = parseInt(process.env.MC_PORT ?? "25565");
-  const RCON_PORT = parseInt(process.env.MC_RCON_PORT ?? "25575");
-  const RCON_PASS = process.env.MC_RCON_PASS ?? "minecraft-test-rcon";
-  const SPREAD_RADIUS = 50;
+	const ROOT = process.cwd();
+	const SERVER_PORT = parseInt(process.env.MC_PORT ?? "25565");
+	const RCON_PORT = parseInt(process.env.MC_RCON_PORT ?? "25575");
+	const RCON_PASS = process.env.MC_RCON_PASS ?? "minecraft-test-rcon";
+	const SPREAD_RADIUS = 50;
 
-  const RACE_ID = new Date().toISOString().replace(/:/g, "-");
-  const RACE_DIR = join(ROOT, "data", "races", RACE_ID);
-  const RACE_DB = join(RACE_DIR, "race.db");
-  mkdirSync(RACE_DIR, { recursive: true });
+	const RACE_ID = new Date().toISOString().replace(/:/g, "-");
+	const RACE_DIR = join(ROOT, "data", "races", RACE_ID);
+	const RACE_DB = join(RACE_DIR, "race.db");
+	mkdirSync(RACE_DIR, { recursive: true });
 
-  const allProcs: ChildProcess[] = [];
-  let winner: number | null = null;
-  let raceDb: Database.Database | null = null;
+	const allProcs: ChildProcess[] = [];
+	let winner: number | null = null;
+	let raceDb: Database.Database | null = null;
 
-  const viewerBots: Bot[] = [];
-  const killAll = async () => {
-    // Send SIGTERM first so bots disconnect gracefully
-    for (const p of allProcs) p.kill("SIGTERM");
-    for (const v of viewerBots) { try { v.end(); } catch {} }
-    // Give bots time to disconnect before force-killing
-    await sleep(500);
-    for (const p of allProcs) { try { p.kill("SIGKILL"); } catch {} }
-    if (raceDb) { raceDb.close(); raceDb = null; }
-  };
-  process.on("SIGINT", () => { killAll().then(() => process.exit(0)); });
-  process.on("SIGTERM", () => { killAll().then(() => process.exit(0)); });
-  const { connect: rconConnect } = await import("./lib/rcon.ts");
-  const rconClient = await rconConnect({ port: RCON_PORT, password: RCON_PASS });
-  const rcon = (cmd: string) => rconClient.command(cmd);
-  process.on("exit", () => { try { rconClient.close(); } catch {} });
+	const viewerBots: Bot[] = [];
+	const killAll = async () => {
+		// Send SIGTERM first so bots disconnect gracefully
+		for (const p of allProcs) p.kill("SIGTERM");
+		for (const v of viewerBots) {
+			try {
+				v.end();
+			} catch {}
+		}
+		// Give bots time to disconnect before force-killing
+		await sleep(500);
+		for (const p of allProcs) {
+			try {
+				p.kill("SIGKILL");
+			} catch {}
+		}
+		if (raceDb) {
+			raceDb.close();
+			raceDb = null;
+		}
+	};
+	process.on("SIGINT", () => {
+		killAll().then(() => process.exit(0));
+	});
+	process.on("SIGTERM", () => {
+		killAll().then(() => process.exit(0));
+	});
+	const { connect: rconConnect } = await import("./lib/rcon.ts");
+	const rconClient = await rconConnect({
+		port: RCON_PORT,
+		password: RCON_PASS,
+	});
+	const rcon = (cmd: string) => rconClient.command(cmd);
+	process.on("exit", () => {
+		try {
+			rconClient.close();
+		} catch {}
+	});
 
-  const getRaceDb = (): Database.Database | null => {
-    if (raceDb) return raceDb;
-    if (!existsSync(RACE_DB)) return null;
-    try {
-      raceDb = new Database(RACE_DB);
-      raceDb.pragma("journal_mode = WAL");
-      raceDb.pragma("busy_timeout = 5000");
-      return raceDb;
-    } catch {
-      return null;
-    }
-  };
+	const getRaceDb = (): Database.Database | null => {
+		if (raceDb) return raceDb;
+		if (!existsSync(RACE_DB)) return null;
+		try {
+			raceDb = new Database(RACE_DB);
+			raceDb.pragma("journal_mode = WAL");
+			raceDb.pragma("busy_timeout = 5000");
+			return raceDb;
+		} catch {
+			return null;
+		}
+	};
 
-  const GOAL = "iron_ingot";
+	const GOAL = "iron_ingot";
 
-  const MILESTONES = [
-    { name: "wood", query: "item_name LIKE '%_log'" },
-    { name: "wooden pickaxe", query: "item_name = 'wooden_pickaxe'" },
-    { name: "stone pickaxe", query: "item_name = 'stone_pickaxe'" },
-    { name: "furnace", query: "item_name = 'furnace'" },
-    { name: "coal", query: "item_name = 'coal'" },
-    { name: "raw iron", query: "item_name = 'raw_iron'" },
-    { name: "iron ingot", query: "item_name = 'iron_ingot'" },
-  ];
-  const milestonesHit = new Set<string>();
-  const raceStart = Date.now();
+	const MILESTONES = [
+		{ name: "wood", query: "item_name LIKE '%_log'" },
+		{ name: "wooden pickaxe", query: "item_name = 'wooden_pickaxe'" },
+		{ name: "stone pickaxe", query: "item_name = 'stone_pickaxe'" },
+		{ name: "furnace", query: "item_name = 'furnace'" },
+		{ name: "coal", query: "item_name = 'coal'" },
+		{ name: "raw iron", query: "item_name = 'raw_iron'" },
+		{ name: "iron ingot", query: "item_name = 'iron_ingot'" },
+	];
+	const milestonesHit = new Set<string>();
+	const raceStart = Date.now();
 
-  const checkMilestones = (): void => {
-    const db = getRaceDb();
-    if (!db) return;
-    for (const m of MILESTONES) {
-      if (milestonesHit.has(m.name)) continue;
-      try {
-        const row = db.prepare(`SELECT bot_id FROM inventory_snapshots WHERE ${m.query} LIMIT 1`).get() as { bot_id: string } | undefined;
-        if (row) {
-          milestonesHit.add(m.name);
-          const elapsed = Math.round((Date.now() - raceStart) / 1000);
-          console.log(`  ${elapsed}s  ${row.bot_id} → ${m.name}`);
-        }
-      } catch {}
-    }
-  };
+	const checkMilestones = (): void => {
+		const db = getRaceDb();
+		if (!db) return;
+		for (const m of MILESTONES) {
+			if (milestonesHit.has(m.name)) continue;
+			try {
+				const row = db
+					.prepare(
+						`SELECT bot_id FROM inventory_snapshots WHERE ${m.query} LIMIT 1`,
+					)
+					.get() as { bot_id: string } | undefined;
+				if (row) {
+					milestonesHit.add(m.name);
+					const elapsed = Math.round((Date.now() - raceStart) / 1000);
+					console.log(`  ${elapsed}s  ${row.bot_id} → ${m.name}`);
+				}
+			} catch {}
+		}
+	};
 
-  const checkForGoal = (botId: string): boolean => {
-    const db = getRaceDb();
-    if (!db) return false;
-    try {
-      const inv = db.prepare("SELECT COUNT(*) as c FROM inventory_snapshots WHERE bot_id = ? AND item_name LIKE ?").get(botId, `%${GOAL}%`) as { c: number };
-      if (inv.c > 0) return true;
-      const evt = db.prepare("SELECT COUNT(*) as c FROM events WHERE bot_id = ? AND detail LIKE ?").get(botId, `%${GOAL}%`) as { c: number };
-      return evt.c > 0;
-    } catch {
-      return false;
-    }
-  };
+	const checkForGoal = (botId: string): boolean => {
+		const db = getRaceDb();
+		if (!db) return false;
+		try {
+			const inv = db
+				.prepare(
+					"SELECT COUNT(*) as c FROM inventory_snapshots WHERE bot_id = ? AND item_name LIKE ?",
+				)
+				.get(botId, `%${GOAL}%`) as { c: number };
+			if (inv.c > 0) return true;
+			const evt = db
+				.prepare(
+					"SELECT COUNT(*) as c FROM events WHERE bot_id = ? AND detail LIKE ?",
+				)
+				.get(botId, `%${GOAL}%`) as { c: number };
+			return evt.c > 0;
+		} catch {
+			return false;
+		}
+	};
 
-  const getInventory = (botId: string): string => {
-    const db = getRaceDb();
-    if (!db) return "no data";
-    try {
-      const rows = db.prepare("SELECT item_name || 'x' || MAX(count) as inv FROM inventory_snapshots WHERE bot_id = ? GROUP BY item_name ORDER BY MAX(count) DESC LIMIT 5").all(botId) as { inv: string }[];
-      return rows.map((r) => r.inv).join(", ") || "empty";
-    } catch {
-      return "db error";
-    }
-  };
+	const getInventory = (botId: string): string => {
+		const db = getRaceDb();
+		if (!db) return "no data";
+		try {
+			const rows = db
+				.prepare(
+					"SELECT item_name || 'x' || MAX(count) as inv FROM inventory_snapshots WHERE bot_id = ? GROUP BY item_name ORDER BY MAX(count) DESC LIMIT 5",
+				)
+				.all(botId) as { inv: string }[];
+			return rows.map((r) => r.inv).join(", ") || "empty";
+		} catch {
+			return "db error";
+		}
+	};
 
-  const runBot = async (idx: number): Promise<InstanceResult> => {
-    const username = `Steve${idx}`;
+	const runBot = async (idx: number): Promise<InstanceResult> => {
+		const username = `Steve${idx}`;
 
-    const angle = (idx / count) * 2 * Math.PI;
-    const spawnX = Math.floor(Math.cos(angle) * SPREAD_RADIUS);
-    const spawnZ = Math.floor(Math.sin(angle) * SPREAD_RADIUS);
+		const angle = (idx / count) * 2 * Math.PI;
+		const spawnX = Math.floor(Math.cos(angle) * SPREAD_RADIUS);
+		const spawnZ = Math.floor(Math.sin(angle) * SPREAD_RADIUS);
 
-    await sleep(idx * 1000);
+		await sleep(idx * 1000);
 
-    const steveProc = spawn(process.execPath, [join(ROOT, "src/main.ts")], {
-      cwd: ROOT,
-      env: {
-        ...process.env,
-        MC_PORT: String(SERVER_PORT),
-        MC_USERNAME: username,
-        STEVE_DATA_DIR: RACE_DIR,
-        STEVE_DB_PATH: RACE_DB,
-        STEVE_BOT_MODE: "1",
-        STEVE_TIMEOUT: String(timeoutMs / 1000),
-        STEVE_VIEWER_PORT: idx < NUM_VIEWERS ? String(3001 + idx) : "",
-      },
-      stdio: ["ignore", "ignore", "ignore"],
-    });
-    allProcs.push(steveProc);
+		const steveProc = spawn(process.execPath, [join(ROOT, "src/main.ts")], {
+			cwd: ROOT,
+			env: {
+				...process.env,
+				MC_PORT: String(SERVER_PORT),
+				MC_USERNAME: username,
+				STEVE_DATA_DIR: RACE_DIR,
+				STEVE_DB_PATH: RACE_DB,
+				STEVE_BOT_MODE: "1",
+				STEVE_TIMEOUT: String(timeoutMs / 1000),
+				STEVE_VIEWER_PORT: idx < NUM_VIEWERS ? String(3001 + idx) : "",
+			},
+			stdio: ["ignore", "ignore", "ignore"],
+		});
+		allProcs.push(steveProc);
 
-    // Resolve when bot exits or timeout
-    let botExited = false;
-    steveProc.on("exit", () => { botExited = true; });
+		// Resolve when bot exits or timeout
+		let botExited = false;
+		steveProc.on("exit", () => {
+			botExited = true;
+		});
 
-    await sleep(3000);
-    await rcon(`spreadplayers ${spawnX} ${spawnZ} 0 5 false ${username}`);
+		await sleep(3000);
+		await rcon(`spreadplayers ${spawnX} ${spawnZ} 0 5 false ${username}`);
 
-    const start = Date.now();
+		const start = Date.now();
 
-    while (Date.now() - start < timeoutMs && winner === null && !botExited) {
-      await sleep(3000);
-      checkMilestones();
-      if (checkForGoal(username)) {
-        const elapsed = Math.round((Date.now() - start) / 1000);
-        winner = idx;
-        console.log(`\n${username} WINS — ${GOAL} in ${elapsed}s (db: ${RACE_DB})\n`);
-        const { notify } = await import("./lib/notify.ts");
-        await notify("Steve Bot", `${username} got ${GOAL} in ${elapsed}s`);
-        await rcon(`title ${username} title {"text":"WINNER!","color":"gold"}`);
-        await sleep(10000);
-        await killAll();
-        return { idx, username, elapsed, won: true, inventory: GOAL };
-      }
-    }
+		while (Date.now() - start < timeoutMs && winner === null && !botExited) {
+			await sleep(3000);
+			checkMilestones();
+			if (checkForGoal(username)) {
+				const elapsed = Math.round((Date.now() - start) / 1000);
+				winner = idx;
+				console.log(
+					`\n${username} WINS — ${GOAL} in ${elapsed}s (db: ${RACE_DB})\n`,
+				);
+				const { notify } = await import("./lib/notify.ts");
+				await notify("Steve Bot", `${username} got ${GOAL} in ${elapsed}s`);
+				await rcon(`title ${username} title {"text":"WINNER!","color":"gold"}`);
+				await sleep(10000);
+				await killAll();
+				return { idx, username, elapsed, won: true, inventory: GOAL };
+			}
+		}
 
-    const elapsed = Math.round((Date.now() - start) / 1000);
-    if (!botExited) steveProc.kill("SIGKILL");
-    if (winner !== null && winner !== idx) {
-      return { idx, username, elapsed, won: false, inventory: getInventory(username) };
-    }
-    return { idx, username, elapsed, won: false, inventory: getInventory(username) };
-  };
+		const elapsed = Math.round((Date.now() - start) / 1000);
+		if (!botExited) steveProc.kill("SIGKILL");
+		if (winner !== null && winner !== idx) {
+			return {
+				idx,
+				username,
+				elapsed,
+				won: false,
+				inventory: getInventory(username),
+			};
+		}
+		return {
+			idx,
+			username,
+			elapsed,
+			won: false,
+			inventory: getInventory(username),
+		};
+	};
 
-  console.log(`Run ${RACE_ID} — ${count} bot${count > 1 ? "s" : ""} (timeout=${timeoutMs / 1000}s)\n`);
+	console.log(
+		`Run ${RACE_ID} — ${count} bot${count > 1 ? "s" : ""} (timeout=${timeoutMs / 1000}s)\n`,
+	);
 
-  // Op all bot usernames
-  for (let i = 0; i < count; i++) {
-    await rcon(`op Steve${i}`);
-  }
-  await sleep(1000);
+	// Op all bot usernames
+	for (let i = 0; i < count; i++) {
+		await rcon(`op Steve${i}`);
+	}
+	await sleep(1000);
 
-  // Each child bot runs its own viewer — 4 iframes, no camera bots needed
-  const NUM_VIEWERS = Math.min(count, 4);
-  const { createServer: createHttpServer } = await import("node:http");
-  const gridHtml = `<!DOCTYPE html>
+	// Each child bot runs its own viewer — 4 iframes, no camera bots needed
+	const NUM_VIEWERS = Math.min(count, 4);
+	const { createServer: createHttpServer } = await import("node:http");
+	const gridHtml = `<!DOCTYPE html>
 <html><head><title>Steve Race</title>
 <style>
 body { margin: 0; background: #111; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; width: 100vw; height: 100vh; gap: 2px; }
@@ -467,32 +589,47 @@ iframe { width: 100%; height: 100%; border: none; background: #222; }
 </style></head><body>
 ${Array.from({ length: NUM_VIEWERS }, (_, i) => `<div class="cell"><div class="label">Steve${i}</div><iframe src="http://localhost:${3001 + i}"></iframe></div>`).join("\n")}
 </body></html>`;
-  const gridServer = createHttpServer((_req, res) => { res.writeHead(200, { "Content-Type": "text/html" }); res.end(gridHtml); });
-  gridServer.listen(3000, () => console.log(`[grid] http://localhost:3000 (${NUM_VIEWERS} viewers)`));
+	const gridServer = createHttpServer((_req, res) => {
+		res.writeHead(200, { "Content-Type": "text/html" });
+		res.end(gridHtml);
+	});
+	gridServer.listen(3000, () =>
+		console.log(`[grid] http://localhost:3000 (${NUM_VIEWERS} viewers)`),
+	);
 
-  const results = await Promise.all(
-    Array.from({ length: count }, (_, i) => runBot(i))
-  );
+	const results = await Promise.all(
+		Array.from({ length: count }, (_, i) => runBot(i)),
+	);
 
-  console.log(`\n${"─".repeat(70)}`);
-  console.log(`Run ${RACE_ID}`);
-  console.log(`${"─".repeat(70)}`);
-  console.log(`${"#".padEnd(4)} ${"bot".padEnd(10)} ${"time".padEnd(8)} ${"result".padEnd(10)} inventory`);
-  console.log(`${"─".repeat(70)}`);
-  const hasWinner = results.some((r) => r.won);
-  for (const r of results) {
-    const status = r.won ? GOAL.toUpperCase() : hasWinner ? "racing" : "timeout";
-    console.log(`${String(r.idx).padEnd(4)} ${r.username.padEnd(10)} ${(r.elapsed + "s").padEnd(8)} ${status.padEnd(10)} ${r.inventory}`);
-  }
-  console.log(`${"─".repeat(70)}`);
+	console.log(`\n${"─".repeat(70)}`);
+	console.log(`Run ${RACE_ID}`);
+	console.log(`${"─".repeat(70)}`);
+	console.log(
+		`${"#".padEnd(4)} ${"bot".padEnd(10)} ${"time".padEnd(8)} ${"result".padEnd(10)} inventory`,
+	);
+	console.log(`${"─".repeat(70)}`);
+	const hasWinner = results.some((r) => r.won);
+	for (const r of results) {
+		const status = r.won
+			? GOAL.toUpperCase()
+			: hasWinner
+				? "racing"
+				: "timeout";
+		console.log(
+			`${String(r.idx).padEnd(4)} ${r.username.padEnd(10)} ${(r.elapsed + "s").padEnd(8)} ${status.padEnd(10)} ${r.inventory}`,
+		);
+	}
+	console.log(`${"─".repeat(70)}`);
 
-  const winners = results.filter((r) => r.won);
-  if (winners.length > 0) {
-    console.log(`${winners.length}/${count} ${GOAL} — fastest: ${Math.min(...winners.map((r) => r.elapsed))}s`);
-  } else {
-    console.log(`0/${count} got ${GOAL}`);
-  }
-  process.exit(0);
+	const winners = results.filter((r) => r.won);
+	if (winners.length > 0) {
+		console.log(
+			`${winners.length}/${count} ${GOAL} — fastest: ${Math.min(...winners.map((r) => r.elapsed))}s`,
+		);
+	} else {
+		console.log(`0/${count} got ${GOAL}`);
+	}
+	process.exit(0);
 };
 
 // ============================================
@@ -502,19 +639,19 @@ ${Array.from({ length: NUM_VIEWERS }, (_, i) => `<div class="cell"><div class="l
 const isBotMode = process.env.STEVE_BOT_MODE === "1";
 
 if (isBotMode) {
-  // Child bot process — run single bot directly
-  initLogger(process.env.STEVE_DB_PATH);
-  startBot();
+	// Child bot process — run single bot directly
+	initLogger(process.env.STEVE_DB_PATH);
+	startBot();
 } else {
-  // Orchestrator — parse args, spawn bot(s)
-  const count = parseInt(process.argv[2] ?? "20");
-  const timeout = parseInt(process.argv[3] ?? "600") * 1000;
+	// Orchestrator — parse args, spawn bot(s)
+	const count = parseInt(process.argv[2] ?? "20");
+	const timeout = parseInt(process.argv[3] ?? "600") * 1000;
 
-  console.log("");
-  console.log("╔════════════════════════════════════════════════════════╗");
-  console.log("║          STEVE - Ender Dragon Speedrun Bot             ║");
-  console.log("╚════════════════════════════════════════════════════════╝");
-  console.log("");
+	console.log("");
+	console.log("╔════════════════════════════════════════════════════════╗");
+	console.log("║          STEVE - Ender Dragon Speedrun Bot             ║");
+	console.log("╚════════════════════════════════════════════════════════╝");
+	console.log("");
 
-  runRace(count, timeout);
+	runRace(count, timeout);
 }
