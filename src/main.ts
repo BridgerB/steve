@@ -56,7 +56,6 @@ let isExecuting = false;
 let consecutiveFailures = 0;
 let generation = 0; // increments on death — stale step results are ignored
 const completedSteps = new Set<string>();
-const succeededSteps = new Set<string>(); // steps that returned success — never remove
 
 const runTick = async (bot: Bot): Promise<void> => {
   if (isExecuting) return;
@@ -73,7 +72,7 @@ const runTick = async (bot: Bot): Promise<void> => {
   for (const step of steps) {
     if (step.isComplete(state)) {
       completedSteps.add(step.id);
-    } else if (completedSteps.has(step.id) && !succeededSteps.has(step.id)) {
+    } else {
       completedSteps.delete(step.id);
     }
   }
@@ -119,12 +118,11 @@ const runTick = async (bot: Bot): Promise<void> => {
         log(`✓ ${result.message}`);
         logEvent("step", "success", `${stepName}: ${result.message}`, bot.entity?.position);
         completedSteps.add(stepId);
-        succeededSteps.add(stepId);
       } else {
         consecutiveFailures++;
         log(`✗ ${result.message} (fail #${consecutiveFailures})`);
         logEvent("step", "fail", `${stepName}: ${result.message}`, bot.entity?.position);
-        if (consecutiveFailures >= 5) {
+        if (consecutiveFailures >= 8) {
           log(`ABORT: ${consecutiveFailures} consecutive failures on ${stepName}`);
           logEvent("step", "abort", `${stepName}: ${consecutiveFailures} failures`, bot.entity?.position);
           process.exit(1);
@@ -149,7 +147,7 @@ const runTick = async (bot: Bot): Promise<void> => {
     for (const step of steps) {
       if (step.isComplete(newState)) {
         completedSteps.add(step.id);
-      } else if (completedSteps.has(step.id) && !succeededSteps.has(step.id)) {
+      } else {
         completedSteps.delete(step.id);
       }
     }
@@ -244,7 +242,6 @@ const startBot = async (): Promise<void> => {
     currentStep = null;
     consecutiveFailures = 0;
     completedSteps.clear();
-    succeededSteps.clear();
   });
 
   bot.on("health", () => {

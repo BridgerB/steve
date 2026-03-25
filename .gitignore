@@ -5,3 +5,5 @@ test-results.xml
 /data/
 /debug/
 .env
+.mcp-eval.ts
+.repl-exec.ts

@@ -234,6 +234,9 @@
       export MC_RCON_PORT="${rconPort}"
       export MC_RCON_PASS="${rconPassword}"
 
+      # Speed up game — max tick rate
+      # ${pkgs.mcrcon}/bin/mcrcon -H localhost -P ${rconPort} -p ${rconPassword} "tick rate 100" || true
+
       # Open browser if available (skip on headless servers)
       if command -v ${pkgs.chromium}/bin/chromium &>/dev/null && [ -n "''${DISPLAY:-}" ]; then
         (while ! ${pkgs.netcat}/bin/nc -z localhost 3000 2>/dev/null; do sleep 1; done
@@ -320,6 +323,26 @@
         ${pkgs.nodejs_25}/bin/node --test src/test.ts
       fi
     '';
+
+    # MCP server — bot control for Claude Code
+    runMcp = pkgs.writeShellScriptBin "run-mcp" ''
+      set -euo pipefail
+      cd "$(pwd)"
+
+      # Ensure deps (all output to stderr — stdout is MCP transport)
+      if [ ! -d ../typecraft ]; then
+        echo "Cloning typecraft..." >&2
+        ${pkgs.git}/bin/git clone https://github.com/BridgerB/typecraft.git ../typecraft
+      fi
+      if [ ! -d ../typecraft/node_modules ]; then
+        (cd ../typecraft && ${pkgs.nodejs_25}/bin/npm install) >&2
+      fi
+      if [ ! -d node_modules ] || ! ${pkgs.nodejs_25}/bin/node -e "require('better-sqlite3')" 2>/dev/null; then
+        ${pkgs.nodejs_25}/bin/npm install >&2
+      fi
+
+      exec ${pkgs.nodejs_25}/bin/node src/mcp.ts
+    '';
   in {
     packages.${system} = {
       default = runSteve;
@@ -328,6 +351,7 @@
       bench = runBench;
       rcon = rcon;
       test = runTests;
+      mcp = runMcp;
     };
 
     apps.${system} = {
@@ -350,6 +374,10 @@
       rcon = {
         type = "app";
         program = "${rcon}/bin/rcon";
+      };
+      mcp = {
+        type = "app";
+        program = "${runMcp}/bin/run-mcp";
       };
     };
 

@@ -56,7 +56,7 @@ export const steps: readonly Step[] = [
     name: "Craft Sticks",
     priority: 4,
     canExecute: (s) => s.inventory.planks >= 2,
-    isComplete: (s) => s.inventory.sticks >= 4 || getPickaxeTier(s.equipment.pickaxe) >= 1,
+    isComplete: (s) => s.inventory.sticks >= 4,
     execute: async (bot, _state) => {
       const { craftSticks } = await import("./tasks/craft/main.ts");
       return craftSticks(bot);
@@ -136,10 +136,10 @@ export const steps: readonly Step[] = [
     name: "Mine Coal",
     priority: 10,
     canExecute: (s) => getPickaxeTier(s.equipment.pickaxe) >= 1,
-    isComplete: (s) => s.inventory.coal >= 16,
+    isComplete: (s) => s.inventory.coal >= 8,
     execute: async (bot, _state) => {
       const { mineBlock } = await import("./tasks/mining/main.ts");
-      return mineBlock(bot, "coal_ore", 16);
+      return mineBlock(bot, "coal_ore", 8);
     },
   },
 
@@ -149,10 +149,10 @@ export const steps: readonly Step[] = [
     priority: 11,
     canExecute: (s) => getPickaxeTier(s.equipment.pickaxe) >= 2,
     isComplete: (s) =>
-      s.inventory.ironOre >= 16 || s.inventory.ironIngots >= 16,
+      s.inventory.ironOre >= 8 || s.inventory.ironIngots >= 8,
     execute: async (bot, _state) => {
       const { mineBlock } = await import("./tasks/mining/main.ts");
-      return mineBlock(bot, "iron_ore", 16);
+      return mineBlock(bot, "iron_ore", 8);
     },
   },
 
@@ -161,12 +161,12 @@ export const steps: readonly Step[] = [
     name: "Smelt Iron",
     priority: 12,
     canExecute: (s) =>
-      s.equipment.hasFurnace && s.inventory.ironOre >= 8 &&
-      s.inventory.coal >= 4,
-    isComplete: (s) => s.inventory.ironIngots >= 10,
+      s.equipment.hasFurnace && s.inventory.ironOre >= 3 &&
+      s.inventory.coal >= 2,
+    isComplete: (s) => s.inventory.ironIngots >= 3,
     execute: async (bot, _state) => {
       const { smeltItems } = await import("./tasks/smelt/main.ts");
-      return smeltItems(bot, "raw_iron", 16);
+      return smeltItems(bot, "raw_iron", 8);
     },
   },
 

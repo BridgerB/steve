@@ -8,8 +8,10 @@
     "build": "tsc"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
     "better-sqlite3": "^12.8.0",
-    "typecraft": "file:../typecraft"
+    "typecraft": "file:../typecraft",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
