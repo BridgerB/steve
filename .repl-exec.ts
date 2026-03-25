@@ -1,1 +1,3 @@
-export default async function(bot: any) { process.exit(0) }
+export default async function (bot: any) {
+	process.exit(0);
+}

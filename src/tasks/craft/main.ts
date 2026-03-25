@@ -4,7 +4,6 @@
 
 import type { Bot, Recipe } from "typecraft";
 import { windowItems } from "typecraft";
-import type { StepResult } from "../../types.ts";
 import {
 	craftItem,
 	failure,
@@ -12,6 +11,7 @@ import {
 	getCraftingTable,
 	success,
 } from "../../lib/bot-utils.ts";
+import type { StepResult } from "../../types.ts";
 
 export const craftPlanks = async (bot: Bot): Promise<StepResult> => {
 	const logs = windowItems(bot.inventory).filter((i) =>

@@ -3,8 +3,8 @@
  */
 
 import type { Bot } from "typecraft";
-import { vec3, distance, offset, windowItems } from "typecraft";
-import type { StepResult, Block } from "../../types.ts";
+import { distance, offset, vec3, windowItems } from "typecraft";
+import type { Block, StepResult } from "../../types.ts";
 
 /**
  * Search for a Nether Fortress

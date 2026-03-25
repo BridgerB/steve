@@ -4,7 +4,7 @@
 
 import type { Bot } from "typecraft";
 import { distance, offset, windowItems } from "typecraft";
-import type { StepResult, Block } from "../../types.ts";
+import type { Block, StepResult } from "../../types.ts";
 
 /**
  * Fill an empty bucket with water

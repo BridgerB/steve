@@ -8,10 +8,10 @@
 
 import assert from "node:assert/strict";
 import { it } from "node:test";
-import { runBotTest, countInventoryItems } from "../../lib/test-utils.ts";
+import { countInventoryItems, runBotTest } from "../../lib/test-utils.ts";
 import {
-	craftPlanks,
 	craftCraftingTable,
+	craftPlanks,
 	craftSticks,
 	craftWoodenPickaxe,
 } from "./main.ts";
@@ -65,61 +65,69 @@ it("craft: planks → sticks", { timeout: 30000 }, async () => {
 });
 
 // --- Test 4: Place table + craft wooden pickaxe ---
-it("craft: place table + craft wooden pickaxe", {
-	timeout: 60000,
-}, async () => {
-	await runBotTest(
-		{
-			username: "TestCraft",
-			setupCommands: [
-				"/tp TestCraft 150 71 150",
-				"/clear TestCraft",
-				"/give TestCraft oak_planks 3",
-				"/give TestCraft stick 2",
-				"/give TestCraft crafting_table 1",
-			],
-		},
-		async (bot) => {
-			const result = await craftWoodenPickaxe(bot);
-			assert.ok(result.success, `craftWoodenPickaxe: ${result.message}`);
-			const picks = countInventoryItems(bot, "pickaxe");
-			assert.ok(picks >= 1, `Expected pickaxe >= 1, got ${picks}`);
-		},
-	);
-});
+it(
+	"craft: place table + craft wooden pickaxe",
+	{
+		timeout: 60000,
+	},
+	async () => {
+		await runBotTest(
+			{
+				username: "TestCraft",
+				setupCommands: [
+					"/tp TestCraft 150 71 150",
+					"/clear TestCraft",
+					"/give TestCraft oak_planks 3",
+					"/give TestCraft stick 2",
+					"/give TestCraft crafting_table 1",
+				],
+			},
+			async (bot) => {
+				const result = await craftWoodenPickaxe(bot);
+				assert.ok(result.success, `craftWoodenPickaxe: ${result.message}`);
+				const picks = countInventoryItems(bot, "pickaxe");
+				assert.ok(picks >= 1, `Expected pickaxe >= 1, got ${picks}`);
+			},
+		);
+	},
+);
 
 // --- Test 5: Full chain — 3 logs → wooden pickaxe ---
-it("craft: full chain — 3 logs → wooden pickaxe", {
-	timeout: 60000,
-}, async () => {
-	await runBotTest(
-		{
-			username: "TestCraft",
-			setupCommands: [
-				"/tp TestCraft 150 71 150",
-				"/clear TestCraft",
-				"/give TestCraft oak_log 3",
-			],
-		},
-		async (bot) => {
-			// Step 1: logs → planks
-			const planks = await craftPlanks(bot);
-			assert.ok(planks.success, `planks: ${planks.message}`);
+it(
+	"craft: full chain — 3 logs → wooden pickaxe",
+	{
+		timeout: 60000,
+	},
+	async () => {
+		await runBotTest(
+			{
+				username: "TestCraft",
+				setupCommands: [
+					"/tp TestCraft 150 71 150",
+					"/clear TestCraft",
+					"/give TestCraft oak_log 3",
+				],
+			},
+			async (bot) => {
+				// Step 1: logs → planks
+				const planks = await craftPlanks(bot);
+				assert.ok(planks.success, `planks: ${planks.message}`);
 
-			// Step 2: planks → crafting table
-			const table = await craftCraftingTable(bot);
-			assert.ok(table.success, `table: ${table.message}`);
+				// Step 2: planks → crafting table
+				const table = await craftCraftingTable(bot);
+				assert.ok(table.success, `table: ${table.message}`);
 
-			// Step 3: planks → sticks
-			const sticks = await craftSticks(bot);
-			assert.ok(sticks.success, `sticks: ${sticks.message}`);
+				// Step 3: planks → sticks
+				const sticks = await craftSticks(bot);
+				assert.ok(sticks.success, `sticks: ${sticks.message}`);
 
-			// Step 4: place table + craft pickaxe
-			const pickaxe = await craftWoodenPickaxe(bot);
-			assert.ok(pickaxe.success, `pickaxe: ${pickaxe.message}`);
+				// Step 4: place table + craft pickaxe
+				const pickaxe = await craftWoodenPickaxe(bot);
+				assert.ok(pickaxe.success, `pickaxe: ${pickaxe.message}`);
 
-			const picks = countInventoryItems(bot, "pickaxe");
-			assert.ok(picks >= 1, `Expected pickaxe >= 1, got ${picks}`);
-		},
-	);
-});
+				const picks = countInventoryItems(bot, "pickaxe");
+				assert.ok(picks >= 1, `Expected pickaxe >= 1, got ${picks}`);
+			},
+		);
+	},
+);

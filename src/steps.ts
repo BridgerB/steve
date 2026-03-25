@@ -3,8 +3,8 @@
  * Each step has conditions to check and an execute function
  */
 
-import type { GameState, Step, StepResult } from "./types.ts";
 import { getPickaxeTier } from "./state.ts";
+import type { GameState, Step, StepResult } from "./types.ts";
 
 // Re-export types for convenience
 export type { Step, StepResult };

@@ -7,3 +7,5 @@ test-results.xml
 .env
 .mcp-eval.ts
 .repl-exec.ts
+.direnv/
+.pre-commit-config.yaml

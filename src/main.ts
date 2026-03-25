@@ -10,18 +10,17 @@
  * Otherwise, acts as the orchestrator that spawns bot child processes.
  */
 
-import { createBot as createMcBot, createWebViewer } from "typecraft";
 import type { Bot } from "typecraft";
-
-import { getPhase, isDragonDead, syncFromBot } from "./state.ts";
-import { getNextStep, getProgress, steps, type Step } from "./steps.ts";
+import { createBot as createMcBot, createWebViewer } from "typecraft";
+import { rememberResource } from "./lib/bot-utils.ts";
 import {
 	initLogger,
+	logEvent,
 	startTickLogger,
 	stopLogger,
-	logEvent,
 } from "./lib/logger.ts";
-import { rememberResource } from "./lib/bot-utils.ts";
+import { getPhase, isDragonDead, syncFromBot } from "./state.ts";
+import { getNextStep, getProgress, type Step, steps } from "./steps.ts";
 
 // ============================================
 // CONFIGURATION
@@ -342,8 +341,8 @@ const startBot = async (): Promise<void> => {
 // MULTI-BOT ORCHESTRATOR
 // ============================================
 
-import { spawn, type ChildProcess } from "node:child_process";
-import { mkdirSync, existsSync } from "node:fs";
+import { type ChildProcess, spawn } from "node:child_process";
+import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import Database from "better-sqlite3";
 

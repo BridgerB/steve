@@ -10,16 +10,16 @@
  *   claude mcp add steve -- node src/mcp.ts   # register with Claude Code
  */
 
+import { writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { z } from "zod";
-import { createBot as createMcBot, vec3, windowItems } from "typecraft";
 import type { Bot } from "typecraft";
-import { syncFromBot } from "./state.ts";
+import { createBot as createMcBot, vec3, windowItems } from "typecraft";
+import { z } from "zod";
 import { rememberResource } from "./lib/bot-utils.ts";
-import { writeFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { syncFromBot } from "./state.ts";
 
 // ── stdio transport — NO console.log anywhere ──
 const log = (...args: unknown[]) => console.error("[mcp]", ...args);

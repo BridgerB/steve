@@ -3,19 +3,26 @@
  * Reduces code duplication across task implementations
  */
 
-import type { Bot, Entity, Pathfinder, Item } from "typecraft";
+/** Block with position and hardness — enriched from typecraft's blockAt + registry */
+import type {
+	Bot,
+	Entity,
+	Item,
+	Pathfinder,
+	Block as TypecraftBlock,
+} from "typecraft";
 import {
-	createPathfinder,
-	createGoalNear,
 	createGoalBlock,
+	createGoalNear,
+	createPathfinder,
+	distance,
+	offset,
+	type Vec3,
+	vec3,
 	windowItems,
 } from "typecraft";
-import { vec3, distance, offset, type Vec3 } from "typecraft";
-import { logEvent } from "./logger.ts";
 import type { StepResult } from "../types.ts";
-
-/** Block with position and hardness — enriched from typecraft's blockAt + registry */
-import type { Block as TypecraftBlock } from "typecraft";
+import { logEvent } from "./logger.ts";
 
 type Block = TypecraftBlock & { hardness: number | null };
 
@@ -709,8 +716,12 @@ export const getCraftingTable = async (bot: Bot): Promise<Block | null> => {
 	];
 	for (let i = positions.length - 1; i > 0; i--) {
 		const j = Math.floor(Math.random() * (i + 1));
-		const a = positions[i], b = positions[j];
-		if (a && b) { positions[i] = b; positions[j] = a; }
+		const a = positions[i],
+			b = positions[j];
+		if (a && b) {
+			positions[i] = b;
+			positions[j] = a;
+		}
 	}
 	let ground: Block | null = null;
 	for (const [dx, dz] of positions) {

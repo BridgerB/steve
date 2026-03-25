@@ -4,7 +4,7 @@
 
 import type { Bot } from "typecraft";
 import { windowItems } from "typecraft";
-import type { StepResult, Block } from "../../types.ts";
+import type { Block, StepResult } from "../../types.ts";
 
 /**
  * Activate the end portal by placing eyes of ender in frames

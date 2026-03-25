@@ -4,7 +4,7 @@
 
 import type { Bot } from "typecraft";
 import { distance, offset, windowItems } from "typecraft";
-import type { StepResult, Block } from "../../types.ts";
+import type { Block, StepResult } from "../../types.ts";
 
 /**
  * Place furnace if not already placed, then smelt items
@@ -99,7 +99,8 @@ export const smeltItems = async (
 
 		// Put items to smelt
 		const toSmelt = itemsToSmelt[0];
-		if (!toSmelt) return { success: false, message: `No ${inputItem} in inventory` };
+		if (!toSmelt)
+			return { success: false, message: `No ${inputItem} in inventory` };
 		const smeltCount = Math.min(toSmelt.count, count);
 		await furnaceWindow.putInput(toSmelt.type, null, smeltCount);
 

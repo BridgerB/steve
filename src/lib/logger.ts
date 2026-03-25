@@ -4,9 +4,9 @@
  * Uses WAL mode for safe concurrent writes.
  */
 
-import Database from "better-sqlite3";
-import { join } from "node:path";
 import { mkdirSync } from "node:fs";
+import { join } from "node:path";
+import Database from "better-sqlite3";
 import type { Bot } from "typecraft";
 
 let db: Database.Database | null = null;

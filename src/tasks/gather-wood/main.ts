@@ -3,17 +3,16 @@
  */
 
 import type { Bot } from "typecraft";
-import type { StepResult } from "../../types.ts";
-import { createGoalNear } from "typecraft";
-import { vec3, distance, offset, type Vec3 } from "typecraft";
-import { logEvent } from "../../lib/logger.ts";
+import { createGoalNear, distance, offset, type Vec3, vec3 } from "typecraft";
 import {
+	escapeWater,
 	getBlock,
 	getPathfinder,
 	goTo,
-	escapeWater,
 	sleep,
 } from "../../lib/bot-utils.ts";
+import { logEvent } from "../../lib/logger.ts";
+import type { StepResult } from "../../types.ts";
 
 const LOG_TYPES = [
 	"oak_log",

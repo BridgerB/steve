@@ -4,7 +4,6 @@
 
 import type { Bot } from "typecraft";
 import { offset } from "typecraft";
-import type { StepResult } from "../../types.ts";
 import {
 	attackUntilDead,
 	countItems,
@@ -13,6 +12,7 @@ import {
 	moveCloser,
 	searchForEntities,
 } from "../../lib/bot-utils.ts";
+import type { StepResult } from "../../types.ts";
 
 /**
  * Hunt endermen for ender pearls

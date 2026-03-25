@@ -9,9 +9,9 @@
  *   echo 'const { gatherWood } = await import("./src/tasks/gather-wood/main.ts"); return await gatherWood(bot, 3);' > /tmp/steve-cmd.txt
  */
 
-import { createBot } from "typecraft";
+import { readFileSync, watchFile, writeFileSync } from "node:fs";
 import type { Bot } from "typecraft";
-import { readFileSync, writeFileSync, watchFile } from "node:fs";
+import { createBot } from "typecraft";
 import { initLogger, logEvent } from "./logger.ts";
 
 const CMD_FILE = "/tmp/steve-cmd.txt";

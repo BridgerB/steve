@@ -5,8 +5,8 @@
 
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
-import { createBot, createWebViewer, windowItems } from "typecraft";
 import type { Bot } from "typecraft";
+import { createBot, createWebViewer, windowItems } from "typecraft";
 import type { StepResult } from "../types.ts";
 import { logEvent } from "./logger.ts";
 

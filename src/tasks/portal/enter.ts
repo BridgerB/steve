@@ -3,7 +3,7 @@
  */
 
 import type { Bot } from "typecraft";
-import type { StepResult, Block } from "../../types.ts";
+import type { Block, StepResult } from "../../types.ts";
 
 /**
  * Enter a portal (nether or end)

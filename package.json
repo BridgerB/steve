@@ -1,24 +1,24 @@
 {
-  "name": "steve",
-  "version": "0.1.0",
-  "type": "module",
-  "scripts": {
-    "start": "node src/main.ts",
-    "test": "node --test src/test.ts",
-    "format": "biome format --write .",
-    "lint": "biome lint .",
-    "check": "tsc"
-  },
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.27.1",
-    "better-sqlite3": "^12.8.0",
-    "typecraft": "file:../typecraft",
-    "zod": "^4.3.6"
-  },
-  "devDependencies": {
-    "@biomejs/biome": "^2.4.8",
-    "@types/better-sqlite3": "^7.6.13",
-    "@types/node": "^22.0.0",
-    "typescript": "^5.7.0"
-  }
+	"name": "steve",
+	"version": "0.1.0",
+	"type": "module",
+	"scripts": {
+		"start": "node src/main.ts",
+		"test": "node --test src/test.ts",
+		"format": "biome format --write .",
+		"lint": "biome lint .",
+		"check": "tsc"
+	},
+	"dependencies": {
+		"@modelcontextprotocol/sdk": "^1.27.1",
+		"better-sqlite3": "^12.8.0",
+		"typecraft": "file:../typecraft",
+		"zod": "^4.3.6"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.4.8",
+		"@types/better-sqlite3": "^7.6.13",
+		"@types/node": "^22.0.0",
+		"typescript": "^5.7.0"
+	}
 }

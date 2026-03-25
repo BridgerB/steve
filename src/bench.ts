@@ -10,12 +10,12 @@
  * Requires: MC server running (nix run .#server)
  */
 
-import { createBot } from "typecraft";
 import type { Bot } from "typecraft";
-import { steps } from "./steps.ts";
-import { syncFromBot } from "./state.ts";
+import { createBot } from "typecraft";
 import { initLogger, logEvent } from "./lib/logger.ts";
 import { connect as rconConnect } from "./lib/rcon.ts";
+import { syncFromBot } from "./state.ts";
+import { steps } from "./steps.ts";
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 

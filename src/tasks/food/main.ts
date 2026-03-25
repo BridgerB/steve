@@ -4,7 +4,6 @@
 
 import type { Bot, Entity } from "typecraft";
 import { offset } from "typecraft";
-import type { StepResult } from "../../types.ts";
 import {
 	equipItem,
 	findEntitiesByNames,
@@ -14,6 +13,7 @@ import {
 	sleep,
 	success,
 } from "../../lib/bot-utils.ts";
+import type { StepResult } from "../../types.ts";
 
 const FOOD_ANIMALS = ["pig", "cow", "sheep", "chicken", "rabbit"];
 

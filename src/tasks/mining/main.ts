@@ -4,18 +4,18 @@
 
 import type { Bot } from "typecraft";
 import { distance, offset, vec3 } from "typecraft";
-import type { StepResult, Block } from "../../types.ts";
 import {
 	exploreRandom,
 	findBlock,
-	getRememberedResource,
 	forgetResource,
+	getRememberedResource,
 	goTo,
 	moveCloser,
 	sleep,
 	success,
 } from "../../lib/bot-utils.ts";
 import { logEvent } from "../../lib/logger.ts";
+import type { Block, StepResult } from "../../types.ts";
 
 /** Dig with timeout — bot.dig() can hang silently */
 const safeDig = async (
