@@ -133,9 +133,10 @@ const connectBot = async (): Promise<Bot> => {
 	throw new Error(`Failed to connect after ${maxRetries} attempts`);
 };
 
-const requireBot = (): Bot => {
+const requireBot = async (): Promise<Bot> => {
 	if (!bot || !botReady) {
-		throw new Error("Bot not connected. Is the MC server running?");
+		log("Bot not connected — auto-reconnecting...");
+		return await connectBot();
 	}
 	return bot;
 };
@@ -150,7 +151,7 @@ server.tool(
 	"Get the bot's full game state: inventory counts, equipment, world state, health, food, position.",
 	{},
 	async () => {
-		const b = requireBot();
+		const b = await requireBot();
 		const state = syncFromBot(b);
 		return {
 			content: [
@@ -166,7 +167,7 @@ server.tool(
 	"List every item in the bot's inventory with slot numbers, names, and counts.",
 	{},
 	async () => {
-		const b = requireBot();
+		const b = await requireBot();
 		const items = windowItems(b.inventory).map((item, idx) => ({
 			slot: idx,
 			name: item.name,
@@ -206,7 +207,7 @@ server.tool(
 		radius: z.number().optional().describe("Search radius (default 5, max 16)"),
 	},
 	async ({ radius = 5 }) => {
-		const b = requireBot();
+		const b = await requireBot();
 		const r = Math.min(radius, 16);
 		const pos = b.entity.position;
 
@@ -316,7 +317,7 @@ Long-running operations block until complete (mining ~30-60s, navigation ~10s).`
 		evalBusy = true;
 
 		try {
-			const b = requireBot();
+			const b = await requireBot();
 			const state = syncFromBot(b);
 
 			writeFileSync(
@@ -367,7 +368,7 @@ server.tool(
 	"Send a chat message or slash command (e.g. /give, /tp, /gamemode).",
 	{ message: z.string().describe("Chat message or slash command") },
 	async ({ message }) => {
-		const b = requireBot();
+		const b = await requireBot();
 		b.chat(message);
 		await new Promise((r) => setTimeout(r, 500));
 		const pos = b.entity.position;

@@ -148,6 +148,9 @@
       startServer = pkgs.writeShellScriptBin "minecraft-server" ''
         set -euo pipefail
 
+        # Load .env if it exists (for MC_MEMORY etc.)
+        if [ -f .env ]; then set -a; source .env; set +a; fi
+
         # Create and enter server directory
         mkdir -p server
         cd server
