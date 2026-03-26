@@ -102,6 +102,9 @@ const connectBot = async (): Promise<Bot> => {
 				)}`,
 			);
 
+			// Auto-op for interactive testing (/give, /tp, etc.)
+			b.chat(`/op ${USERNAME}`);
+
 			// Passive memory — same setup as main.ts
 			for (const name of [
 				"oak_log",
@@ -397,6 +400,7 @@ server.tool(
 );
 
 // Tool 6: sniff
+// Only filter truly spammy packets — keep entity/block events for debugging
 const NOISE_PACKETS = new Set([
 	"move_entity_pos",
 	"move_entity_pos_rot",
@@ -408,17 +412,12 @@ const NOISE_PACKETS = new Set([
 	"keep_alive",
 	"teleport_entity",
 	"bundle_delimiter",
-	"update_time",
-	"remove_entities",
-	"add_entity",
 	"level_particles",
 	"entity_position_sync",
-	"entity_event",
 	"set_time",
-	"update_attributes",
+	"update_time",
 	"level_chunk_with_light",
 	"chunk_batch_finished",
-	"section_blocks_update",
 	"set_chunk_cache_center",
 	"light_update",
 	"forget_level_chunk",
