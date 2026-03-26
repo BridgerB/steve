@@ -67,14 +67,24 @@ The MCP server retries connection for 60s, so start the MC server first.
 
 ### Tools
 
-| Tool        | Purpose                                                       |
-| ----------- | ------------------------------------------------------------- |
-| `state`     | Full GameState: inventory counts, equipment, position, health |
-| `inventory` | Slot-level item list with exact names and counts              |
-| `look`      | Nearby blocks (radius), entities, dimension                   |
-| `eval`      | Execute TypeScript with bot in scope (the power tool)         |
-| `chat`      | Send chat message or `/command`                               |
+| Tool        | Purpose                                                          |
+| ----------- | ---------------------------------------------------------------- |
+| `state`     | Full GameState: inventory counts, equipment, position, health    |
+| `inventory` | Slot-level item list with exact names and counts                 |
+| `look`      | Nearby blocks (radius), entities, dimension                      |
+| `eval`      | Execute TypeScript with bot in scope (the power tool)            |
+| `chat`      | Send chat message or `/command`                                  |
 | `sniff`     | Capture incoming packets (filters noise, optional action+filter) |
+| `craft`     | Craft an item by name (handles table + tag resolution)           |
+| `navigate`  | Go to coordinates or nearest block type                          |
+| `mine`      | Mine N blocks, returns inventory delta                           |
+| `recipe`    | Look up recipe ingredients and check availability                |
+| `nearby`    | Find specific blocks with distances, sorted nearest              |
+| `memory`    | Query/manage blockSeen memory (resource locations)               |
+| `health`    | Detailed vitals: HP, food, water, Y level, held item             |
+| `replay`    | Query recent SQLite events (steps, mining, errors)               |
+| `equip`     | Equip best tool by type or exact name                            |
+| `world`     | World state: time, dimension, entity count, phase                |
 
 ### Eval imports
 
