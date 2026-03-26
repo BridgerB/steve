@@ -74,6 +74,7 @@ The MCP server retries connection for 60s, so start the MC server first.
 | `look`      | Nearby blocks (radius), entities, dimension                   |
 | `eval`      | Execute TypeScript with bot in scope (the power tool)         |
 | `chat`      | Send chat message or `/command`                               |
+| `sniff`     | Capture incoming packets (filters noise, optional action+filter) |
 
 ### Eval imports
 

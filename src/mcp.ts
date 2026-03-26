@@ -385,6 +385,104 @@ server.tool(
 	},
 );
 
+// Tool 6: sniff
+const NOISE_PACKETS = new Set([
+	"move_entity_pos",
+	"move_entity_pos_rot",
+	"move_entity_rot",
+	"set_entity_motion",
+	"rotate_head",
+	"set_entity_data",
+	"keepalive",
+	"keep_alive",
+	"teleport_entity",
+	"bundle_delimiter",
+	"update_time",
+	"remove_entities",
+	"add_entity",
+	"level_particles",
+	"entity_position_sync",
+	"entity_event",
+	"set_time",
+	"update_attributes",
+	"level_chunk_with_light",
+	"chunk_batch_finished",
+	"section_blocks_update",
+	"set_chunk_cache_center",
+	"light_update",
+	"forget_level_chunk",
+]);
+
+server.tool(
+	"sniff",
+	`Capture incoming packets for a duration. Filters out movement/chunk noise.
+Use to debug protocol issues — see what the server sends in response to actions.
+Run an action via eval BEFORE calling sniff, or use the action parameter to run code during capture.`,
+	{
+		duration: z
+			.number()
+			.optional()
+			.describe("Capture duration in ms (default 3000, max 15000)"),
+		action: z
+			.string()
+			.optional()
+			.describe(
+				"Optional TypeScript code to run during capture (same as eval)",
+			),
+		filter: z
+			.string()
+			.optional()
+			.describe(
+				"Only include packets whose name contains this string (e.g. 'slot', 'container')",
+			),
+	},
+	async ({ duration = 3000, action, filter }) => {
+		const b = await requireBot();
+		const ms = Math.min(duration, 15000);
+		const packets: { name: string; data: string }[] = [];
+
+		const listener = (data: unknown, meta: { name?: string }) => {
+			const name = meta?.name ?? "unknown";
+			if (NOISE_PACKETS.has(name)) return;
+			if (filter && !name.includes(filter)) return;
+			packets.push({ name, data: JSON.stringify(data).slice(0, 400) });
+		};
+
+		b.client.on("packet", listener);
+
+		if (action) {
+			try {
+				writeFileSync(
+					evalTmpFile,
+					`export default async function(bot: any, state: any) { ${action} }\n`,
+				);
+				const mod = await import(`${evalTmpFile}?t=${Date.now()}`);
+				await Promise.race([
+					mod.default(b, syncFromBot(b)),
+					new Promise((r) => setTimeout(r, ms)),
+				]);
+			} catch {}
+		} else {
+			await new Promise((r) => setTimeout(r, ms));
+		}
+
+		b.client.removeListener("packet", listener);
+
+		return {
+			content: [
+				{
+					type: "text" as const,
+					text: JSON.stringify(
+						{ captured: packets.length, packets: packets.slice(0, 50) },
+						null,
+						2,
+					),
+				},
+			],
+		};
+	},
+);
+
 // ── Bootstrap ──
 
 const main = async () => {
