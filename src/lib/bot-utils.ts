@@ -20,6 +20,7 @@ import {
 	type Vec3,
 	vec3,
 	windowItems,
+	worldSetBlockStateId,
 } from "typecraft";
 import type { StepResult } from "../types.ts";
 import { logEvent } from "./logger.ts";
@@ -299,6 +300,8 @@ export const mineAndCollect = async (
 	// Dig the block
 	try {
 		await bot.dig(block, true);
+		// Predict block break locally — server skips block_update for the digger in 1.21+
+		if (bot.world) worldSetBlockStateId(bot.world, block.position, 0);
 	} catch (e) {
 		logEvent("mine", "dig_error", String(e));
 		return false;
@@ -766,6 +769,7 @@ export const getCraftingTable = async (bot: Bot): Promise<Block | null> => {
 				try {
 					await bot.lookAt(offset(above.position, 0.5, 0.5, 0.5));
 					await bot.dig(above);
+					if (bot.world) worldSetBlockStateId(bot.world, above.position, 0);
 					await sleep(200);
 					ground = candidate;
 					break;
@@ -907,6 +911,14 @@ export const craftItem = async (
 		return { success: false, message: `Unknown item: ${itemName}` };
 	}
 
+	// Close stale windows to avoid inventory desync
+	if (bot.currentWindow) {
+		try {
+			bot.closeWindow(bot.currentWindow);
+		} catch {}
+		await sleep(300);
+	}
+
 	const recipes = bot.recipesFor(itemId, null, 1, craftingTable ? true : null);
 
 	if (recipes.length === 0) {
@@ -914,17 +926,30 @@ export const craftItem = async (
 		return { success: false, message: `No recipe for ${itemName}` };
 	}
 
-	// Pick a recipe whose ingredients we actually have
-	// When a container window is open, player items are in currentWindow's inventory section
-	const win = bot.currentWindow ?? bot.inventory;
-	const invStart =
-		win === bot.inventory
-			? 0
-			: ((win as { inventoryStart?: number }).inventoryStart ?? 0);
-	const hasIngredient = (id: number): boolean =>
-		win.slots.some(
-			(s, i) => s && i >= invStart && s.type === id && s.count > 0,
+	// Build tag-equivalent groups: typecraft resolves tags (e.g. #minecraft:planks)
+	// to only the first item (oak_planks). We need to accept ANY variant.
+	const tagGroups = buildTagGroups(bot);
+
+	// Pick a recipe whose ingredients we actually have (with tag substitution)
+	const win = bot.inventory;
+	const hasIngredient = (id: number): boolean => {
+		const ids = tagGroups.get(id) ?? [id];
+		return ids.some((altId) =>
+			win.slots.some((s) => s && s.type === altId && s.count > 0),
 		);
+	};
+
+	const resolveId = (id: number): number => {
+		if (win.slots.some((s) => s && s.type === id && s.count > 0)) return id;
+		const group = tagGroups.get(id);
+		if (group) {
+			for (const altId of group) {
+				if (win.slots.some((s) => s && s.type === altId && s.count > 0))
+					return altId;
+			}
+		}
+		return id;
+	};
 
 	const recipe = recipes.find((r) => {
 		if (r.inShape) {
@@ -942,9 +967,25 @@ export const craftItem = async (
 		return { success: false, message: `No matching recipe for ${itemName}` };
 	}
 
+	// Clone recipe with substituted ingredient IDs so bot.craft() finds the right items
+	const fixedRecipe = {
+		...recipe,
+		inShape:
+			recipe.inShape?.map((row) =>
+				row.map((item) =>
+					item.id === -1 ? item : { ...item, id: resolveId(item.id) },
+				),
+			) ?? null,
+		ingredients:
+			recipe.ingredients?.map((item) => ({
+				...item,
+				id: resolveId(item.id),
+			})) ?? null,
+	};
+
 	try {
-		await bot.craft(recipe, count, craftingTable ?? undefined);
-		await sleep(500); // server sync — prevents over-consumption on rapid crafts
+		await bot.craft(fixedRecipe, count, craftingTable ?? undefined);
+		await sleep(500);
 		if (bot.currentWindow) {
 			bot.closeWindow(bot.currentWindow);
 			await sleep(500);
@@ -953,8 +994,61 @@ export const craftItem = async (
 	} catch (err) {
 		const msg =
 			err instanceof Error ? err.message : `Failed to craft ${itemName}`;
+		logEvent("craft", "error", `${itemName}: ${msg}`);
+		if (bot.currentWindow) {
+			try {
+				bot.closeWindow(bot.currentWindow);
+			} catch {}
+		}
 		return { success: false, message: msg };
 	}
+};
+
+/** Build map of tag-equivalent item IDs. Each member maps to the full group. */
+const buildTagGroups = (bot: Bot): Map<number, number[]> => {
+	const registry = bot.registry;
+	if (!registry) return new Map();
+
+	const groups = new Map<number, number[]>();
+
+	const addGroup = (names: string[]) => {
+		const ids = names
+			.map((n) => registry.itemsByName.get(n)?.id)
+			.filter((id): id is number => id !== undefined);
+		if (ids.length <= 1) return;
+		for (const id of ids) groups.set(id, ids);
+	};
+
+	addGroup([
+		"oak_planks",
+		"spruce_planks",
+		"birch_planks",
+		"jungle_planks",
+		"acacia_planks",
+		"dark_oak_planks",
+		"pale_oak_planks",
+		"crimson_planks",
+		"warped_planks",
+		"mangrove_planks",
+		"bamboo_planks",
+		"cherry_planks",
+	]);
+
+	addGroup([
+		"oak_log",
+		"spruce_log",
+		"birch_log",
+		"jungle_log",
+		"acacia_log",
+		"dark_oak_log",
+		"pale_oak_log",
+		"mangrove_log",
+		"cherry_log",
+	]);
+
+	addGroup(["coal", "charcoal"]);
+
+	return groups;
 };
 
 // =============================================================================

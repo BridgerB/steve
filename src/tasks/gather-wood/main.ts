@@ -3,7 +3,14 @@
  */
 
 import type { Bot } from "typecraft";
-import { createGoalNear, distance, offset, type Vec3, vec3 } from "typecraft";
+import {
+	createGoalNear,
+	distance,
+	offset,
+	type Vec3,
+	vec3,
+	worldSetBlockStateId,
+} from "typecraft";
 import {
 	escapeWater,
 	getBlock,
@@ -212,6 +219,8 @@ export const gatherWood = async (
 					setTimeout(() => reject(new Error("dig timeout")), 5000),
 				),
 			]);
+			// Predict block break locally — server skips block_update for the digger in 1.21+
+			if (bot.world) worldSetBlockStateId(bot.world, block.position, 0);
 			logEvent("wood", "dig_done", block.name, pos);
 		} catch (e) {
 			const msg = String(e instanceof Error ? e.message : e);

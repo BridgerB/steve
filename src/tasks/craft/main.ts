@@ -3,7 +3,7 @@
  */
 
 import type { Bot, Recipe } from "typecraft";
-import { windowItems } from "typecraft";
+import { windowItems, worldSetBlockStateId } from "typecraft";
 import {
 	craftItem,
 	failure,
@@ -104,6 +104,7 @@ export const craftFlintAndSteel = async (bot: Bot): Promise<StepResult> => {
 	if (gravel) {
 		try {
 			await bot.dig(gravel);
+			if (bot.world) worldSetBlockStateId(bot.world, gravel.position, 0);
 		} catch {
 			// Ignore
 		}

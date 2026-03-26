@@ -3,7 +3,7 @@
  */
 
 import type { Bot } from "typecraft";
-import { distance, offset, vec3 } from "typecraft";
+import { distance, offset, vec3, worldSetBlockStateId } from "typecraft";
 import {
 	escapeWater,
 	exploreRandom,
@@ -35,6 +35,8 @@ const safeDig = async (
 	} finally {
 		if (timer) clearTimeout(timer);
 	}
+	// Predict block break locally — server skips block_update for the digger in 1.21+
+	if (bot.world) worldSetBlockStateId(bot.world, block.position, 0);
 };
 
 export const mineBlock = async (
@@ -123,6 +125,10 @@ export const mineBlock = async (
 			startBlock = findBlock(bot, isTarget, 64);
 			if (startBlock) break;
 		}
+	}
+	// For ore: staircase mine if nothing found on surface
+	if (!startBlock && !isStone) {
+		startBlock = await staircaseMine(bot, blockType, isTarget, deadline);
 	}
 	if (!startBlock) {
 		return { success: false, message: `Could not find ${blockType}` };
@@ -303,4 +309,148 @@ export const mineBlock = async (
 	}
 
 	return success(`Mined ${mined} ${blockType}`);
+};
+
+/** Staircase mine — dig 2-high tunnel at 45° angle to find ore */
+const staircaseMine = async (
+	bot: Bot,
+	blockType: string,
+	isTarget: (name: string) => boolean,
+	deadline: number,
+): Promise<Block | null> => {
+	logEvent("mine", "staircase", `digging for ${blockType}`);
+
+	const startPos = { ...bot.entity.position };
+	const pos = bot.entity.position;
+
+	// Pick direction with most solid blocks ahead
+	const dirs: [number, number][] = [
+		[1, 0],
+		[-1, 0],
+		[0, 1],
+		[0, -1],
+	];
+	const isSolid = (name: string) =>
+		name !== "air" &&
+		name !== "cave_air" &&
+		name !== "water" &&
+		name !== "lava";
+	let bestDir: [number, number] = dirs[0] ?? [1, 0];
+	let bestSolid = 0;
+	for (const [dx, dz] of dirs) {
+		let solid = 0;
+		for (let i = 1; i <= 5; i++) {
+			const b = bot.blockAt(offset(pos, dx * i, 0, dz * i));
+			if (b && isSolid(b.name)) solid++;
+			const b2 = bot.blockAt(offset(pos, dx * i, -1, dz * i));
+			if (b2 && isSolid(b2.name)) solid++;
+		}
+		if (solid > bestSolid) {
+			bestSolid = solid;
+			bestDir = [dx, dz];
+		}
+	}
+
+	const [sdx, sdz] = bestDir;
+	logEvent("mine", "staircase_dir", `dx=${sdx} dz=${sdz}`);
+
+	const isHazard = (name: string) =>
+		name === "water" || name === "lava" || name === "flowing_lava";
+
+	for (let step = 0; step < 60 && Date.now() < deadline; step++) {
+		if ((bot.health ?? 20) < 10) break;
+		if (bot.entity?.isInWater) break;
+
+		const p = bot.entity.position;
+
+		// Dig head clearance
+		const headAhead = bot.blockAt(offset(p, sdx, 1, sdz)) as Block | null;
+		if (
+			headAhead &&
+			headAhead.name !== "air" &&
+			headAhead.name !== "cave_air"
+		) {
+			if (isHazard(headAhead.name)) break;
+			if (isTarget(headAhead.name)) return headAhead;
+			try {
+				await bot.lookAt(offset(headAhead.position, 0.5, 0.5, 0.5));
+				await safeDig(bot, headAhead);
+			} catch {}
+		}
+
+		// Dig wall ahead
+		const ahead = bot.blockAt(offset(p, sdx, 0, sdz)) as Block | null;
+		if (ahead && ahead.name !== "air" && ahead.name !== "cave_air") {
+			if (isHazard(ahead.name)) break;
+			if (isTarget(ahead.name)) return ahead;
+			try {
+				await bot.lookAt(offset(ahead.position, 0.5, 0.5, 0.5));
+				await safeDig(bot, ahead);
+			} catch {}
+		}
+
+		// Dig floor ahead (step down)
+		const floorAhead = bot.blockAt(offset(p, sdx, -1, sdz)) as Block | null;
+		if (floorAhead && isHazard(floorAhead.name)) break;
+		if (floorAhead?.name === "bedrock") break;
+		if (
+			floorAhead &&
+			floorAhead.name !== "air" &&
+			floorAhead.name !== "cave_air"
+		) {
+			if (isTarget(floorAhead.name)) return floorAhead;
+			try {
+				await bot.lookAt(offset(floorAhead.position, 0.5, 0.5, 0.5));
+				await safeDig(bot, floorAhead);
+			} catch {}
+		}
+
+		// Walk forward + drop down
+		bot.setControlState("forward", true);
+		await sleep(250);
+		bot.setControlState("forward", false);
+		await sleep(150);
+
+		// Check adjacent blocks for ore
+		for (const [dx, dy, dz] of [
+			[1, 0, 0],
+			[-1, 0, 0],
+			[0, 1, 0],
+			[0, -1, 0],
+			[0, 0, 1],
+			[0, 0, -1],
+		] as const) {
+			const adj = bot.blockAt(
+				vec3(
+					Math.floor(bot.entity.position.x) + dx,
+					Math.floor(bot.entity.position.y) + dy,
+					Math.floor(bot.entity.position.z) + dz,
+				),
+			) as Block | null;
+			if (adj && isTarget(adj.name)) return adj;
+		}
+
+		// Check memory — blockSeen fires as new chunks load
+		const newRem = getRememberedResource(bot, blockType);
+		if (newRem) {
+			const remBlock = bot.blockAt(vec3(newRem.x, newRem.y, newRem.z));
+			if (remBlock && isTarget(remBlock.name)) {
+				logEvent(
+					"mine",
+					"found_staircase",
+					`${blockType} at ${newRem.x},${newRem.y},${newRem.z}`,
+				);
+				return remBlock;
+			}
+			forgetResource(bot, blockType, newRem);
+		}
+	}
+
+	// Climb back to start
+	if (bot.entity?.isInWater) await escapeWater(bot);
+	try {
+		await goTo(bot, startPos, { range: 3, timeout: 15000 });
+	} catch {}
+
+	return null;
 };
