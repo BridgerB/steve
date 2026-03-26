@@ -40,53 +40,85 @@ const PORT = parseInt(process.env.MC_PORT ?? "25565", 10);
 const USERNAME = process.env.MC_USERNAME ?? "McpBot";
 const VERSION = process.env.MC_VERSION ?? "1.21.11";
 
-// ── Bot lifecycle ──
+// ── Multi-bot lifecycle ──
 
-let bot: Bot | null = null;
-let botReady = false;
+const bots = new Map<string, Bot>();
+let activeBotName: string | null = null;
 
-const connectBot = async (): Promise<Bot> => {
-	const maxRetries = 30; // retry for up to ~60s
+const WATCH_BLOCKS = [
+	"oak_log",
+	"birch_log",
+	"spruce_log",
+	"jungle_log",
+	"acacia_log",
+	"dark_oak_log",
+	"coal_ore",
+	"deepslate_coal_ore",
+	"iron_ore",
+	"deepslate_iron_ore",
+];
+
+const setupBot = (b: Bot, name: string) => {
+	// Auto-op for interactive testing
+	b.chat(`/op ${name}`);
+
+	// Passive memory
+	for (const block of WATCH_BLOCKS) b.watchBlocks.add(block);
+	b.on("blockSeen", (n: string, pos: { x: number; y: number; z: number }) => {
+		rememberResource(b, n, pos);
+	});
+
+	b.on("end", () => {
+		log(`[${name}] disconnected`);
+		bots.delete(name);
+		if (activeBotName === name) activeBotName = null;
+	});
+	b.on("kicked", (reason) => {
+		log(`[${name}] kicked: ${reason}`);
+		bots.delete(name);
+		if (activeBotName === name) activeBotName = null;
+	});
+	b.on("error", (err) => {
+		if (!err.message.includes("waypoint"))
+			log(`[${name}] error: ${err.message}`);
+	});
+};
+
+const spawnBot = async (name: string): Promise<Bot> => {
+	if (bots.has(name)) return bots.get(name) as Bot;
+
+	const maxRetries = 30;
 	for (let attempt = 1; attempt <= maxRetries; attempt++) {
 		try {
 			const b = await new Promise<Bot>((resolve, reject) => {
-				log(
-					`Connecting to ${HOST}:${PORT} as ${USERNAME} (attempt ${attempt})...`,
-				);
+				log(`Connecting ${name} to ${HOST}:${PORT} (attempt ${attempt})...`);
 				const b = createMcBot({
 					host: HOST,
 					port: PORT,
-					username: USERNAME,
+					username: name,
 					version: VERSION,
 					auth: "offline",
 				});
 
 				let settled = false;
 				b.on("error", (err) => {
-					if (err.message.includes("waypoint")) return; // known typecraft noise
+					if (err.message.includes("waypoint")) return;
 					if (!settled) {
 						settled = true;
 						reject(err);
-					} else log("Bot error:", err.message);
+					}
 				});
-
 				b.once("spawn", async () => {
 					settled = true;
 					await b.waitForChunksToLoad();
 					resolve(b);
 				});
-
 				b.on("end", () => {
 					if (!settled) {
 						settled = true;
 						reject(new Error("disconnected"));
-					} else {
-						log("Bot disconnected");
-						botReady = false;
-						bot = null;
 					}
 				});
-
 				setTimeout(() => {
 					if (!settled) {
 						settled = true;
@@ -97,62 +129,28 @@ const connectBot = async (): Promise<Bot> => {
 
 			const p = b.entity.position;
 			log(
-				`Bot ready at ${Math.floor(p.x)}, ${Math.floor(p.y)}, ${Math.floor(
-					p.z,
-				)}`,
+				`[${name}] ready at ${Math.floor(p.x)}, ${Math.floor(p.y)}, ${Math.floor(p.z)}`,
 			);
-
-			// Auto-op for interactive testing (/give, /tp, etc.)
-			b.chat(`/op ${USERNAME}`);
-
-			// Passive memory — same setup as main.ts
-			for (const name of [
-				"oak_log",
-				"birch_log",
-				"spruce_log",
-				"jungle_log",
-				"acacia_log",
-				"dark_oak_log",
-				"coal_ore",
-				"deepslate_coal_ore",
-				"iron_ore",
-				"deepslate_iron_ore",
-			]) {
-				b.watchBlocks.add(name);
-			}
-			b.on(
-				"blockSeen",
-				(name: string, pos: { x: number; y: number; z: number }) => {
-					rememberResource(b, name, pos);
-				},
-			);
-
-			b.on("kicked", (reason) => {
-				log("Bot kicked:", reason);
-				botReady = false;
-				bot = null;
-			});
-
-			bot = b;
-			botReady = true;
+			setupBot(b, name);
+			bots.set(name, b);
+			if (!activeBotName) activeBotName = name;
 			return b;
 		} catch (err) {
 			log(
-				`Attempt ${attempt} failed:`,
-				err instanceof Error ? err.message : err,
+				`[${name}] attempt ${attempt} failed: ${err instanceof Error ? err.message : err}`,
 			);
 			if (attempt < maxRetries) await new Promise((r) => setTimeout(r, 2000));
 		}
 	}
-	throw new Error(`Failed to connect after ${maxRetries} attempts`);
+	throw new Error(`Failed to connect ${name} after ${maxRetries} attempts`);
 };
 
 const requireBot = async (): Promise<Bot> => {
-	if (!bot || !botReady) {
-		log("Bot not connected — auto-reconnecting...");
-		return await connectBot();
-	}
-	return bot;
+	if (activeBotName && bots.has(activeBotName))
+		return bots.get(activeBotName) as Bot;
+	// Auto-spawn default bot
+	const name = USERNAME;
+	return await spawnBot(name);
 };
 
 // ── MCP Server ──
@@ -170,6 +168,128 @@ server.tool(
 		return {
 			content: [
 				{ type: "text" as const, text: JSON.stringify(state, null, 2) },
+			],
+		};
+	},
+);
+
+// ── Bot management tools ──
+
+server.tool(
+	"spawn",
+	"Spawn a new bot with a given name. Optionally teleport it to coordinates.",
+	{
+		name: z.string().describe("Bot username (e.g. 'Steve0', 'DebugBot')"),
+		x: z
+			.number()
+			.optional()
+			.describe("X coordinate to teleport to after spawn"),
+		y: z.number().optional().describe("Y coordinate"),
+		z: z.number().optional().describe("Z coordinate"),
+	},
+	async ({ name, x, y, z: zCoord }) => {
+		const b = await spawnBot(name);
+		activeBotName = name;
+		if (x != null && y != null && zCoord != null) {
+			b.chat(`/tp ${name} ${x} ${y} ${zCoord}`);
+			await new Promise((r) => setTimeout(r, 1000));
+		}
+		const pos = b.entity.position;
+		return {
+			content: [
+				{
+					type: "text" as const,
+					text: JSON.stringify(
+						{
+							spawned: name,
+							active: activeBotName,
+							position: {
+								x: +pos.x.toFixed(0),
+								y: +pos.y.toFixed(0),
+								z: +pos.z.toFixed(0),
+							},
+							totalBots: bots.size,
+						},
+						null,
+						2,
+					),
+				},
+			],
+		};
+	},
+);
+
+server.tool(
+	"select",
+	"Switch the active bot. All subsequent tool calls will use this bot.",
+	{
+		name: z.string().describe("Bot name to switch to"),
+	},
+	async ({ name }) => {
+		if (!bots.has(name)) {
+			const available = [...bots.keys()];
+			return {
+				content: [
+					{
+						type: "text" as const,
+						text: JSON.stringify(
+							{ error: `No bot named '${name}'`, available },
+							null,
+							2,
+						),
+					},
+				],
+				isError: true,
+			};
+		}
+		activeBotName = name;
+		const b = bots.get(name) as Bot;
+		const pos = b.entity.position;
+		return {
+			content: [
+				{
+					type: "text" as const,
+					text: JSON.stringify(
+						{
+							active: name,
+							position: {
+								x: +pos.x.toFixed(0),
+								y: +pos.y.toFixed(0),
+								z: +pos.z.toFixed(0),
+							},
+							health: b.health,
+						},
+						null,
+						2,
+					),
+				},
+			],
+		};
+	},
+);
+
+server.tool(
+	"bots",
+	"List all connected bots with positions and health.",
+	{},
+	async () => {
+		const list = [...bots.entries()].map(([name, b]) => ({
+			name,
+			active: name === activeBotName,
+			position: {
+				x: +b.entity.position.x.toFixed(0),
+				y: +b.entity.position.y.toFixed(0),
+				z: +b.entity.position.z.toFixed(0),
+			},
+			health: b.health,
+			heldItem: b.heldItem?.name ?? "nothing",
+		}));
+		return {
+			content: [
+				{
+					type: "text" as const,
+					text: JSON.stringify({ active: activeBotName, bots: list }, null, 2),
+				},
 			],
 		};
 	},
@@ -1069,9 +1189,9 @@ server.tool(
 
 const main = async () => {
 	try {
-		await connectBot();
+		await spawnBot(USERNAME);
 	} catch (err) {
-		log("Failed to connect bot:", err);
+		log("Failed to connect default bot:", err);
 	}
 
 	const transport = new StdioServerTransport();
