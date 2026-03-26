@@ -42,6 +42,8 @@ export type Inventory = Readonly<{
 	flintAndSteel: number;
 	gravel: number;
 	flint: number;
+	buckets: number;
+	waterBuckets: number;
 }>;
 
 export type Equipment = Readonly<{

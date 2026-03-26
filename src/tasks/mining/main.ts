@@ -5,6 +5,7 @@
 import type { Bot } from "typecraft";
 import { distance, offset, vec3 } from "typecraft";
 import {
+	escapeWater,
 	exploreRandom,
 	findBlock,
 	forgetResource,
@@ -44,10 +45,21 @@ export const mineBlock = async (
 	let mined = 0;
 	const deadline = Date.now() + 110_000; // Return cleanly before 120s step timeout
 
-	// Equip best pickaxe before mining — find it and select its hotbar slot
-	const pickSlot = bot.inventory.slots.findIndex((s) =>
-		s?.name.includes("pickaxe"),
-	);
+	// Equip best pickaxe before mining — prioritize higher tier
+	const pickTier = [
+		"diamond_pickaxe",
+		"iron_pickaxe",
+		"stone_pickaxe",
+		"wooden_pickaxe",
+	];
+	let pickSlot = -1;
+	for (const tier of pickTier) {
+		const idx = bot.inventory.slots.findIndex((s) => s?.name === tier);
+		if (idx >= 0) {
+			pickSlot = idx;
+			break;
+		}
+	}
 	if (pickSlot >= 36 && pickSlot <= 44) {
 		bot.setQuickBarSlot(pickSlot - 36);
 	} else if (pickSlot >= 0) {
@@ -151,6 +163,36 @@ export const mineBlock = async (
 	logEvent("mine", "direction", `dx=${dirX} dz=${dirZ} ahead=${bestCount}`);
 
 	while (mined < targetCount && Date.now() < deadline) {
+		// Re-equip pickaxe if it got unset (crafting, window ops can clear held item)
+		if (!bot.heldItem?.name.includes("pickaxe")) {
+			for (const tier of pickTier) {
+				const idx = bot.inventory.slots.findIndex((s) => s?.name === tier);
+				if (idx >= 36 && idx <= 44) {
+					bot.setQuickBarSlot(idx - 36);
+					break;
+				}
+				if (idx >= 0) {
+					try {
+						await bot.clickWindow(idx, 0, 0);
+						await bot.clickWindow(36, 0, 0);
+						bot.setQuickBarSlot(0);
+					} catch {}
+					break;
+				}
+			}
+		}
+
+		// Health check — abort if drowning or low, forget current target
+		if ((bot.health ?? 20) < 6) {
+			const rem = getRememberedResource(bot, blockType);
+			if (rem) forgetResource(bot, blockType, rem);
+			if (bot.entity?.isInWater) await escapeWater(bot);
+			return {
+				success: false,
+				message: `Aborted mining — low health (${bot.health})`,
+			};
+		}
+
 		// Mine the block at feet level in our direction, or below feet
 		const py = Math.floor(bot.entity.position.y);
 
@@ -248,10 +290,12 @@ export const mineBlock = async (
 			logEvent("mine", "mined", `${blockType} ${mined}/${targetCount}`);
 			await sleep(100);
 
-			// Step forward into the cleared space
-			bot.setControlState("forward", true);
+			// Walk to the mined block to collect drops — bot is already facing it from lookAt
 			await sleep(200);
+			bot.setControlState("forward", true);
+			await sleep(1000);
 			bot.setControlState("forward", false);
+			await sleep(1000);
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : "unknown";
 			logEvent("mine", "fail", msg);

@@ -47,6 +47,8 @@ export const createInitialState = (): GameState => ({
 		flintAndSteel: 0,
 		gravel: 0,
 		flint: 0,
+		buckets: 0,
+		waterBuckets: 0,
 	},
 	equipment: {
 		pickaxe: "none",
@@ -248,6 +250,11 @@ export const syncFromBot = (bot: Bot): GameState => {
 			flintAndSteel: countItem("flint_and_steel"),
 			gravel: countItem("gravel"),
 			flint: countItem("flint"),
+			buckets:
+				countItem("bucket") -
+				countItem("water_bucket") -
+				countItem("lava_bucket"),
+			waterBuckets: countItem("water_bucket"),
 		},
 		equipment: {
 			pickaxe: getPickaxe(),

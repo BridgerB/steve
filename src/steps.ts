@@ -133,10 +133,10 @@ export const steps: readonly Step[] = [
 		name: "Mine Coal",
 		priority: 10,
 		canExecute: (s) => getPickaxeTier(s.equipment.pickaxe) >= 1,
-		isComplete: (s) => s.inventory.coal >= 8,
+		isComplete: (s) => s.inventory.coal >= 10,
 		execute: async (bot, _state) => {
 			const { mineBlock } = await import("./tasks/mining/main.ts");
-			return mineBlock(bot, "coal_ore", 8);
+			return mineBlock(bot, "coal_ore", 10);
 		},
 	},
 
@@ -145,10 +145,10 @@ export const steps: readonly Step[] = [
 		name: "Mine Iron Ore",
 		priority: 11,
 		canExecute: (s) => getPickaxeTier(s.equipment.pickaxe) >= 2,
-		isComplete: (s) => s.inventory.ironOre >= 8 || s.inventory.ironIngots >= 8,
+		isComplete: (s) => s.inventory.ironOre + s.inventory.ironIngots >= 9,
 		execute: async (bot, _state) => {
 			const { mineBlock } = await import("./tasks/mining/main.ts");
-			return mineBlock(bot, "iron_ore", 8);
+			return mineBlock(bot, "iron_ore", 9);
 		},
 	},
 
@@ -159,11 +159,11 @@ export const steps: readonly Step[] = [
 		canExecute: (s) =>
 			s.equipment.hasFurnace &&
 			s.inventory.ironOre >= 3 &&
-			s.inventory.coal >= 2,
-		isComplete: (s) => s.inventory.ironIngots >= 3,
+			(s.inventory.coal >= 2 || s.inventory.planks >= 4),
+		isComplete: (s) => s.inventory.ironIngots >= 9,
 		execute: async (bot, _state) => {
 			const { smeltItems } = await import("./tasks/smelt/main.ts");
-			return smeltItems(bot, "raw_iron", 8);
+			return smeltItems(bot, "raw_iron", 9);
 		},
 	},
 
@@ -181,24 +181,28 @@ export const steps: readonly Step[] = [
 
 	{
 		id: "craft_bucket",
-		name: "Craft Bucket",
+		name: "Craft Buckets",
 		priority: 14,
 		canExecute: (s) => s.inventory.ironIngots >= 3,
-		isComplete: (s) => s.equipment.hasBucket,
+		isComplete: (s) => s.inventory.buckets + s.inventory.waterBuckets >= 2,
 		execute: async (bot, _state) => {
 			const { craftBucket } = await import("./tasks/craft/main.ts");
+			const r1 = await craftBucket(bot);
+			if (!r1.success) return r1;
 			return craftBucket(bot);
 		},
 	},
 
 	{
-		id: "get_water_bucket",
-		name: "Fill Water Bucket",
+		id: "get_water_buckets",
+		name: "Fill Water Buckets",
 		priority: 15,
-		canExecute: (s) => s.equipment.hasBucket && !s.equipment.hasWaterBucket,
-		isComplete: (s) => s.equipment.hasWaterBucket,
+		canExecute: (s) => s.inventory.buckets >= 1,
+		isComplete: (s) => s.inventory.waterBuckets >= 2,
 		execute: async (bot, _state) => {
 			const { fillWaterBucket } = await import("./tasks/bucket/main.ts");
+			const r1 = await fillWaterBucket(bot);
+			if (!r1.success) return r1;
 			return fillWaterBucket(bot);
 		},
 	},

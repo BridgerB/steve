@@ -130,12 +130,20 @@ export const goTo = async (
 ): Promise<boolean> => {
 	const { range = 2, timeout = 10000 } = options;
 
+	const dist = distance(bot.entity.position, pos);
+	if (dist <= range) return true;
+
 	const pf = getPathfinder(bot);
 	const goal =
 		range === 0
 			? createGoalBlock(pos.x, pos.y, pos.z)
 			: createGoalNear(pos.x, pos.y, pos.z, range);
 
+	const startPos = vec3(
+		bot.entity.position.x,
+		bot.entity.position.y,
+		bot.entity.position.z,
+	);
 	try {
 		await Promise.race([
 			pf.goto(goal),
@@ -147,7 +155,23 @@ export const goTo = async (
 			),
 		]);
 		return true;
-	} catch (_err) {
+	} catch {
+		const moved = distance(startPos, bot.entity.position);
+		if (distance(bot.entity.position, pos) <= range + 1) return true;
+
+		// Pathfinder failed — fallback to raw walk if we didn't move much
+		if (moved < 2) {
+			await bot.lookAt(pos);
+			bot.setControlState("forward", true);
+			bot.setControlState("sprint", true);
+			bot.setControlState("jump", true);
+			const walkTime = Math.min(dist * 200, timeout * 0.6, 5000);
+			await sleep(walkTime);
+			bot.setControlState("forward", false);
+			bot.setControlState("sprint", false);
+			bot.setControlState("jump", false);
+			await sleep(200);
+		}
 		return distance(bot.entity.position, pos) <= range + 1;
 	}
 };
@@ -920,9 +944,10 @@ export const craftItem = async (
 
 	try {
 		await bot.craft(recipe, count, craftingTable ?? undefined);
+		await sleep(500); // server sync — prevents over-consumption on rapid crafts
 		if (bot.currentWindow) {
 			bot.closeWindow(bot.currentWindow);
-			await sleep(1000);
+			await sleep(500);
 		}
 		return { success: true, message: `Crafted ${count}x ${itemName}` };
 	} catch (err) {

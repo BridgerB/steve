@@ -81,12 +81,31 @@ const runTick = async (bot: Bot): Promise<void> => {
 		}
 	}
 
+	// Don't start steps if health is critically low — wait for regen
+	if ((bot.health ?? 20) < 6) {
+		logEvent("tick", "low_health_wait", `${bot.health}/20`);
+		return;
+	}
+
 	const phase = getPhase(state);
 	const progress = getProgress(state);
 	const nextStep = getNextStep(state, completedSteps);
 
+	// Deadlock recovery — no executable step, force re-gather
+	if (!nextStep && phase !== "VICTORY") {
+		logEvent("step", "deadlock", "no executable step — forcing gather_wood");
+		for (const id of [
+			"gather_wood",
+			"craft_planks",
+			"craft_crafting_table",
+			"craft_sticks",
+			"craft_wooden_pickaxe",
+		])
+			completedSteps.delete(id);
+	}
+
 	if (nextStep?.id !== currentStep?.id) {
-		currentStep = nextStep;
+		currentStep = nextStep ?? getNextStep(state, completedSteps);
 		logPhase(phase, currentStep, progress);
 	}
 
@@ -429,7 +448,7 @@ const runRace = async (count: number, timeoutMs: number) => {
 		}
 	};
 
-	const GOAL = "iron_ingot";
+	const GOAL = "water_bucket";
 
 	const MILESTONES = [
 		{ name: "wood", query: "item_name LIKE '%_log'" },
@@ -439,6 +458,9 @@ const runRace = async (count: number, timeoutMs: number) => {
 		{ name: "coal", query: "item_name = 'coal'" },
 		{ name: "raw iron", query: "item_name = 'raw_iron'" },
 		{ name: "iron ingot", query: "item_name = 'iron_ingot'" },
+		{ name: "iron pickaxe", query: "item_name = 'iron_pickaxe'" },
+		{ name: "bucket", query: "item_name = 'bucket'" },
+		{ name: "water bucket", query: "item_name = 'water_bucket'" },
 	];
 	const milestonesHit = new Set<string>();
 	const raceStart = Date.now();
@@ -467,12 +489,13 @@ const runRace = async (count: number, timeoutMs: number) => {
 		const db = getRaceDb();
 		if (!db) return false;
 		try {
+			// For water_bucket goal, need 2
 			const inv = db
 				.prepare(
-					"SELECT COUNT(*) as c FROM inventory_snapshots WHERE bot_id = ? AND item_name LIKE ?",
+					"SELECT SUM(count) as c FROM inventory_snapshots WHERE bot_id = ? AND item_name = ?",
 				)
-				.get(botId, `%${GOAL}%`) as { c: number };
-			if (inv.c > 0) return true;
+				.get(botId, GOAL) as { c: number | null };
+			if ((inv.c ?? 0) >= 2) return true;
 			const evt = db
 				.prepare(
 					"SELECT COUNT(*) as c FROM events WHERE bot_id = ? AND detail LIKE ?",
