@@ -40,6 +40,24 @@ const PORT = parseInt(process.env.MC_PORT ?? "25565", 10);
 const USERNAME = process.env.MC_USERNAME ?? "McpBot";
 const VERSION = process.env.MC_VERSION ?? "1.21.11";
 
+// ── RCON for server commands (op, tp, etc.) ──
+
+const RCON_PORT = parseInt(process.env.MC_RCON_PORT ?? "25575", 10);
+const RCON_PASS = process.env.MC_RCON_PASS ?? "minecraft-test-rcon";
+
+let rcon: ((cmd: string) => Promise<string>) | null = null;
+const getRcon = async () => {
+	if (rcon) return rcon;
+	try {
+		const { connect } = await import("./lib/rcon.ts");
+		const client = await connect({ port: RCON_PORT, password: RCON_PASS });
+		rcon = (cmd: string) => client.command(cmd);
+		return rcon;
+	} catch {
+		return null;
+	}
+};
+
 // ── Multi-bot lifecycle ──
 
 const bots = new Map<string, Bot>();
@@ -59,8 +77,10 @@ const WATCH_BLOCKS = [
 ];
 
 const setupBot = (b: Bot, name: string) => {
-	// Auto-op for interactive testing
-	b.chat(`/op ${name}`);
+	// Auto-op via RCON (bot.chat can't op itself)
+	getRcon()
+		.then((r) => r?.(`op ${name}`))
+		.catch(() => {});
 
 	// Passive memory
 	for (const block of WATCH_BLOCKS) b.watchBlocks.add(block);
