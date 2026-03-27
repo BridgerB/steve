@@ -184,6 +184,16 @@ export const syncFromBot = (bot: Bot): GameState => {
 		return total;
 	};
 
+	const countExact = (name: string): number => {
+		let total = 0;
+		for (const item of allSlots) {
+			if (item && item.count > 0 && itemName(item) === name) {
+				total += item.count;
+			}
+		}
+		return total;
+	};
+
 	const hasItem = (name: string): boolean =>
 		allSlots.some(
 			(item) => item && item.count > 0 && itemName(item).includes(name),
@@ -240,7 +250,15 @@ export const syncFromBot = (bot: Bot): GameState => {
 			blazeRods: countItem("blaze_rod"),
 			enderPearls: countItem("ender_pearl"),
 			eyesOfEnder: countItem("ender_eye"),
-			food: countItem("cooked_") + countItem("bread") + countItem("apple"),
+			food:
+				countItem("cooked_") +
+				countExact("bread") +
+				countExact("apple") +
+				countExact("beef") +
+				countExact("porkchop") +
+				countExact("mutton") +
+				countExact("chicken") +
+				countExact("rabbit"),
 			arrows: countItem("arrow"),
 			blocks:
 				countItem("cobblestone") + countItem("dirt") + countItem("netherrack"),

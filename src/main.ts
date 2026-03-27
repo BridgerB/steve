@@ -634,6 +634,9 @@ ${Array.from(
 	gridServer.listen(3000, () =>
 		console.log(`[grid] http://localhost:3000 (${NUM_VIEWERS} viewers)`),
 	);
+	gridServer.on("error", () => {
+		console.log("[grid] port 3000 in use, skipping viewer");
+	});
 
 	const results = await Promise.all(
 		Array.from({ length: count }, (_, i) => runBot(i)),

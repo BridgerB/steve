@@ -5,6 +5,7 @@
 import type { Bot, Recipe } from "typecraft";
 import { windowItems, worldSetBlockStateId } from "typecraft";
 import {
+	countItems,
 	craftItem,
 	failure,
 	findItem,
@@ -54,7 +55,10 @@ export const craftCraftingTable = (bot: Bot): Promise<StepResult> => {
 	return craftItem(bot, "crafting_table", 1);
 };
 
-export const craftSticks = (bot: Bot): Promise<StepResult> => {
+export const craftSticks = async (bot: Bot): Promise<StepResult> => {
+	// Craft twice to get enough for tools (2 calls = 8 sticks)
+	const r = await craftItem(bot, "stick", 1);
+	if (!r.success) return r;
 	return craftItem(bot, "stick", 1);
 };
 
@@ -65,12 +69,20 @@ export const craftWoodenPickaxe = async (bot: Bot): Promise<StepResult> => {
 };
 
 export const craftStonePickaxe = async (bot: Bot): Promise<StepResult> => {
+	if (countItems(bot, "stick") < 2) {
+		const r = await craftItem(bot, "stick", 1);
+		if (!r.success) return r;
+	}
 	const table = await getCraftingTable(bot);
 	if (!table) return failure("Need crafting table");
 	return craftItem(bot, "stone_pickaxe", 1, table);
 };
 
 export const craftStoneSword = async (bot: Bot): Promise<StepResult> => {
+	if (countItems(bot, "stick") < 1) {
+		const r = await craftItem(bot, "stick", 1);
+		if (!r.success) return r;
+	}
 	const table = await getCraftingTable(bot);
 	if (!table) return failure("Need crafting table");
 	return craftItem(bot, "stone_sword", 1, table);

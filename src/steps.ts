@@ -84,10 +84,10 @@ export const steps: readonly Step[] = [
 		name: "Mine Cobblestone",
 		priority: 6,
 		canExecute: (s) => getPickaxeTier(s.equipment.pickaxe) >= 1,
-		isComplete: (s) => s.inventory.cobblestone >= 32,
+		isComplete: (s) => s.inventory.cobblestone >= 16,
 		execute: async (bot, _state) => {
 			const { mineBlock } = await import("./tasks/mining/main.ts");
-			return mineBlock(bot, "stone", 32);
+			return mineBlock(bot, "stone", 16);
 		},
 	},
 

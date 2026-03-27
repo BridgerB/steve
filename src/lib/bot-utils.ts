@@ -755,7 +755,8 @@ export const getCraftingTable = async (bot: Bot): Promise<Block | null> => {
 		const candidate = getBlock(bot, offset(bot.entity.position, dx, -1, dz));
 		if (!candidate || !isSolidGround(candidate.name)) continue;
 		const above = getBlock(bot, offset(candidate.position, 0, 1, 0));
-		if (!above || !isSpaceClear(above.name)) continue;
+		// Treat null (unloaded) as clear — if we can't see it, assume air
+		if (above && !isSpaceClear(above.name)) continue;
 		ground = candidate;
 		break;
 	}

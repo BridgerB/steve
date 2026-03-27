@@ -3,19 +3,87 @@
  */
 
 import type { Bot, Entity } from "typecraft";
-import { offset } from "typecraft";
+import { distance, offset } from "typecraft";
 import {
+	countItems,
 	equipItem,
-	findEntitiesByNames,
 	findNearestEntity,
-	moveCloser,
-	searchForEntities,
+	goTo,
 	sleep,
-	success,
 } from "../../lib/bot-utils.ts";
+import { logEvent } from "../../lib/logger.ts";
 import type { StepResult } from "../../types.ts";
 
 const FOOD_ANIMALS = ["pig", "cow", "sheep", "chicken", "rabbit"];
+
+const countFood = (bot: Bot): number =>
+	countItems(bot, "cooked_") +
+	countItems(bot, "beef") +
+	countItems(bot, "porkchop") +
+	countItems(bot, "mutton") +
+	countItems(bot, "chicken") +
+	countItems(bot, "rabbit") +
+	countItems(bot, "bread") +
+	countItems(bot, "apple");
+
+const isNearbyAnimal = (bot: Bot, blacklist: Set<number>) => (e: Entity) =>
+	!!e.name &&
+	FOOD_ANIMALS.includes(e.name) &&
+	!blacklist.has(e.id) &&
+	distance(bot.entity.position, e.position) < 128;
+
+/**
+ * Chase and kill a single animal, returning true if it died
+ */
+const killAnimal = async (bot: Bot, animal: Entity): Promise<boolean> => {
+	for (let i = 0; i < 10; i++) {
+		if (!bot.entities[animal.id]) return true;
+
+		const dist = distance(bot.entity.position, animal.position);
+
+		// Sprint toward animal
+		if (dist > 3) {
+			await bot.lookAt(animal.position);
+			bot.setControlState("forward", true);
+			bot.setControlState("sprint", true);
+			const chaseStart = Date.now();
+			while (
+				bot.entities[animal.id] &&
+				distance(bot.entity.position, animal.position) > 2.5 &&
+				Date.now() - chaseStart < 3000
+			) {
+				await bot.lookAt(animal.position);
+				await sleep(50);
+			}
+			bot.setControlState("forward", false);
+			bot.setControlState("sprint", false);
+		}
+
+		if (!bot.entities[animal.id]) return true;
+
+		// Attack — server validates real distance
+		const prePos = { ...animal.position };
+		await bot.lookAt(offset(animal.position, 0, animal.height * 0.5, 0));
+		bot.attack(animal);
+		await sleep(600);
+
+		// Walk forward to collect drops if dead
+		if (!bot.entities[animal.id]) {
+			bot.setControlState("forward", true);
+			await sleep(500);
+			bot.setControlState("forward", false);
+			return true;
+		}
+
+		// If entity didn't move after 3 attacks, hits aren't landing
+		const moved =
+			Math.abs(animal.position.x - prePos.x) +
+			Math.abs(animal.position.z - prePos.z);
+		if (i >= 3 && moved < 0.1) return false;
+	}
+
+	return !bot.entities[animal.id];
+};
 
 /**
  * Find and kill animals for food
@@ -24,62 +92,82 @@ export const gatherFood = async (
 	bot: Bot,
 	targetCount: number,
 ): Promise<StepResult> => {
-	let foodGathered = 0;
-
-	// Get sword ready
 	await equipItem(bot, "sword", "hand");
+	const startFood = countFood(bot);
+	let kills = 0;
+	let searchAttempts = 0;
+	const blacklist = new Set<number>();
 
-	while (foodGathered < targetCount) {
-		// Find nearest food animal
-		const animals = findEntitiesByNames(bot, FOOD_ANIMALS);
+	while (
+		countFood(bot) < targetCount &&
+		searchAttempts < 25 &&
+		(bot.health ?? 20) > 4
+	) {
+		const animal = findNearestEntity(bot, isNearbyAnimal(bot, blacklist));
 
-		if (animals.length === 0) {
-			// No animals nearby - try moving around
-			await searchForEntities(bot, 2000);
-
-			// Check again
-			const newAnimals = findEntitiesByNames(bot, FOOD_ANIMALS);
-			if (newAnimals.length === 0) {
-				return {
-					success: foodGathered > 0,
-					message: `Found ${foodGathered} food, no more animals nearby`,
+		if (!animal) {
+			searchAttempts++;
+			// Head toward any visible animal at any distance
+			const farAnimal = findNearestEntity(
+				bot,
+				(e) =>
+					!!e.name && FOOD_ANIMALS.includes(e.name) && !blacklist.has(e.id),
+			);
+			if (farAnimal) {
+				logEvent(
+					"food",
+					"searching",
+					`attempt ${searchAttempts}, heading to ${farAnimal.name} at ${distance(bot.entity.position, farAnimal.position).toFixed(0)}`,
+				);
+				await goTo(bot, farAnimal.position, {
+					range: 10,
+					timeout: 20000,
+				});
+			} else {
+				logEvent("food", "searching", `attempt ${searchAttempts}, exploring`);
+				const angle = searchAttempts * 1.2;
+				const exploreDist = 40 + searchAttempts * 15;
+				const target = {
+					x: bot.entity.position.x + Math.cos(angle) * exploreDist,
+					y: bot.entity.position.y,
+					z: bot.entity.position.z + Math.sin(angle) * exploreDist,
 				};
+				await goTo(bot, target as { x: number; y: number; z: number }, {
+					range: 5,
+					timeout: 15000,
+				});
 			}
+			continue;
 		}
 
-		// Get closest animal
-		const animal = findNearestEntity(
-			bot,
-			(e) => !!e.name && FOOD_ANIMALS.includes(e.name),
-		);
+		searchAttempts = 0;
+		const dist = distance(bot.entity.position, animal.position);
 
-		if (!animal) continue;
+		if (dist > 8) {
+			await goTo(bot, animal.position, { range: 3, timeout: 10000 });
+		}
 
-		try {
-			// Move towards animal
-			await moveCloser(bot, animal.position, {
-				maxDistance: 3,
-				sprint: true,
-				maxWalkTime: 2000,
-			});
+		await equipItem(bot, "sword", "hand");
 
-			// Attack the animal
-			await bot.lookAt(
-				offset(animal.position, 0, (animal as Entity).height * 0.5, 0),
-			);
-			await bot.attack(animal as Entity);
-
-			// Wait for death and item drops
+		const killed = await killAnimal(bot, animal);
+		if (killed) {
+			kills++;
 			await sleep(500);
-
-			// Count as food gathered (simplified - assumes drops)
-			foodGathered++;
-			console.log(`  Killed ${animal.name} (${foodGathered}/${targetCount})`);
-		} catch {
-			// Animal might have moved or died
-			console.log(`  Lost track of ${animal.name}`);
+			logEvent(
+				"food",
+				"kill",
+				`${animal.name} #${kills} (food: ${countFood(bot)})`,
+			);
+		} else {
+			blacklist.add(animal.id);
+			logEvent("food", "gave_up", `${animal.name} after 10 hits`);
 		}
 	}
 
-	return success(`Gathered food from ${foodGathered} animals`);
+	const totalFood = countFood(bot);
+	const gained = totalFood - startFood;
+	return {
+		success: totalFood >= targetCount || gained > 0,
+		message: `Killed ${kills} animals, food: ${totalFood}/${targetCount}`,
+	};
 };
