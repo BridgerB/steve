@@ -368,6 +368,13 @@
               ${pkgs.nodejs_25}/bin/npm install
             fi
 
+            # Verify typecraft data is generated
+            if [ ! -f ../typecraft/src/data/packets-raw.json ]; then
+              echo "Error: typecraft data not generated."
+              echo "Run: cd ~/Developer/typecraft && nix run .#datagen"
+              exit 1
+            fi
+
             # Verify server is running
             if ! ${pkgs.netcat}/bin/nc -z localhost 25565 2>/dev/null; then
               echo "Error: MC server not running on localhost:25565"
