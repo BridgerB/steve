@@ -179,8 +179,7 @@
             echo "RCON available at: localhost:${rconPort}"
             echo ""
 
-            MEM=''${MC_MEMORY:-4G}
-            exec ${pkgs.jre}/bin/java -Xmx$MEM -Xms$MEM ${jvmOpts} -jar ${serverJar} nogui
+            exec ${pkgs.jre}/bin/java -Xmx18G -Xms1G ${jvmOpts} -jar ${serverJar} nogui
           '';
 
           runSteve = pkgs.writeShellScriptBin "run-steve" ''
