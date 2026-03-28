@@ -117,7 +117,7 @@
           }
           tab name="rcon" cwd="/home/bridger/Developer/steve" {
             pane command="bash" {
-              args "-c" "echo 'Waiting for MC server...' && sleep 10 && nix run .#rcon"
+              args "-c" "echo 'Waiting for RCON...' && until nc -z localhost 25575 2>/dev/null; do sleep 2; done && nix run .#rcon"
             }
           }
           tab name="steve" cwd="/home/bridger/Developer/steve" {
