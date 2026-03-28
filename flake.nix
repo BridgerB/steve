@@ -73,7 +73,7 @@
             view-distance=10
             simulation-distance=6
             server-port=25565
-            level-seed=1
+            level-seed=typecraft
             motd=Steve Bot Testing Server
             white-list=false
             spawn-monsters=true
@@ -162,9 +162,15 @@
             # Load .env if it exists (for MC_MEMORY etc.)
             if [ -f .env ]; then set -a; source .env; set +a; fi
 
+            # Kill any running server
+            ${pkgs.procps}/bin/pkill -f 'server.jar nogui' 2>/dev/null && echo 'Stopped old MC server' && sleep 3 || true
+
             # Create and enter server directory
             mkdir -p data/server
             cd data/server
+
+            # Fresh world every time
+            rm -rf world
 
             # Setup eula
             echo "eula=true" > eula.txt

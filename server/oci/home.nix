@@ -12,7 +12,6 @@
     unzip
     vim
     htop
-    btop
     lazygit
     delta
     sqlite
@@ -23,12 +22,6 @@
     text = ''
       #!/usr/bin/env bash
       cd ~/Developer/steve
-      pkill -f 'server.jar nogui' 2>/dev/null && echo 'Stopped old MC server' && sleep 3 || true
-      if [ -d data/world ]; then
-        rm -rf data/server/world
-        cp -r data/world data/server/world
-        echo 'World reset from backup'
-      fi
       exec env MC_MEMORY=8G nix run .#server
     '';
   };
@@ -60,6 +53,16 @@
     '';
   };
 
+  home.file."bin/server-init" = {
+    executable = true;
+    text = ''
+      #!/usr/bin/env bash
+      source ~/.bashrc 2>/dev/null
+      bind '"\e[0n": "~/bin/start-server\n"'
+      printf '\e[5n'
+    '';
+  };
+
   home.file."bin/race-init" = {
     executable = true;
     text = ''
@@ -78,7 +81,28 @@
     claude = "npx @anthropic-ai/claude-code@latest --dangerously-skip-permissions";
   };
 
-  programs.bash.enable = true; # required for home.shellAliases to land in .bashrc
+  programs.btop = {
+    enable = true;
+    settings = {
+      proc_sorting = "memory";
+      proc_tree = true;
+    };
+  };
+
+  programs.bash = {
+    enable = true; # required for home.shellAliases to land in .bashrc
+    initExtra = ''
+      if [[ -z "$ZELLIJ" ]]; then
+        active=$(zellij list-sessions 2>/dev/null | grep -v EXITED | sed 's/\x1B\[[0-9;]*m//g' | awk 'NR==1{print $1}')
+        if [[ -n "$active" ]]; then
+          exec zellij attach "$active"
+        else
+          zellij kill-all-sessions -y 2>/dev/null
+          exec zellij -l steve
+        fi
+      fi
+    '';
+  };
 
   programs.lazygit = {
     enable = true;
@@ -94,7 +118,7 @@
 
   programs.zellij = {
     enable = true;
-    enableBashIntegration = true;
+    enableBashIntegration = false;
     layouts = {
       steve = ''
         layout {
@@ -112,7 +136,7 @@
           }
           tab name="server" cwd="/home/bridger/Developer/steve" {
             pane command="bash" {
-              args "-lc" "~/bin/start-server"
+              args "--init-file" "/home/bridger/bin/server-init"
             }
           }
           tab name="rcon" cwd="/home/bridger/Developer/steve" {
