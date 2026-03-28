@@ -257,7 +257,9 @@ export const gatherWood = async (
 		const target = findClosestLog();
 		if (!target) {
 			// Check memory for remembered log positions
-			const { getRememberedResource } = await import("../../lib/bot-utils.ts");
+			const { getRememberedResource, forgetResource } = await import(
+				"../../lib/bot-utils.ts"
+			);
 			let memTarget: { pos: Vec3; name: string } | null = null;
 			for (const logType of LOG_TYPES) {
 				const remembered = getRememberedResource(bot, logType);
@@ -274,7 +276,19 @@ export const gatherWood = async (
 					`remembered ${memTarget.name} dist=${distance(botPos(), memTarget.pos).toFixed(0)}`,
 				);
 				const reached = await navigateTo(memTarget.pos);
-				if (!reached) unreachable.add(posKey(memTarget.pos));
+				if (!reached) {
+					unreachable.add(posKey(memTarget.pos));
+					forgetResource(bot, memTarget.name, memTarget.pos);
+				} else if (!findClosestLog()) {
+					// Navigated there but block is gone — stale memory
+					unreachable.add(posKey(memTarget.pos));
+					forgetResource(bot, memTarget.name, memTarget.pos);
+					logEvent(
+						"wood",
+						"stale_memory",
+						`${memTarget.name} no longer at remembered position`,
+					);
+				}
 				continue;
 			}
 
