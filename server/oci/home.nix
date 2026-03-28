@@ -25,8 +25,8 @@
       cd ~/Developer/steve
       pkill -f 'server.jar nogui' 2>/dev/null && echo 'Stopped old MC server' && sleep 3 || true
       if [ -d data/world ]; then
-        rm -rf server/world
-        cp -r data/world server/world
+        rm -rf data/server/world
+        cp -r data/world data/server/world
         echo 'World reset from backup'
       fi
       exec env MC_MEMORY=8G nix run .#server
