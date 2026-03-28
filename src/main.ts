@@ -702,7 +702,7 @@ if (isBotMode) {
 	startBot();
 } else {
 	// Orchestrator — parse args, spawn bot(s)
-	const count = parseInt(process.argv[2] ?? "20", 10);
+	const count = parseInt(process.argv[2] ?? "10", 10);
 	const timeout = parseInt(process.argv[3] ?? "600", 10) * 1000;
 
 	console.log("");

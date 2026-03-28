@@ -188,220 +188,6 @@
             exec ${pkgs.jre}/bin/java -Xmx18G -Xms1G ${jvmOpts} -jar ${serverJar} nogui
           '';
 
-          runSteve = pkgs.writeShellScriptBin "run-steve" ''
-            set -euo pipefail
-            cd "$(pwd)"
-
-            # Ensure typecraft is cloned + has deps + datagen
-            if [ ! -d ../typecraft ]; then
-              echo "Cloning typecraft..."
-              ${pkgs.git}/bin/git clone https://github.com/BridgerB/typecraft.git ../typecraft
-            fi
-            if [ ! -d ../typecraft/node_modules ]; then
-              echo "Installing typecraft dependencies..."
-              (cd ../typecraft && ${pkgs.nodejs_25}/bin/npm install)
-            fi
-            if [ ! -f ../typecraft/src/data/blocks.json ]; then
-              echo "Running typecraft datagen..."
-              (cd ../typecraft && ${pkgs.nodejs_25}/bin/npx tsx src/registry/datagen.ts 2>/dev/null || true)
-            fi
-
-            # Ensure steve node_modules exist (always use nix node so native modules match)
-            if [ ! -d node_modules ] || ! ${pkgs.nodejs_25}/bin/node -e "require('better-sqlite3')" 2>/dev/null; then
-              echo "Installing steve dependencies..."
-              ${pkgs.nodejs_25}/bin/npm install
-            fi
-
-            # Kill any lingering processes and free ports
-            ${pkgs.procps}/bin/pkill -9 -f "server.jar nogui" 2>/dev/null || true
-            ${pkgs.procps}/bin/pkill -9 -f "STEVE_BOT_MODE" 2>/dev/null || true
-            for port in 3000 25565 25575; do
-              ${pkgs.util-linux}/bin/fuser -k $port/tcp 2>/dev/null || true
-            done
-            sleep 2
-
-            mkdir -p data/server
-
-            # Generate world backup if it doesn't exist
-            if [ ! -d data/world ]; then
-              echo "No world backup found — generating one..."
-              ${startServer}/bin/minecraft-server > data/server/server.log 2>&1 &
-              GEN_PID=$!
-              while ! ${pkgs.netcat}/bin/nc -z localhost ${rconPort} 2>/dev/null; do sleep 1; done
-              while ! ${pkgs.mcrcon}/bin/mcrcon -H localhost -P ${rconPort} -p ${rconPassword} "list" 2>/dev/null | grep -q "players"; do sleep 1; done
-              echo "World generated. Saving backup..."
-              kill $GEN_PID 2>/dev/null; wait $GEN_PID 2>/dev/null || true
-              sleep 2
-              cp -r data/server/world data/world
-              echo "Backup saved to data/world"
-            fi
-
-            # Reset world from backup
-            rm -rf data/server/world
-            cp -r data/world data/server/world
-
-            # Load .env if it exists
-            if [ -f .env ]; then
-              set -a; source .env; set +a
-            fi
-
-            # Start server (logs to file, not terminal)
-            ${startServer}/bin/minecraft-server > data/server/server.log 2>&1 &
-            SERVER_PID=$!
-            trap "kill $SERVER_PID 2>/dev/null; wait $SERVER_PID 2>/dev/null" EXIT
-
-            # Wait for RCON
-            while ! ${pkgs.netcat}/bin/nc -z localhost 25565 2>/dev/null; do sleep 1; done
-            while ! ${pkgs.netcat}/bin/nc -z localhost ${rconPort} 2>/dev/null; do sleep 1; done
-            while ! ${pkgs.mcrcon}/bin/mcrcon -H localhost -P ${rconPort} -p ${rconPassword} "list" 2>/dev/null | grep -q "players"; do sleep 1; done
-
-            export MC_RCON_PORT="${rconPort}"
-            export MC_RCON_PASS="${rconPassword}"
-
-            # Open browser if available (skip on headless servers)
-            if command -v ${pkgs.chromium}/bin/chromium &>/dev/null && [ -n "''${DISPLAY:-}" ]; then
-              (while ! ${pkgs.netcat}/bin/nc -z localhost 3000 2>/dev/null; do sleep 1; done
-               sleep 2
-               ${pkgs.chromium}/bin/chromium http://localhost:3000 2>/dev/null &) &
-            fi
-
-            exec ${pkgs.nodejs_25}/bin/node src/main.ts "$@"
-          '';
-
-          runBench = pkgs.writeShellScriptBin "run-bench" ''
-            set -euo pipefail
-            cd "$(pwd)"
-
-            ${pkgs.procps}/bin/pkill -9 -f "server.jar nogui" 2>/dev/null || true
-            ${pkgs.procps}/bin/pkill -9 -f "STEVE_BOT_MODE" 2>/dev/null || true
-            sleep 2
-
-            mkdir -p data/server
-
-            # Generate world backup if missing
-            if [ ! -d data/world ]; then
-              echo "No world backup — generating..."
-              ${startServer}/bin/minecraft-server > data/server/server.log 2>&1 &
-              GEN_PID=$!
-              while ! ${pkgs.netcat}/bin/nc -z localhost ${rconPort} 2>/dev/null; do sleep 1; done
-              while ! ${pkgs.mcrcon}/bin/mcrcon -H localhost -P ${rconPort} -p ${rconPassword} "list" 2>/dev/null | grep -q "players"; do sleep 1; done
-              kill $GEN_PID 2>/dev/null; wait $GEN_PID 2>/dev/null || true
-              sleep 2
-              cp -r data/server/world data/world
-            fi
-
-            rm -rf data/server/world
-            cp -r data/world data/server/world
-
-            if [ -f .env ]; then set -a; source .env; set +a; fi
-
-            ${startServer}/bin/minecraft-server > data/server/server.log 2>&1 &
-            SERVER_PID=$!
-            trap "kill $SERVER_PID 2>/dev/null; wait $SERVER_PID 2>/dev/null" EXIT
-
-            # Wait for RCON
-            while ! ${pkgs.netcat}/bin/nc -z localhost 25565 2>/dev/null; do sleep 1; done
-            while ! ${pkgs.netcat}/bin/nc -z localhost ${rconPort} 2>/dev/null; do sleep 1; done
-            while ! ${pkgs.mcrcon}/bin/mcrcon -H localhost -P ${rconPort} -p ${rconPassword} "list" 2>/dev/null | grep -q "players"; do sleep 1; done
-
-            exec ${pkgs.nodejs_25}/bin/node src/bench.ts "$@"
-          '';
-
-          runTests = pkgs.writeShellScriptBin "run-tests" ''
-            set -euo pipefail
-
-            export STEVE_DIR="$(pwd)"
-
-            # Kill any lingering server and wait for ports to free
-            ${pkgs.procps}/bin/pkill -9 -f "server.jar nogui" 2>/dev/null || true
-            ${pkgs.procps}/bin/pkill -9 -f "STEVE_BOT_MODE" 2>/dev/null || true
-            sleep 2
-
-            # Reset world from backup
-            rm -rf data/server/world
-            cp -r data/world data/server/world
-
-            # Start server in background
-            ${startServer}/bin/minecraft-server &
-            SERVER_PID=$!
-            trap "kill $SERVER_PID 2>/dev/null; wait $SERVER_PID 2>/dev/null" EXIT
-
-            # Wait for server
-            echo "Waiting for server..."
-            while ! ${pkgs.netcat}/bin/nc -z localhost 25565 2>/dev/null; do sleep 1; done
-            while ! ${pkgs.netcat}/bin/nc -z localhost ${rconPort} 2>/dev/null; do sleep 1; done
-            while ! ${pkgs.mcrcon}/bin/mcrcon -H localhost -P ${rconPort} -p ${rconPassword} "list" 2>/dev/null | grep -q "players"; do sleep 1; done
-            echo "Server ready."
-
-            echo "Running tests..."
-            if [ -n "''${1:-}" ]; then
-              echo "Filter: $1"
-              ${pkgs.nodejs_25}/bin/node --test --test-name-pattern "$1" src/test.ts
-            else
-              ${pkgs.nodejs_25}/bin/node --test src/test.ts
-            fi
-          '';
-
-          runMcp = pkgs.writeShellScriptBin "run-mcp" ''
-            set -euo pipefail
-            cd "$(pwd)"
-
-            # Ensure deps (all output to stderr — stdout is MCP transport)
-            if [ ! -d ../typecraft ]; then
-              echo "Cloning typecraft..." >&2
-              ${pkgs.git}/bin/git clone https://github.com/BridgerB/typecraft.git ../typecraft
-            fi
-            if [ ! -d ../typecraft/node_modules ]; then
-              (cd ../typecraft && ${pkgs.nodejs_25}/bin/npm install) >&2
-            fi
-            if [ ! -d node_modules ] || ! ${pkgs.nodejs_25}/bin/node -e "require('better-sqlite3')" 2>/dev/null; then
-              ${pkgs.nodejs_25}/bin/npm install >&2
-            fi
-
-            exec ${pkgs.nodejs_25}/bin/node src/mcp.ts
-          '';
-
-          runRace = pkgs.writeShellScriptBin "run-race" ''
-            set -euo pipefail
-            cd "$(pwd)"
-
-            # Ensure deps
-            if [ ! -d ../typecraft/node_modules ]; then
-              (cd ../typecraft && ${pkgs.nodejs_25}/bin/npm install)
-            fi
-            if [ ! -d node_modules ] || ! ${pkgs.nodejs_25}/bin/node -e "require('better-sqlite3')" 2>/dev/null; then
-              ${pkgs.nodejs_25}/bin/npm install
-            fi
-
-            # Verify typecraft data is generated
-            if [ ! -f ../typecraft/src/data/packets-raw.json ]; then
-              echo "Error: typecraft data not generated."
-              echo "Run: cd ~/Developer/typecraft && nix run .#datagen"
-              exit 1
-            fi
-
-            # Verify server is running
-            if ! ${pkgs.netcat}/bin/nc -z localhost 25565 2>/dev/null; then
-              echo "Error: MC server not running on localhost:25565"
-              echo "Start it first: nix run .#server"
-              exit 1
-            fi
-
-            if [ -f .env ]; then set -a; source .env; set +a; fi
-
-            export MC_RCON_PORT="${rconPort}"
-            export MC_RCON_PASS="${rconPassword}"
-
-            # Open browser if available
-            if command -v ${pkgs.chromium}/bin/chromium &>/dev/null && [ -n "''${DISPLAY:-}" ]; then
-              (while ! ${pkgs.netcat}/bin/nc -z localhost 3000 2>/dev/null; do sleep 1; done
-               sleep 2
-               ${pkgs.chromium}/bin/chromium http://localhost:3000 2>/dev/null &) &
-            fi
-
-            exec ${pkgs.nodejs_25}/bin/node src/main.ts "$@"
-          '';
-
           runReset = pkgs.writeShellScriptBin "run-reset" ''
             set -euo pipefail
             cd "$(pwd)"
@@ -487,14 +273,9 @@
           p = makePackages (pkgsFor system);
         in
         {
-          default = p.runRace;
+          default = p.startServer;
           server = p.startServer;
-          race = p.runRace;
-          full = p.runSteve;
-          bench = p.runBench;
           rcon = p.rcon;
-          test = p.runTests;
-          mcp = p.runMcp;
           reset = p.runReset;
         }
       );
@@ -507,39 +288,15 @@
         {
           default = {
             type = "app";
-            program = "${p.runRace}/bin/run-race";
-          };
-          server = {
-            type = "app";
             program = "${p.startServer}/bin/minecraft-server";
-          };
-          race = {
-            type = "app";
-            program = "${p.runRace}/bin/run-race";
-          };
-          full = {
-            type = "app";
-            program = "${p.runSteve}/bin/run-steve";
-          };
-          bench = {
-            type = "app";
-            program = "${p.runBench}/bin/run-bench";
-          };
-          rcon = {
-            type = "app";
-            program = "${p.rcon}/bin/rcon";
-          };
-          mcp = {
-            type = "app";
-            program = "${p.runMcp}/bin/run-mcp";
           };
           reset = {
             type = "app";
             program = "${p.runReset}/bin/run-reset";
           };
-          test = {
+          rcon = {
             type = "app";
-            program = "${p.runTests}/bin/run-tests";
+            program = "${p.rcon}/bin/rcon";
           };
         }
       );
@@ -554,21 +311,17 @@
             echo ""
             echo "  steve — minecraft speedrun bot"
             echo ""
-            echo "  nix run .#server        start server (persistent)"
-            echo "  nix run . -- 20 600     race bots (server must be running)"
-            echo "  nix run .#full          full run (server + world reset + bots)"
+            echo "  nix run                 start MC server"
             echo "  nix run .#reset         reset world + restart server"
-            echo "  nix run .#test          run tests"
-            echo "  nix run .#bench         benchmark a step"
+            echo "  nix run .#rcon          interactive RCON console"
+            echo "  node src/main.ts N T    race N bots for T seconds"
+            echo "  node --test src/test.ts run tests"
             echo "  nix fmt                 format (biome + nixfmt)"
-            echo "  npm run lint            biome lint"
-            echo "  npm run check           tsc typecheck"
             echo "  rcon <cmd>              send rcon command"
             echo ""
           '';
           buildInputs = [
             p.startServer
-            p.runSteve
             p.rcon
             devPkgs.jre
             devPkgs.nodejs_25

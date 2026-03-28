@@ -16,24 +16,22 @@ sword), then hunt animals to collect 20 food items.
 ## Commands
 
 ```bash
-# Run bot race (requires nix — starts server, generates world, runs bots)
-nix run . -- 20 600              # 20 bots, 10min timeout
-nix run . -- 4 1800              # 4 bots, 30min timeout
-nix run . -- 1 120               # 1 bot, 2min (quick test)
+# Start MC server (fresh world each time)
+nix run                          # start server on localhost:25565
+nix run .#reset                  # reset world + restart server
+nix run .#rcon                   # interactive RCON console
 
-# Server only (for MCP or manual testing)
-nix run .#server                 # Minecraft server only
+# Run bot race (server must be running)
+node src/main.ts <bots> <seconds> # race bots (server must be running)
+node src/main.ts 10 600          # 10 bots, 10min (default)
+node src/main.ts 1 120           # 1 bot, 2min (quick test)
 
-# Run tests (against live Minecraft server)
-nix run .#test                   # starts server + runs tests
-nix run .#test -- pattern        # filter tests by name
+# Run tests (server must be running)
+node --test src/test.ts          # all tests
+node --test --test-name-pattern portal src/test.ts
 
 # Type check
 npm run build                    # tsc (no emit, type-checking only)
-
-# Benchmark a single step (requires server running)
-node src/bench.ts list           # list all step IDs
-node src/bench.ts mine_stone 5 60
 
 # Interactive REPL (requires server running)
 node src/lib/repl.ts
@@ -54,7 +52,7 @@ repeat — seconds per iteration instead of minutes.
 
 ```bash
 # 1. Start MC server (separate terminal, stays running)
-nix run .#server
+nix run
 
 # 2. Register MCP with Claude Code (one-time)
 claude mcp add -s user steve -- node /mnt/developer-ssd/Developer/steve/src/mcp.ts
@@ -230,7 +228,7 @@ feat: short summary
   items are actually in inventory. Blocks dug ≠ items collected.
 - **All debug to SQLite** — use `logEvent()`, not console.log. Terminal shows
   only milestones.
-- **Idempotent runs** — `nix run` generates a fresh world each time. No state
+- **Idempotent runs** — `nix run` starts a fresh world each time. No state
   leaks between runs.
 - **No sleep for background tasks** — never use `sleep()` to wait for a
   background process. Use proper event-driven patterns.

@@ -29,7 +29,7 @@
         cp -r data/world data/server/world
         echo 'World reset from backup'
       fi
-      exec env MC_MEMORY=8G nix run .#server
+      exec env MC_MEMORY=8G nix run
     '';
   };
 
@@ -44,7 +44,7 @@
       rm -rf data/races/*
       echo 'Warmup race (1 bot, 60s)...'
       echo
-      nix run .#race -- 1 60
+      node src/main.ts 1 60
       echo
       exec bash --init-file ~/bin/race-init
     '';
@@ -65,7 +65,7 @@
     text = ''
       #!/usr/bin/env bash
       source ~/.bashrc 2>/dev/null
-      bind '"\e[0n": "nix run .#race -- 20 600"'
+      bind '"\e[0n": "node src/main.ts 10 600"'
       printf '\e[5n'
     '';
   };

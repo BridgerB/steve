@@ -137,7 +137,7 @@ After modifying code, test again with `eval` to confirm the fix works. Check
 Repeat until the full pipeline works. Then run the end-to-end race to validate:
 
 ```bash
-nix run . -- 4 600  # 4 bots, 10 min
+node src/main.ts 10 600  # 10 bots, 10 min
 ```
 
 ## Architecture Quick Reference
