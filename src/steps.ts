@@ -116,9 +116,21 @@ export const steps: readonly Step[] = [
 	},
 
 	{
+		id: "gather_food",
+		name: "Gather Food",
+		priority: 9,
+		canExecute: (s) => s.equipment.sword !== "none",
+		isComplete: (s) => s.inventory.food >= 10,
+		execute: async (bot, _state) => {
+			const { gatherFood } = await import("./tasks/food/main.ts");
+			return gatherFood(bot, 10);
+		},
+	},
+
+	{
 		id: "craft_furnace",
 		name: "Craft Furnace",
-		priority: 9,
+		priority: 10,
 		canExecute: (s) => s.inventory.cobblestone >= 8,
 		isComplete: (s) => s.equipment.hasFurnace,
 		execute: async (bot, _state) => {
@@ -204,18 +216,6 @@ export const steps: readonly Step[] = [
 			const r1 = await fillWaterBucket(bot);
 			if (!r1.success) return r1;
 			return fillWaterBucket(bot);
-		},
-	},
-
-	{
-		id: "gather_food",
-		name: "Gather Food",
-		priority: 16,
-		canExecute: (s) => s.equipment.sword !== "none",
-		isComplete: (s) => s.inventory.food >= 20,
-		execute: async (bot, _state) => {
-			const { gatherFood } = await import("./tasks/food/main.ts");
-			return gatherFood(bot, 20);
 		},
 	},
 

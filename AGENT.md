@@ -6,15 +6,15 @@ achieves the current goal.
 
 ## Current Goal
 
-**`iron_ingot`** — The bot must gather wood, craft tools, mine stone, craft
-stone pickaxe, craft furnace, mine coal, mine iron ore, and smelt iron ingots.
-The race orchestrator checks for `iron_ingot` in inventory to declare a win.
+**`food`** — The bot must gather wood, craft tools (sword), then hunt animals to
+collect 10 food items. The race orchestrator checks for the `Gather Food` step
+success or 10+ food items in inventory to declare a win.
 
-The step pipeline is defined in `src/steps.ts`. Current targets:
+The step pipeline is defined in `src/steps.ts`. Key steps to reach food:
 
-- Coal: 8 (isComplete: `coal >= 8`)
-- Iron ore: 8 (isComplete: `ironOre >= 8 || ironIngots >= 8`)
-- Smelt: needs `ironOre >= 3 && coal >= 2`, completes at `ironIngots >= 3`
+- Gather wood, craft planks/table/sticks/wooden pickaxe
+- Mine cobblestone, craft stone pickaxe + stone sword
+- Gather Food (priority 9, right after sword): needs `sword !== "none"`, completes at `food >= 10`
 
 ## Your MCP Tools
 
@@ -179,18 +179,17 @@ bot.watchBlocks              // Set<string> — blocks that emit "blockSeen" eve
 
 These are the current blockers. Fix them in priority order:
 
-1. **Drop collection for scattered ore** — Bot digs coal/iron but doesn't walk
-   to the drop position to collect items. Strip-mine (stone) works because the
-   bot walks through the cleared tunnel. Scattered ore drops land 2-4 blocks
-   away.
+1. **Food gathering reliability** — The bot needs to find, chase, and kill
+   animals to collect 20 food items. Issues include: animals out of range,
+   sprint-chase timing, blacklisting unreachable mobs, and ensuring drops are
+   collected after kills.
 
-2. **Crafting table unreachable after underground mining** — Bot mines at Y=57,
-   table is on surface at Y=70. Pathfinder can't climb back within timeout.
-   Current mitigation: recraft from planks if table is unreachable.
+2. **Gather wood timeouts** — Some bots time out on wood gathering, suggesting
+   pathfinding issues or bad spawn biomes (desert, ocean).
 
-3. **Smelt step untested** — The smelt_iron step exists but has never been
-   reached in a run because the bot can't accumulate enough iron ore (drop
-   collection issue).
+3. **Crafting table unreachable** — Bot mines underground, table is on surface.
+   Pathfinder can't climb back within timeout. Current mitigation: recraft from
+   planks if table is unreachable.
 
 ## Rules
 

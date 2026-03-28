@@ -36,21 +36,24 @@ const isNearbyAnimal = (bot: Bot, blacklist: Set<number>) => (e: Entity) =>
  * Chase and kill a single animal, returning true if it died
  */
 const killAnimal = async (bot: Bot, animal: Entity): Promise<boolean> => {
-	for (let i = 0; i < 10; i++) {
-		if (!bot.entities[animal.id]) return true;
+	const start = Date.now();
+	const maxTime = 15000; // 15s max per animal
+
+	while (Date.now() - start < maxTime) {
+		if (!bot.entities[animal.id]) break;
 
 		const dist = distance(bot.entity.position, animal.position);
 
-		// Sprint toward animal
-		if (dist > 3) {
+		// Sprint toward animal if too far
+		if (dist > 2) {
 			await bot.lookAt(animal.position);
 			bot.setControlState("forward", true);
 			bot.setControlState("sprint", true);
 			const chaseStart = Date.now();
 			while (
 				bot.entities[animal.id] &&
-				distance(bot.entity.position, animal.position) > 2.5 &&
-				Date.now() - chaseStart < 3000
+				distance(bot.entity.position, animal.position) > 1.5 &&
+				Date.now() - chaseStart < 5000
 			) {
 				await bot.lookAt(animal.position);
 				await sleep(50);
@@ -59,30 +62,24 @@ const killAnimal = async (bot: Bot, animal: Entity): Promise<boolean> => {
 			bot.setControlState("sprint", false);
 		}
 
-		if (!bot.entities[animal.id]) return true;
+		if (!bot.entities[animal.id]) break;
 
-		// Attack — server validates real distance
-		const prePos = { ...animal.position };
+		// Attack with proper cooldown (625ms for sword)
 		await bot.lookAt(offset(animal.position, 0, animal.height * 0.5, 0));
 		bot.attack(animal);
-		await sleep(600);
-
-		// Walk forward to collect drops if dead
-		if (!bot.entities[animal.id]) {
-			bot.setControlState("forward", true);
-			await sleep(500);
-			bot.setControlState("forward", false);
-			return true;
-		}
-
-		// If entity didn't move after 3 attacks, hits aren't landing
-		const moved =
-			Math.abs(animal.position.x - prePos.x) +
-			Math.abs(animal.position.z - prePos.z);
-		if (i >= 3 && moved < 0.1) return false;
+		await sleep(650);
 	}
 
-	return !bot.entities[animal.id];
+	const dead = !bot.entities[animal.id];
+
+	// Walk forward to collect drops
+	if (dead) {
+		bot.setControlState("forward", true);
+		await sleep(600);
+		bot.setControlState("forward", false);
+	}
+
+	return dead;
 };
 
 /**
@@ -143,8 +140,8 @@ export const gatherFood = async (
 		searchAttempts = 0;
 		const dist = distance(bot.entity.position, animal.position);
 
-		if (dist > 8) {
-			await goTo(bot, animal.position, { range: 3, timeout: 10000 });
+		if (dist > 4) {
+			await goTo(bot, animal.position, { range: 1, timeout: 10000 });
 		}
 
 		await equipItem(bot, "sword", "hand");

@@ -448,19 +448,19 @@ const runRace = async (count: number, timeoutMs: number) => {
 		}
 	};
 
-	const GOAL = "water_bucket";
+	const GOAL = "food";
 
 	const MILESTONES = [
 		{ name: "wood", query: "item_name LIKE '%_log'" },
 		{ name: "wooden pickaxe", query: "item_name = 'wooden_pickaxe'" },
+		{ name: "cobblestone", query: "item_name = 'cobblestone'" },
 		{ name: "stone pickaxe", query: "item_name = 'stone_pickaxe'" },
-		{ name: "furnace", query: "item_name = 'furnace'" },
-		{ name: "coal", query: "item_name = 'coal'" },
-		{ name: "raw iron", query: "item_name = 'raw_iron'" },
-		{ name: "iron ingot", query: "item_name = 'iron_ingot'" },
-		{ name: "iron pickaxe", query: "item_name = 'iron_pickaxe'" },
-		{ name: "bucket", query: "item_name = 'bucket'" },
-		{ name: "water bucket", query: "item_name = 'water_bucket'" },
+		{ name: "stone sword", query: "item_name = 'stone_sword'" },
+		{
+			name: "food",
+			query:
+				"item_name LIKE 'cooked_%' OR item_name IN ('beef','porkchop','mutton','chicken','rabbit','bread','apple')",
+		},
 	];
 	const milestonesHit = new Set<string>();
 	const raceStart = Date.now();
@@ -489,19 +489,26 @@ const runRace = async (count: number, timeoutMs: number) => {
 		const db = getRaceDb();
 		if (!db) return false;
 		try {
-			// For water_bucket goal, need 2
-			const inv = db
-				.prepare(
-					"SELECT SUM(count) as c FROM inventory_snapshots WHERE bot_id = ? AND item_name = ?",
-				)
-				.get(botId, GOAL) as { c: number | null };
-			if ((inv.c ?? 0) >= 2) return true;
+			// Food goal: check for Gather Food step success
 			const evt = db
 				.prepare(
-					"SELECT COUNT(*) as c FROM events WHERE bot_id = ? AND detail LIKE ?",
+					"SELECT COUNT(*) as c FROM events WHERE bot_id = ? AND event = 'success' AND detail LIKE 'Gather Food:%'",
 				)
-				.get(botId, `%${GOAL}%`) as { c: number };
-			return evt.c > 0;
+				.get(botId) as { c: number };
+			if (evt.c > 0) return true;
+			// Also check inventory for 10+ food items (use MAX per item to avoid double-counting snapshots)
+			const inv = db
+				.prepare(
+					`SELECT SUM(m) as c FROM (
+						SELECT MAX(count) as m FROM inventory_snapshots WHERE bot_id = ? AND (
+							item_name LIKE 'cooked_%' OR item_name = 'bread' OR item_name = 'apple'
+							OR item_name = 'beef' OR item_name = 'porkchop' OR item_name = 'mutton'
+							OR item_name = 'chicken' OR item_name = 'rabbit'
+						) GROUP BY item_name
+					)`,
+				)
+				.get(botId) as { c: number | null };
+			return (inv.c ?? 0) >= 10;
 		} catch {
 			return false;
 		}
@@ -554,6 +561,7 @@ const runRace = async (count: number, timeoutMs: number) => {
 		});
 
 		await sleep(3000);
+		await rcon(`clear ${username}`);
 		await rcon(`spreadplayers ${spawnX} ${spawnZ} 0 5 false ${username}`);
 
 		const start = Date.now();
@@ -608,10 +616,12 @@ const runRace = async (count: number, timeoutMs: number) => {
 	}
 	await sleep(1000);
 
-	// Each child bot runs its own viewer — 4 iframes, no camera bots needed
-	const NUM_VIEWERS = Math.min(count, 4);
-	const { createServer: createHttpServer } = await import("node:http");
-	const gridHtml = `<!DOCTYPE html>
+	// Web viewer grid — only on machines with a display (not headless servers)
+	const hasDisplay = !!(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
+	const NUM_VIEWERS = hasDisplay ? Math.min(count, 4) : 0;
+	if (NUM_VIEWERS > 0) {
+		const { createServer: createHttpServer } = await import("node:http");
+		const gridHtml = `<!DOCTYPE html>
 <html><head><title>Steve Race</title>
 <style>
 body { margin: 0; background: #111; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; width: 100vw; height: 100vh; gap: 2px; }
@@ -627,16 +637,17 @@ ${Array.from(
 		}"></iframe></div>`,
 ).join("\n")}
 </body></html>`;
-	const gridServer = createHttpServer((_req, res) => {
-		res.writeHead(200, { "Content-Type": "text/html" });
-		res.end(gridHtml);
-	});
-	gridServer.listen(3000, () =>
-		console.log(`[grid] http://localhost:3000 (${NUM_VIEWERS} viewers)`),
-	);
-	gridServer.on("error", () => {
-		console.log("[grid] port 3000 in use, skipping viewer");
-	});
+		const gridServer = createHttpServer((_req, res) => {
+			res.writeHead(200, { "Content-Type": "text/html" });
+			res.end(gridHtml);
+		});
+		gridServer.listen(3000, () =>
+			console.log(`[grid] http://localhost:3000 (${NUM_VIEWERS} viewers)`),
+		);
+		gridServer.on("error", () => {
+			console.log("[grid] port 3000 in use, skipping viewer");
+		});
+	}
 
 	const results = await Promise.all(
 		Array.from({ length: count }, (_, i) => runBot(i)),
