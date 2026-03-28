@@ -11,6 +11,7 @@
  */
 
 import { writeFileSync } from "node:fs";
+import { createConnection } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -165,12 +166,28 @@ const spawnBot = async (name: string): Promise<Bot> => {
 	throw new Error(`Failed to connect ${name} after ${maxRetries} attempts`);
 };
 
+const isServerReachable = () =>
+	new Promise<boolean>((resolve) => {
+		const sock = createConnection({ host: HOST, port: PORT });
+		sock.once("connect", () => {
+			sock.destroy();
+			resolve(true);
+		});
+		sock.once("error", () => resolve(false));
+		setTimeout(() => {
+			sock.destroy();
+			resolve(false);
+		}, 2000);
+	});
+
 const requireBot = async (): Promise<Bot> => {
 	if (activeBotName && bots.has(activeBotName))
 		return bots.get(activeBotName) as Bot;
-	// Auto-spawn default bot
-	const name = USERNAME;
-	return await spawnBot(name);
+	if (!(await isServerReachable()))
+		throw new Error(
+			`Minecraft server is not running on ${HOST}:${PORT}. Start it with: nix run .#server`,
+		);
+	return await spawnBot(USERNAME);
 };
 
 // ── MCP Server ──
@@ -1208,10 +1225,16 @@ server.tool(
 // ── Bootstrap ──
 
 const main = async () => {
-	try {
-		await spawnBot(USERNAME);
-	} catch (err) {
-		log("Failed to connect default bot:", err);
+	if (await isServerReachable()) {
+		try {
+			await spawnBot(USERNAME);
+		} catch (err) {
+			log("Failed to connect default bot:", err);
+		}
+	} else {
+		log(
+			`Server not reachable on ${HOST}:${PORT} — tools will connect on first use once server is up`,
+		);
 	}
 
 	const transport = new StdioServerTransport();

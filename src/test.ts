@@ -10,3 +10,4 @@ import "./tasks/combat/test.ts";
 import "./tasks/food/test.ts";
 import "./tasks/end/test.ts";
 import "./tasks/nether/test.ts";
+import "./tasks/portal/test.ts";
