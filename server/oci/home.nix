@@ -166,7 +166,7 @@
     Service = {
       Type = "simple";
       WorkingDirectory = "/home/bridger/Developer/steve";
-      ExecStart = "${pkgs.nodePackages.npm}/bin/npx @anthropic-ai/claude-code@latest --dangerously-skip-permissions remote-control --spawn=worktree";
+      ExecStart = "${pkgs.nodePackages.npm}/bin/npx @anthropic-ai/claude-code@latest remote-control --spawn worktree --permission-mode bypassPermissions";
       Restart = "on-failure";
       RestartSec = 10;
       Environment = [
