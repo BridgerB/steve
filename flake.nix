@@ -152,8 +152,8 @@
         if [ -f .env ]; then set -a; source .env; set +a; fi
 
         # Create and enter server directory
-        mkdir -p server
-        cd server
+        mkdir -p data/server
+        cd data/server
 
         # Setup eula
         echo "eula=true" > eula.txt
@@ -207,25 +207,25 @@
         done
         sleep 2
 
-        mkdir -p data server
+        mkdir -p data/server
 
         # Generate world backup if it doesn't exist
         if [ ! -d data/world ]; then
           echo "No world backup found — generating one..."
-          ${startServer}/bin/minecraft-server > server/server.log 2>&1 &
+          ${startServer}/bin/minecraft-server > data/server/server.log 2>&1 &
           GEN_PID=$!
           while ! ${pkgs.netcat}/bin/nc -z localhost ${rconPort} 2>/dev/null; do sleep 1; done
           while ! ${pkgs.mcrcon}/bin/mcrcon -H localhost -P ${rconPort} -p ${rconPassword} "list" 2>/dev/null | grep -q "players"; do sleep 1; done
           echo "World generated. Saving backup..."
           kill $GEN_PID 2>/dev/null; wait $GEN_PID 2>/dev/null || true
           sleep 2
-          cp -r server/world data/world
+          cp -r data/server/world data/world
           echo "Backup saved to data/world"
         fi
 
         # Reset world from backup
-        rm -rf server/world
-        cp -r data/world server/world
+        rm -rf data/server/world
+        cp -r data/world data/server/world
 
         # Load .env if it exists
         if [ -f .env ]; then
@@ -233,7 +233,7 @@
         fi
 
         # Start server (logs to file, not terminal)
-        ${startServer}/bin/minecraft-server > server/server.log 2>&1 &
+        ${startServer}/bin/minecraft-server > data/server/server.log 2>&1 &
         SERVER_PID=$!
         trap "kill $SERVER_PID 2>/dev/null; wait $SERVER_PID 2>/dev/null" EXIT
 
@@ -268,26 +268,26 @@
         ${pkgs.procps}/bin/pkill -9 -f "STEVE_BOT_MODE" 2>/dev/null || true
         sleep 2
 
-        mkdir -p data server
+        mkdir -p data/server
 
         # Generate world backup if missing
         if [ ! -d data/world ]; then
           echo "No world backup — generating..."
-          ${startServer}/bin/minecraft-server > server/server.log 2>&1 &
+          ${startServer}/bin/minecraft-server > data/server/server.log 2>&1 &
           GEN_PID=$!
           while ! ${pkgs.netcat}/bin/nc -z localhost ${rconPort} 2>/dev/null; do sleep 1; done
           while ! ${pkgs.mcrcon}/bin/mcrcon -H localhost -P ${rconPort} -p ${rconPassword} "list" 2>/dev/null | grep -q "players"; do sleep 1; done
           kill $GEN_PID 2>/dev/null; wait $GEN_PID 2>/dev/null || true
           sleep 2
-          cp -r server/world data/world
+          cp -r data/server/world data/world
         fi
 
-        rm -rf server/world
-        cp -r data/world server/world
+        rm -rf data/server/world
+        cp -r data/world data/server/world
 
         if [ -f .env ]; then set -a; source .env; set +a; fi
 
-        ${startServer}/bin/minecraft-server > server/server.log 2>&1 &
+        ${startServer}/bin/minecraft-server > data/server/server.log 2>&1 &
         SERVER_PID=$!
         trap "kill $SERVER_PID 2>/dev/null; wait $SERVER_PID 2>/dev/null" EXIT
 
@@ -311,8 +311,8 @@
         sleep 2
 
         # Reset world from backup
-        rm -rf server/world
-        cp -r data/world server/world
+        rm -rf data/server/world
+        cp -r data/world data/server/world
 
         # Start server in background
         ${startServer}/bin/minecraft-server &
@@ -395,18 +395,18 @@
         set -euo pipefail
         cd "$(pwd)"
 
-        mkdir -p data server
+        mkdir -p data/server
 
         # Generate world backup if missing
         if [ ! -d data/world ]; then
           echo "No world backup — generating..."
-          ${startServer}/bin/minecraft-server > server/server.log 2>&1 &
+          ${startServer}/bin/minecraft-server > data/server/server.log 2>&1 &
           GEN_PID=$!
           while ! ${pkgs.netcat}/bin/nc -z localhost ${rconPort} 2>/dev/null; do sleep 1; done
           while ! ${pkgs.mcrcon}/bin/mcrcon -H localhost -P ${rconPort} -p ${rconPassword} "list" 2>/dev/null | grep -q "players"; do sleep 1; done
           kill $GEN_PID 2>/dev/null; wait $GEN_PID 2>/dev/null || true
           sleep 2
-          cp -r server/world data/world
+          cp -r data/server/world data/world
           echo "Backup saved to data/world"
         fi
 
@@ -415,12 +415,12 @@
         sleep 2
 
         # Reset world
-        rm -rf server/world
-        cp -r data/world server/world
+        rm -rf data/server/world
+        cp -r data/world data/server/world
         echo "World reset."
 
         # Restart server
-        ${startServer}/bin/minecraft-server > server/server.log 2>&1 &
+        ${startServer}/bin/minecraft-server > data/server/server.log 2>&1 &
         SERVER_PID=$!
 
         while ! ${pkgs.netcat}/bin/nc -z localhost 25565 2>/dev/null; do sleep 1; done
