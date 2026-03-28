@@ -152,10 +152,6 @@
           );
         in
         rec {
-          rcon = pkgs.writeShellScriptBin "rcon" ''
-            ${pkgs.mcrcon}/bin/mcrcon -H localhost -P ${rconPort} -p ${rconPassword} "$@"
-          '';
-
           startServer = pkgs.writeShellScriptBin "minecraft-server" ''
             set -euo pipefail
 
@@ -200,7 +196,7 @@
               ${startServer}/bin/minecraft-server > data/server/server.log 2>&1 &
               GEN_PID=$!
               while ! ${pkgs.netcat}/bin/nc -z localhost ${rconPort} 2>/dev/null; do sleep 1; done
-              while ! ${pkgs.mcrcon}/bin/mcrcon -H localhost -P ${rconPort} -p ${rconPassword} "list" 2>/dev/null | grep -q "players"; do sleep 1; done
+              sleep 3
               kill $GEN_PID 2>/dev/null; wait $GEN_PID 2>/dev/null || true
               sleep 2
               cp -r data/server/world data/world
@@ -275,7 +271,6 @@
         {
           default = p.startServer;
           server = p.startServer;
-          rcon = p.rcon;
           reset = p.runReset;
         }
       );
@@ -294,10 +289,6 @@
             type = "app";
             program = "${p.runReset}/bin/run-reset";
           };
-          rcon = {
-            type = "app";
-            program = "${p.rcon}/bin/rcon";
-          };
         }
       );
 
@@ -313,19 +304,16 @@
             echo ""
             echo "  nix run                 start MC server"
             echo "  nix run .#reset         reset world + restart server"
-            echo "  nix run .#rcon          interactive RCON console"
+            echo "  node src/rcon-cli.ts    interactive RCON console"
             echo "  node src/main.ts N T    race N bots for T seconds"
             echo "  node --test src/test.ts run tests"
             echo "  nix fmt                 format (biome + nixfmt)"
-            echo "  rcon <cmd>              send rcon command"
             echo ""
           '';
           buildInputs = [
             p.startServer
-            p.rcon
             devPkgs.jre
             devPkgs.nodejs_25
-            devPkgs.mcrcon
             treefmtEval.config.build.wrapper
           ]
           ++ pre-commit-check.enabledPackages;

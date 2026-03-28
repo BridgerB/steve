@@ -19,7 +19,7 @@ sword), then hunt animals to collect 20 food items.
 # Start MC server (fresh world each time)
 nix run                          # start server on localhost:25565
 nix run .#reset                  # reset world + restart server
-nix run .#rcon                   # interactive RCON console
+node src/rcon-cli.ts             # interactive RCON console
 
 # Run bot race (server must be running)
 node src/main.ts <bots> <seconds> # race bots (server must be running)
