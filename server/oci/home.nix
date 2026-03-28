@@ -81,6 +81,24 @@
     claude = "npx @anthropic-ai/claude-code@latest --dangerously-skip-permissions";
   };
 
+  home.file.".claude/settings.json".text = builtins.toJSON {
+    permissions = {
+      defaultMode = "bypassPermissions";
+      allow = [
+        "Bash(*)"
+        "Read"
+        "Write"
+        "Edit"
+        "Grep"
+        "Glob"
+        "WebFetch"
+        "WebSearch"
+        "Agent"
+        "mcp__steve__*"
+      ];
+    };
+  };
+
   programs.btop = {
     enable = true;
     settings = {
