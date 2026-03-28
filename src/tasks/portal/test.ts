@@ -60,7 +60,12 @@ it(
 								`Build failed: ${buildResult.message}`,
 							);
 
-							const enterResult = await enterPortal(bot);
+							const portalPos = (
+								buildResult as {
+									portalPos?: { x: number; y: number; z: number };
+								}
+							).portalPos;
+							const enterResult = await enterPortal(bot, portalPos);
 							assert.ok(
 								enterResult.success,
 								`Enter failed: ${enterResult.message}`,

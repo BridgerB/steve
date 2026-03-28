@@ -1,55 +1,55 @@
 /**
- * Portal entry - entering nether and end portals
+ * Portal entry - pathfind into nether/end portals
  */
 
 import type { Bot } from "typecraft";
+import { getPathfinder, goTo } from "../../lib/bot-utils.ts";
 import type { Block, StepResult } from "../../types.ts";
 
-/**
- * Enter a portal (nether or end)
- */
-export const enterPortal = async (bot: Bot): Promise<StepResult> => {
-	const portal = bot.findBlock({
-		matching: (name) => name === "nether_portal" || name === "end_portal",
-		maxDistance: 16,
-	}) as Block | null;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-	if (!portal) {
-		return { success: false, message: "No portal found nearby" };
+/**
+ * Enter a portal by pathfinding into it (canDig disabled to avoid breaking obsidian)
+ */
+export const enterPortal = async (
+	bot: Bot,
+	portalPos?: { x: number; y: number; z: number },
+): Promise<StepResult> => {
+	let target = portalPos;
+
+	if (!target) {
+		const portal = bot.findBlock({
+			matching: (name) => name === "nether_portal" || name === "end_portal",
+			maxDistance: 64,
+		}) as Block | null;
+		if (!portal) return { success: false, message: "No portal found nearby" };
+		target = portal.position;
 	}
 
+	const pf = getPathfinder(bot);
+	pf.setMovements({ canDig: false });
+
 	try {
-		await bot.lookAt(portal.position);
-		bot.setControlState("forward", true);
+		await goTo(bot, target, { range: 0, timeout: 30000 });
+	} catch {
+		// Even if nav errors, we might still be in the portal
+	} finally {
+		pf.setMovements({});
+	}
 
-		const startDim = bot.game.dimension;
-		let changed = false;
-
-		for (let i = 0; i < 20; i++) {
-			await new Promise((resolve) => setTimeout(resolve, 500));
-			if (bot.game.dimension !== startDim) {
-				changed = true;
-				break;
-			}
-		}
-
-		bot.setControlState("forward", false);
-
-		if (changed) {
+	// Wait for dimension change
+	const startDim = bot.game.dimension;
+	for (let i = 0; i < 20; i++) {
+		await sleep(500);
+		if (bot.game.dimension !== startDim) {
 			return {
 				success: true,
 				message: `Entered portal - now in ${bot.game.dimension}`,
 			};
-		} else {
-			return { success: false, message: "Portal did not teleport" };
 		}
-	} catch (err) {
-		bot.setControlState("forward", false);
-		return {
-			success: false,
-			message: err instanceof Error ? err.message : "Failed to enter portal",
-		};
 	}
+
+	return { success: false, message: "Portal did not teleport" };
 };
 
 /**
@@ -58,7 +58,7 @@ export const enterPortal = async (bot: Bot): Promise<StepResult> => {
 export const enterEndPortal = async (bot: Bot): Promise<StepResult> => {
 	const portal = bot.findBlock({
 		matching: (name) => name === "end_portal",
-		maxDistance: 16,
+		maxDistance: 64,
 	}) as Block | null;
 
 	if (!portal) {
@@ -66,24 +66,17 @@ export const enterEndPortal = async (bot: Bot): Promise<StepResult> => {
 	}
 
 	try {
-		await bot.lookAt(portal.position);
-		bot.setControlState("forward", true);
-
-		for (let i = 0; i < 20; i++) {
-			await new Promise((resolve) => setTimeout(resolve, 500));
-			if (String(bot.game.dimension).includes("end")) {
-				bot.setControlState("forward", false);
-				return { success: true, message: "Entered The End!" };
-			}
-		}
-
-		bot.setControlState("forward", false);
-		return { success: false, message: "Failed to enter The End" };
-	} catch (err) {
-		bot.setControlState("forward", false);
-		return {
-			success: false,
-			message: err instanceof Error ? err.message : "Failed to enter portal",
-		};
+		await goTo(bot, portal.position, { range: 0, timeout: 30000 });
+	} catch {
+		// May already be in the portal
 	}
+
+	for (let i = 0; i < 20; i++) {
+		await sleep(500);
+		if (String(bot.game.dimension).includes("end")) {
+			return { success: true, message: "Entered The End!" };
+		}
+	}
+
+	return { success: false, message: "Failed to enter The End" };
 };
