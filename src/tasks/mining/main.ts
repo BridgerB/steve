@@ -3,7 +3,7 @@
  */
 
 import type { Bot } from "typecraft";
-import { distance, offset, vec3, worldSetBlockStateId } from "typecraft";
+import { distance, offset, vec3 } from "typecraft";
 import {
 	escapeWater,
 	exploreRandom,
@@ -35,8 +35,6 @@ const safeDig = async (
 	} finally {
 		if (timer) clearTimeout(timer);
 	}
-	// Predict block break locally — server skips block_update for the digger in 1.21+
-	if (bot.world) worldSetBlockStateId(bot.world, block.position, 0);
 };
 
 export const mineBlock = async (

@@ -3,14 +3,7 @@
  */
 
 import type { Bot } from "typecraft";
-import {
-	createGoalNear,
-	distance,
-	offset,
-	type Vec3,
-	vec3,
-	worldSetBlockStateId,
-} from "typecraft";
+import { createGoalNear, distance, offset, type Vec3, vec3 } from "typecraft";
 import {
 	escapeWater,
 	getBlock,
@@ -219,8 +212,6 @@ export const gatherWood = async (
 					setTimeout(() => reject(new Error("dig timeout")), 5000),
 				),
 			]);
-			// Predict block break locally — server skips block_update for the digger in 1.21+
-			if (bot.world) worldSetBlockStateId(bot.world, block.position, 0);
 			logEvent("wood", "dig_done", block.name, pos);
 		} catch (e) {
 			const msg = String(e instanceof Error ? e.message : e);
@@ -254,6 +245,7 @@ export const gatherWood = async (
 	logEvent("wood", "start", `gathering ${targetCount} logs`);
 	let attempts = 0;
 	let blocksDug = 0;
+	let exploreAngle = Math.random() * Math.PI * 2;
 
 	while (
 		countLogs() < targetCount &&
@@ -264,14 +256,46 @@ export const gatherWood = async (
 
 		const target = findClosestLog();
 		if (!target) {
-			logEvent("wood", "explore", "no trees nearby");
-			const angle = Math.random() * Math.PI * 2;
-			await bot.look(angle, 0);
+			// Check memory for remembered log positions
+			const { getRememberedResource } = await import("../../lib/bot-utils.ts");
+			let memTarget: { pos: Vec3; name: string } | null = null;
+			for (const logType of LOG_TYPES) {
+				const remembered = getRememberedResource(bot, logType);
+				if (remembered && !unreachable.has(posKey(remembered))) {
+					memTarget = { pos: remembered, name: logType };
+					break;
+				}
+			}
+
+			if (memTarget) {
+				logEvent(
+					"wood",
+					"explore_memory",
+					`remembered ${memTarget.name} dist=${distance(botPos(), memTarget.pos).toFixed(0)}`,
+				);
+				const reached = await navigateTo(memTarget.pos);
+				if (!reached) unreachable.add(posKey(memTarget.pos));
+				continue;
+			}
+
+			// Walk in a consistent direction for longer to load new chunks
+			logEvent("wood", "explore", "no trees nearby — long walk");
+			await bot.look(exploreAngle, 0);
 			bot.setControlState("forward", true);
 			bot.setControlState("sprint", true);
-			await sleep(3000);
+			for (let i = 0; i < 16; i++) {
+				await sleep(500);
+				if (findClosestLog()) break;
+				if (i % 4 === 0) {
+					bot.setControlState("jump", true);
+					await sleep(100);
+					bot.setControlState("jump", false);
+				}
+			}
 			bot.setControlState("forward", false);
 			bot.setControlState("sprint", false);
+			await bot.waitForChunksToLoad();
+			exploreAngle += Math.PI * 0.3;
 			continue;
 		}
 

@@ -20,7 +20,6 @@ import {
 	type Vec3,
 	vec3,
 	windowItems,
-	worldSetBlockStateId,
 } from "typecraft";
 import type { StepResult } from "../types.ts";
 import { logEvent } from "./logger.ts";
@@ -300,8 +299,6 @@ export const mineAndCollect = async (
 	// Dig the block
 	try {
 		await bot.dig(block, true);
-		// Predict block break locally — server skips block_update for the digger in 1.21+
-		if (bot.world) worldSetBlockStateId(bot.world, block.position, 0);
 	} catch (e) {
 		logEvent("mine", "dig_error", String(e));
 		return false;
@@ -750,13 +747,17 @@ export const getCraftingTable = async (bot: Bot): Promise<Block | null> => {
 			positions[j] = a;
 		}
 	}
+	// Wait for chunks so we don't try to place in unloaded areas
+	await bot.waitForChunksToLoad();
+
 	let ground: Block | null = null;
 	for (const [dx, dz] of positions) {
 		const candidate = getBlock(bot, offset(bot.entity.position, dx, -1, dz));
 		if (!candidate || !isSolidGround(candidate.name)) continue;
 		const above = getBlock(bot, offset(candidate.position, 0, 1, 0));
-		// Treat null (unloaded) as clear — if we can't see it, assume air
-		if (above && !isSpaceClear(above.name)) continue;
+		// Skip unloaded positions — placing in unloaded chunks always fails
+		if (!above) continue;
+		if (!isSpaceClear(above.name)) continue;
 		ground = candidate;
 		break;
 	}
@@ -770,7 +771,6 @@ export const getCraftingTable = async (bot: Bot): Promise<Block | null> => {
 				try {
 					await bot.lookAt(offset(above.position, 0.5, 0.5, 0.5));
 					await bot.dig(above);
-					if (bot.world) worldSetBlockStateId(bot.world, above.position, 0);
 					await sleep(200);
 					ground = candidate;
 					break;
