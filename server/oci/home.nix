@@ -141,7 +141,7 @@
           }
           tab name="rcon" cwd="/home/bridger/Developer/steve" {
             pane command="bash" {
-              args "-lc" "echo 'Waiting for MC server...' && until nc -z localhost 25575 2>/dev/null; do sleep 2; done && node src/rcon-cli.ts; exec bash -l"
+              args "-lc" "node src/rcon-cli.ts; exec bash -l"
             }
           }
           tab name="steve" cwd="/home/bridger/Developer/steve" {
