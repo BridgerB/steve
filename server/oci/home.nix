@@ -29,6 +29,60 @@
     '';
   };
 
+  home.file."bin/rc-ctl" = {
+    executable = true;
+    text = ''
+      #!/usr/bin/env bash
+      while true; do
+        clear
+        status=$(systemctl --user is-active claude-remote-control 2>/dev/null)
+        if [ "$status" = "active" ]; then
+          echo -e "  Remote Control: \e[32m● running\e[0m"
+        else
+          echo -e "  Remote Control: \e[31m● stopped\e[0m"
+        fi
+        echo
+        echo "  1) start    2) stop    3) restart    4) status    q) quit"
+        echo
+        read -rsn1 key
+        case $key in
+          1) systemctl --user start claude-remote-control ;;
+          2) systemctl --user stop claude-remote-control ;;
+          3) systemctl --user restart claude-remote-control ;;
+          4) systemctl --user status claude-remote-control --no-pager; read -rsn1 -p "press any key..." ;;
+          q) break ;;
+        esac
+      done
+    '';
+  };
+
+  home.file."bin/mc-ctl" = {
+    executable = true;
+    text = ''
+      #!/usr/bin/env bash
+      while true; do
+        clear
+        status=$(systemctl --user is-active minecraft-server 2>/dev/null)
+        if [ "$status" = "active" ]; then
+          echo -e "  MC Server: \e[32m● running\e[0m"
+        else
+          echo -e "  MC Server: \e[31m● stopped\e[0m"
+        fi
+        echo
+        echo "  1) start    2) stop    3) restart    4) status    q) quit"
+        echo
+        read -rsn1 key
+        case $key in
+          1) systemctl --user start minecraft-server ;;
+          2) systemctl --user stop minecraft-server ;;
+          3) systemctl --user restart minecraft-server ;;
+          4) systemctl --user status minecraft-server --no-pager; read -rsn1 -p "press any key..." ;;
+          q) break ;;
+        esac
+      done
+    '';
+  };
+
   home.file."bin/race-init" = {
     executable = true;
     text = ''
@@ -135,8 +189,11 @@
             pane command="btop"
           }
           tab name="mc-server" cwd="/home/bridger/Developer/steve" {
-            pane command="bash" {
+            pane size="70%" command="bash" {
               args "-lc" "journalctl --user -f -u minecraft-server"
+            }
+            pane size="30%" command="bash" {
+              args "-lc" "~/bin/mc-ctl"
             }
           }
           tab name="rcon" cwd="/home/bridger/Developer/steve" {
@@ -155,8 +212,11 @@
             }
           }
           tab name="rc-log" {
-            pane command="bash" {
+            pane size="70%" command="bash" {
               args "-lc" "journalctl --user -f -u claude-remote-control"
+            }
+            pane size="30%" command="bash" {
+              args "-lc" "~/bin/rc-ctl"
             }
           }
           tab name="race" cwd="/home/bridger/Developer/steve" {
