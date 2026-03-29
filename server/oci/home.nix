@@ -169,11 +169,6 @@
               args "-lc" "while true; do out=$(~/bin/race-summary 2>&1); printf '\\033[H\\033[J%s\\n' \"$out\"; sleep 2; done"
             }
           }
-          tab name="claude" cwd="/home/bridger/Developer/steve" {
-            pane command="bash" {
-              args "-lc" "npx @anthropic-ai/claude-code@latest --dangerously-skip-permissions"
-            }
-          }
           tab name="shell" cwd="/home/bridger/Developer/steve" {
             pane
           }
