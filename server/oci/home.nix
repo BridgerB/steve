@@ -17,31 +17,7 @@
     sqlite
   ];
 
-  home.file."bin/start-server" = {
-    executable = true;
-    text = ''
-      #!/usr/bin/env bash
-      cd ~/Developer/steve
-      exec env MC_MEMORY=8G nix run .#server
-    '';
-  };
-
-  home.file."bin/race-startup" = {
-    executable = true;
-    text = ''
-      #!/usr/bin/env bash
-      cd ~/Developer/steve
-      echo 'Waiting for MC server...'
-      while ! nc -z localhost 25565 2>/dev/null; do sleep 1; done
-      echo 'Server ready'
-      rm -rf data/races/*
-      echo 'Warmup race (1 bot, 60s)...'
-      echo
-      nix run .#race -- 1 60
-      echo
-      exec bash --init-file ~/bin/race-init
-    '';
-  };
+  # ── Helper scripts ──
 
   home.file."bin/race-summary" = {
     executable = true;
@@ -53,25 +29,17 @@
     '';
   };
 
-  home.file."bin/server-init" = {
-    executable = true;
-    text = ''
-      #!/usr/bin/env bash
-      source ~/.bashrc 2>/dev/null
-      bind '"\e[0n": "~/bin/start-server\n"'
-      printf '\e[5n'
-    '';
-  };
-
   home.file."bin/race-init" = {
     executable = true;
     text = ''
       #!/usr/bin/env bash
       source ~/.bashrc 2>/dev/null
-      bind '"\e[0n": "nix run .#race -- 20 600"'
+      bind '"\e[0n": "node src/main.ts 10 600"'
       printf '\e[5n'
     '';
   };
+
+  # ── Environment ──
 
   home.sessionVariables = {
     TERM = "xterm-256color";
@@ -79,6 +47,16 @@
 
   home.shellAliases = {
     claude = "npx @anthropic-ai/claude-code@latest --dangerously-skip-permissions";
+    mc-start = "systemctl --user start minecraft-server";
+    mc-stop = "systemctl --user stop minecraft-server";
+    mc-restart = "systemctl --user restart minecraft-server";
+    mc-status = "systemctl --user status minecraft-server";
+    mc-log = "journalctl --user -f -u minecraft-server";
+    rc-start = "systemctl --user start claude-remote-control";
+    rc-stop = "systemctl --user stop claude-remote-control";
+    rc-restart = "systemctl --user restart claude-remote-control";
+    rc-status = "systemctl --user status claude-remote-control";
+    rc-log = "journalctl --user -f -u claude-remote-control";
   };
 
   home.file.".claude/settings.json".text = builtins.toJSON {
@@ -99,6 +77,8 @@
     };
   };
 
+  # ── Programs ──
+
   programs.btop = {
     enable = true;
     settings = {
@@ -108,7 +88,7 @@
   };
 
   programs.bash = {
-    enable = true; # required for home.shellAliases to land in .bashrc
+    enable = true;
     initExtra = ''
       if [[ -z "$ZELLIJ" ]]; then
         active=$(zellij list-sessions 2>/dev/null | grep -v EXITED | sed 's/\x1B\[[0-9;]*m//g' | awk 'NR==1{print $1}')
@@ -134,6 +114,8 @@
     };
   };
 
+  # ── Zellij layout ──
+
   programs.zellij = {
     enable = true;
     enableBashIntegration = false;
@@ -152,14 +134,14 @@
           tab name="system" {
             pane command="btop"
           }
-          tab name="server" cwd="/home/bridger/Developer/steve" {
+          tab name="mc-server" cwd="/home/bridger/Developer/steve" {
             pane command="bash" {
-              args "--init-file" "/home/bridger/bin/server-init"
+              args "-lc" "journalctl --user -f -u minecraft-server"
             }
           }
           tab name="rcon" cwd="/home/bridger/Developer/steve" {
             pane command="bash" {
-              args "-c" "echo 'Waiting for RCON...' && until nc -z localhost 25575 2>/dev/null; do sleep 2; done && nix run .#rcon"
+              args "-lc" "echo 'Waiting for MC server...' && until nc -z localhost 25575 2>/dev/null; do sleep 2; done && node src/rcon-cli.ts; exec bash -l"
             }
           }
           tab name="steve" cwd="/home/bridger/Developer/steve" {
@@ -172,9 +154,9 @@
               args "-lc" "lazygit"
             }
           }
-          tab name="journal" {
+          tab name="rc-log" {
             pane command="bash" {
-              args "-lc" "systemctl --user status claude-remote-control --no-pager 2>/dev/null; echo; echo '── Waiting for errors ──'; journalctl --user -f -u claude-remote-control | grep -iE \"error|fail|Started|Stopped|exited|restart\""
+              args "-lc" "journalctl --user -f -u claude-remote-control"
             }
           }
           tab name="race" cwd="/home/bridger/Developer/steve" {
@@ -197,6 +179,30 @@
           }
         }
       '';
+    };
+  };
+
+  # ── Systemd services ──
+
+  systemd.user.services.minecraft-server = {
+    Unit = {
+      Description = "Minecraft Server";
+      After = [ "network-online.target" ];
+    };
+    Service = {
+      Type = "simple";
+      WorkingDirectory = "/home/bridger/Developer/steve";
+      ExecStart = "${pkgs.bash}/bin/bash -lc 'cd /home/bridger/Developer/steve && MC_MEMORY=8G nix run'";
+      Restart = "on-failure";
+      RestartSec = 10;
+      Environment = [
+        "HOME=/home/bridger"
+        "TERM=xterm-256color"
+        "PATH=/run/current-system/sw/bin:/etc/profiles/per-user/bridger/bin:/home/bridger/.nix-profile/bin"
+      ];
+    };
+    Install = {
+      WantedBy = [ "default.target" ];
     };
   };
 
