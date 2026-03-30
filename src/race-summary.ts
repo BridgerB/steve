@@ -166,8 +166,7 @@ const fmtTime = (secs: number | null): string => {
 	return s > 0 ? `${m}m${String(s).padStart(2, "0")}s` : `${m}m`;
 };
 
-// Each cell is "✔ 35s" or "·", figure out max visual width per column
-const cols = milestones.map(([name]) => name);
+// Build cell data: cellData[botIndex][milestoneIndex]
 const cellData: { done: boolean; time: string }[][] = [];
 for (const row of rows) {
 	const vals = Object.values(row);
@@ -180,49 +179,35 @@ for (const row of rows) {
 	cellData.push(cells);
 }
 
-// Column widths: max of header or "✔ Xm XXs"
-const colW = cols.map((c, ci) => {
-	const maxCell = Math.max(
-		...cellData.map((r) => {
-			const t = r[ci]!.time;
-			return t ? t.length + 2 : 1; // "✔ " + time, or "·"
-		}),
-	);
-	return Math.max(c.length, maxCell);
-});
-
-const botW = Math.max(
-	8,
-	...rows.map((r) => (Object.values(r)[0] as string).length),
-);
 const pad = (s: string, w: number) => s + " ".repeat(Math.max(0, w - s.length));
 
-// Header
+// Transposed: bots across top, milestones down left
+const milestoneW = Math.max(14, ...milestones.map(([name]) => name.length));
+const botNames = botIds;
+const botW = Math.max(6, ...botNames.map((b) => b.length));
+
+// Header row: milestone label column + bot names
 const hdr =
 	"  " +
-	bold(pad("bot", botW + 2)) +
-	cols.map((c, i) => dim(pad(c, colW[i]!))).join("  ");
+	pad("", milestoneW + 2) +
+	botNames.map((b) => dim(pad(b, botW))).join("  ");
 const sep =
-	"  " +
-	dim("─".repeat(botW + 2 + cols.reduce((s, _, i) => s + colW[i]! + 2, 0)));
+	"  " + dim("─".repeat(milestoneW + 2 + botNames.length * (botW + 2)));
 console.log(hdr);
 console.log(sep);
 
-// Rows
-for (let r = 0; r < rows.length; r++) {
-	const bot = Object.values(rows[r]!)[0] as string;
-	let line = "  " + pad(bot, botW + 2);
-	for (let i = 0; i < milestones.length; i++) {
-		const { done, time } = cellData[r]![i]!;
-		if (done) {
-			const visual = time ? `✔ ${time}` : "✔";
-			// ✔ is 1 char visually, pad accordingly
+// One row per milestone
+for (let mi = 0; mi < milestones.length; mi++) {
+	const name = milestones[mi]![0];
+	let line = "  " + bold(pad(name, milestoneW + 2));
+	for (let bi = 0; bi < botNames.length; bi++) {
+		const cell = cellData[bi]?.[mi];
+		if (cell?.done) {
+			const visual = cell.time ? `✔ ${cell.time}` : "✔";
 			line +=
-				green(visual) +
-				" ".repeat(Math.max(0, colW[i]! - visual.length)) +
-				"  ";
+				green(visual) + " ".repeat(Math.max(0, botW - visual.length)) + "  ";
 		} else {
-			line += dim("·") + " ".repeat(Math.max(0, colW[i]! - 1)) + "  ";
+			line += dim("·") + " ".repeat(Math.max(0, botW - 1)) + "  ";
 		}
 	}
 	console.log(line);
