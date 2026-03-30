@@ -61,70 +61,55 @@ const status =
 			? "🏁 JUST FINISHED"
 			: `⏹ FINISHED (${ageStr})`;
 
-// Each milestone: [display name, step event pattern, inventory item pattern]
+// Each milestone: [display name, SQL LIKE pattern for item_name]
 const milestones = [
-	["wood", "Gather Wood:%", "%_log"],
-	["planks", "Craft Planks:%", "%_planks"],
-	["table", "Craft Crafting Table:%", "crafting_table"],
-	["wood pick", "Craft Wooden Pickaxe:%", "wooden_pickaxe"],
-	["cobblestone", "Mine Cobblestone:%", "cobblestone"],
-	["stone pick", "Craft Stone Pickaxe:%", "stone_pickaxe"],
-	["stone sword", "Craft Stone Sword:%", "stone_sword"],
-	["furnace", "Craft Furnace:%", "furnace"],
-	["coal", "Mine Coal:%", "coal"],
-	["iron ore", "Mine Iron%", "raw_iron"],
-	["smelt iron", "Smelt Iron:%", "iron_ingot"],
-	["iron pick", "Craft Iron Pickaxe:%", "iron_pickaxe"],
-	["bucket", "Craft Bucket%", "bucket"],
-	["water bucket", "Fill Water%", "water_bucket"],
-	["food", "Gather Food:%", null],
+	["wood", "%_log"],
+	["planks", "%_planks"],
+	["table", "crafting_table"],
+	["wood pick", "wooden_pickaxe"],
+	["cobblestone", "cobblestone"],
+	["stone pick", "stone_pickaxe"],
+	["stone sword", "stone_sword"],
+	["furnace", "furnace"],
+	["coal", "coal"],
+	["iron ore", "raw_iron"],
+	["smelt iron", "iron_ingot"],
+	["iron pick", "iron_pickaxe"],
+	["bucket", "bucket"],
+	["water bucket", "water_bucket"],
+	["food", "cooked_%"],
 ] as const;
 
-// Fetch all data in bulk, then process in JS
+// Fetch spawn times and first-seen inventory timestamps
 const spawns = db
 	.prepare(
 		"SELECT bot_id, MIN(ts) as ts FROM events WHERE race_id = ? AND category = 'lifecycle' AND event = 'spawn' GROUP BY bot_id",
 	)
 	.all(raceId) as { bot_id: string; ts: string }[];
 
-const successes = db
+const invFirstSeen = db
 	.prepare(
-		"SELECT bot_id, detail, ts FROM events WHERE race_id = ? AND event = 'success'",
+		"SELECT bot_id, item_name, MIN(ts) as ts FROM inventory_snapshots WHERE race_id = ? AND count > 0 GROUP BY bot_id, item_name",
 	)
-	.all(raceId) as { bot_id: string; detail: string; ts: string }[];
-
-const invItems = db
-	.prepare(
-		"SELECT bot_id, item_name, MAX(count) as count FROM inventory_snapshots WHERE race_id = ? GROUP BY bot_id, item_name HAVING count > 0",
-	)
-	.all(raceId) as { bot_id: string; item_name: string; count: number }[];
+	.all(raceId) as { bot_id: string; item_name: string; ts: string }[];
 
 // Build per-bot milestone data
 type BotData = { done: boolean; timeSec: number | null }[];
 const botResults = new Map<string, BotData>();
 
+const likeToRegex = (pattern: string) =>
+	new RegExp(`^${pattern.replace(/%/g, ".*")}$`);
+
 for (const { bot_id, ts: spawnTs } of spawns) {
 	const spawnTime = new Date(spawnTs).getTime();
-	const botSuccesses = successes.filter((s) => s.bot_id === bot_id);
-	const botInv = invItems.filter((i) => i.bot_id === bot_id);
+	const botInv = invFirstSeen.filter((i) => i.bot_id === bot_id);
 
-	const data: BotData = milestones.map(([, stepPattern, invPattern]) => {
-		const likeMatch = (detail: string, pattern: string) => {
-			const p = pattern.replace(/%/g, ".*").replace(/_/g, ".");
-			return new RegExp(`^${p}$`).test(detail);
-		};
-		const stepHit = botSuccesses.find((s) => likeMatch(s.detail, stepPattern));
-		const invHit = invPattern
-			? botInv.some((i) => {
-					const p = invPattern.replace(/%/g, ".*");
-					return new RegExp(`^${p}$`).test(i.item_name);
-				})
-			: false;
-		const done = !!stepHit || invHit;
-		const timeSec = stepHit
-			? Math.round((new Date(stepHit.ts).getTime() - spawnTime) / 1000)
-			: null;
-		return { done, timeSec };
+	const data: BotData = milestones.map(([, itemPattern]) => {
+		const re = likeToRegex(itemPattern);
+		const hit = botInv.find((i) => re.test(i.item_name));
+		if (!hit) return { done: false, timeSec: null };
+		const timeSec = Math.round((new Date(hit.ts).getTime() - spawnTime) / 1000);
+		return { done: true, timeSec };
 	});
 	botResults.set(bot_id, data);
 }
