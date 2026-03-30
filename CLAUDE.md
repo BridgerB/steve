@@ -22,9 +22,8 @@ nix run .#reset                  # reset world + restart server
 node src/rcon-cli.ts             # interactive RCON console
 
 # Run bot race (server must be running)
-node src/main.ts <bots> <seconds> # race bots (server must be running)
-node src/main.ts 10 600          # 10 bots, 10min (default)
-node src/main.ts 1 120           # 1 bot, 2min (quick test)
+node src/main.ts --bots 10 --timeout 600   # 10 bots, 10min (default)
+node src/main.ts -b 1 -t 120               # 1 bot, 2min (quick test)
 
 # Run tests (server must be running)
 node --test src/test.ts          # all tests

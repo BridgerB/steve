@@ -89,7 +89,7 @@
     text = ''
       #!/usr/bin/env bash
       source ~/.bashrc 2>/dev/null
-      bind '"\e[0n": "node src/main.ts 10 600"'
+      bind '"\e[0n": "node src/main.ts --bots 10 --timeout 600"'
       printf '\e[5n'
     '';
   };

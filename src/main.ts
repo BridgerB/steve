@@ -2,9 +2,9 @@
  * Steve - Ender Dragon Speedrun Bot
  *
  * Usage:
- *   node src/main.ts           Run 1 bot (default)
- *   node src/main.ts 5         Run 5 bots racing
- *   node src/main.ts 5 180     Run 5 bots, 180s timeout
+ *   node src/main.ts                        Run 10 bots, 600s (default)
+ *   node src/main.ts --bots 5 --timeout 180 Run 5 bots, 180s timeout
+ *   node src/main.ts -b 1 -t 120            Run 1 bot, 120s timeout
  *
  * When run as a child (STEVE_BOT_MODE=1), acts as a single bot instance.
  * Otherwise, acts as the orchestrator that spawns bot child processes.
@@ -704,8 +704,17 @@ if (isBotMode) {
 	startBot();
 } else {
 	// Orchestrator — parse args, spawn bot(s)
-	const count = parseInt(process.argv[2] ?? "10", 10);
-	const timeout = parseInt(process.argv[3] ?? "600", 10) * 1000;
+	const { parseArgs } = await import("node:util");
+	const { values } = parseArgs({
+		options: {
+			bots: { type: "string", short: "b", default: "10" },
+			timeout: { type: "string", short: "t", default: "600" },
+		},
+		allowPositionals: true,
+		args: process.argv.slice(2),
+	});
+	const count = parseInt(values.bots!, 10);
+	const timeout = parseInt(values.timeout!, 10) * 1000;
 
 	console.log("");
 	console.log("╔════════════════════════════════════════════════════════╗");
