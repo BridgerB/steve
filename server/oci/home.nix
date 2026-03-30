@@ -186,27 +186,28 @@
               plugin location="zellij:status-bar"
             }
           }
+          tab name="steve" cwd="/home/bridger/Developer/steve" {
+            pane stacked=true {
+              pane expanded=true command="bash" {
+                args "-lc" "lazygit"
+              }
+              pane command="bash" {
+                args "-lc" "nvim ."
+              }
+            }
+          }
+          tab name="typecraft" cwd="/home/bridger/Developer/typecraft" {
+            pane stacked=true {
+              pane expanded=true command="bash" {
+                args "-lc" "lazygit"
+              }
+              pane command="bash" {
+                args "-lc" "nvim ."
+              }
+            }
+          }
           tab name="shell" cwd="/home/bridger/Developer/steve" {
             pane
-          }
-          tab name="steve" cwd="/home/bridger/Developer/steve" split_direction="vertical" {
-            pane size="60%" command="nvim" {
-              args "."
-            }
-            pane size="40%" command="bash" {
-              args "-lc" "lazygit"
-            }
-          }
-          tab name="typecraft" cwd="/home/bridger/Developer/typecraft" split_direction="vertical" {
-            pane size="60%" command="nvim" {
-              args "."
-            }
-            pane size="40%" command="bash" {
-              args "-lc" "lazygit"
-            }
-          }
-          tab name="system" {
-            pane command="btop"
           }
           tab name="mc-server" cwd="/home/bridger/Developer/steve" {
             pane size="70%" command="bash" {
@@ -238,6 +239,9 @@
             pane command="bash" {
               args "-lc" "while true; do out=$(~/bin/race-summary 2>&1); printf '\\033[H\\033[J%s\\n' \"$out\"; sleep 2; done"
             }
+          }
+          tab name="system" {
+            pane command="btop"
           }
         }
       '';
