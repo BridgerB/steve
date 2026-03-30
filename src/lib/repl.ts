@@ -30,7 +30,7 @@ const bot: Bot = createBot({
 bot.on("error", (e) => {
 	if (!e.message.includes("waypoint")) console.log("ERR:", e.message);
 });
-initLogger();
+initLogger(`repl-${new Date().toISOString()}`);
 bot.on("debug", (category: string, detail: Record<string, unknown>) => {
 	logEvent(category, "debug", JSON.stringify(detail));
 });

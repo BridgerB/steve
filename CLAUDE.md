@@ -31,7 +31,7 @@ node --test src/test.ts          # all tests
 node --test --test-name-pattern portal src/test.ts
 
 # Type check
-npm run build                    # tsc (no emit, type-checking only)
+npm run check                    # tsc (no emit, type-checking only)
 
 # Interactive REPL (requires server running)
 node src/lib/repl.ts
@@ -39,7 +39,7 @@ echo 'return bot.entity.position' > /tmp/steve-cmd.txt
 ```
 
 Environment variables: `MC_HOST`, `MC_PORT`, `MC_USERNAME`, `STEVE_BOT_MODE=1`
-(child bot mode), `STEVE_TIMEOUT` (seconds).
+(child bot mode), `STEVE_RACE_ID` (race session), `STEVE_TIMEOUT` (seconds).
 
 ## MCP Server
 
@@ -161,7 +161,7 @@ stores to memory. No scanning, zero CPU cost.
 `inventory_snapshots`. All bots share one database file. Query with:
 
 ```bash
-sqlite3 data/races/<run>/race.db "SELECT category, event, detail FROM events WHERE bot_id='Steve0' AND category='step' ORDER BY id"
+sqlite3 data/steve.db "SELECT category, event, detail FROM events WHERE bot_id='Steve0' AND category='step' ORDER BY id"
 ```
 
 ### Testing

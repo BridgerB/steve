@@ -1,43 +1,41 @@
-import { readdirSync, statSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import Database from "better-sqlite3";
 
-const racesDir = join(process.cwd(), "data", "races");
+const dbPath = join(process.cwd(), "data", "steve.db");
 
-try {
-	readdirSync(racesDir);
-} catch {
+if (!existsSync(dbPath)) {
 	console.log("\n  No races yet. Start one from the race tab:");
 	console.log("  nix run .#race -- 20 600\n");
-	process.exit(0);
-}
-
-const dirs = readdirSync(racesDir)
-	.map((d) => ({ name: d, mtime: statSync(join(racesDir, d)).mtimeMs }))
-	.sort((a, b) => b.mtime - a.mtime)
-	.map((d) => d.name);
-if (dirs.length === 0) {
-	console.log("\n  No races yet. Start one from the race tab:");
-	console.log("  nix run .#race -- 20 600\n");
-	process.exit(0);
-}
-
-const raceDir = dirs[0]!;
-const dbPath = join(racesDir, raceDir, "race.db");
-
-try {
-	statSync(dbPath);
-} catch {
-	console.log(`  Race starting up... (${raceDir})`);
 	process.exit(0);
 }
 
 const db = new Database(dbPath, { readonly: true });
 db.pragma("journal_mode = WAL");
 
-// Status
-const dbMod = statSync(dbPath).mtimeMs;
-const ageSec = Math.round((Date.now() - dbMod) / 1000);
+const latestRace = db
+	.prepare(
+		"SELECT race_id, started_at, bot_count FROM races WHERE kind = 'race' ORDER BY started_at DESC LIMIT 1",
+	)
+	.get() as
+	| { race_id: string; started_at: string; bot_count: number }
+	| undefined;
+
+if (!latestRace) {
+	console.log("\n  No races yet. Start one from the race tab:");
+	console.log("  nix run .#race -- 20 600\n");
+	db.close();
+	process.exit(0);
+}
+
+const raceId = latestRace.race_id;
+
+// Status — use latest event timestamp for age
+const lastEvent = db
+	.prepare("SELECT MAX(ts) as ts FROM events WHERE race_id = ?")
+	.get(raceId) as { ts: string | null } | undefined;
+const lastTs = lastEvent?.ts ? new Date(lastEvent.ts).getTime() : Date.now();
+const ageSec = Math.round((Date.now() - lastTs) / 1000);
 const ageStr =
 	ageSec < 60
 		? `${ageSec}s ago`
@@ -85,19 +83,21 @@ const milestones = [
 // Fetch all data in bulk, then process in JS
 const spawns = db
 	.prepare(
-		"SELECT bot_id, MIN(ts) as ts FROM events WHERE category = 'lifecycle' AND event = 'spawn' GROUP BY bot_id",
+		"SELECT bot_id, MIN(ts) as ts FROM events WHERE race_id = ? AND category = 'lifecycle' AND event = 'spawn' GROUP BY bot_id",
 	)
-	.all() as { bot_id: string; ts: string }[];
+	.all(raceId) as { bot_id: string; ts: string }[];
 
 const successes = db
-	.prepare("SELECT bot_id, detail, ts FROM events WHERE event = 'success'")
-	.all() as { bot_id: string; detail: string; ts: string }[];
+	.prepare(
+		"SELECT bot_id, detail, ts FROM events WHERE race_id = ? AND event = 'success'",
+	)
+	.all(raceId) as { bot_id: string; detail: string; ts: string }[];
 
 const invItems = db
 	.prepare(
-		"SELECT bot_id, item_name, MAX(count) as count FROM inventory_snapshots GROUP BY bot_id, item_name HAVING count > 0",
+		"SELECT bot_id, item_name, MAX(count) as count FROM inventory_snapshots WHERE race_id = ? GROUP BY bot_id, item_name HAVING count > 0",
 	)
-	.all() as { bot_id: string; item_name: string; count: number }[];
+	.all(raceId) as { bot_id: string; item_name: string; count: number }[];
 
 // Build per-bot milestone data
 type BotData = { done: boolean; timeSec: number | null }[];
@@ -147,12 +147,12 @@ const rows = botIds.map((bot_id) => {
 });
 
 if (rows.length === 0) {
-	console.log(`\n  ${status} — ${raceDir}`);
+	console.log(`\n  ${status} — ${raceId}`);
 	console.log("  Waiting for first results...\n");
 	process.exit(0);
 }
 
-console.log(`\n  ${status} — ${raceDir}\n`);
+console.log(`\n  ${status} — ${raceId}\n`);
 
 const green = (s: string) => `\x1b[32m${s}\x1b[0m`;
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;

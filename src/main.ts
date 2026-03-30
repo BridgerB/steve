@@ -16,6 +16,7 @@ import { rememberResource } from "./lib/bot-utils.ts";
 import {
 	initLogger,
 	logEvent,
+	registerRace,
 	startTickLogger,
 	stopLogger,
 } from "./lib/logger.ts";
@@ -366,7 +367,7 @@ const startBot = async (): Promise<void> => {
 // ============================================
 
 import { type ChildProcess, spawn } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import Database from "better-sqlite3";
 
@@ -388,9 +389,7 @@ const runRace = async (count: number, timeoutMs: number) => {
 	const SPREAD_RADIUS = 50;
 
 	const RACE_ID = new Date().toISOString().replace(/:/g, "-");
-	const RACE_DIR = join(ROOT, "data", "races", RACE_ID);
-	const RACE_DB = join(RACE_DIR, "race.db");
-	mkdirSync(RACE_DIR, { recursive: true });
+	const DB_PATH = join(ROOT, "data", "steve.db");
 
 	const allProcs: ChildProcess[] = [];
 	let winner: number | null = null;
@@ -437,9 +436,9 @@ const runRace = async (count: number, timeoutMs: number) => {
 
 	const getRaceDb = (): Database.Database | null => {
 		if (raceDb) return raceDb;
-		if (!existsSync(RACE_DB)) return null;
+		if (!existsSync(DB_PATH)) return null;
 		try {
-			raceDb = new Database(RACE_DB);
+			raceDb = new Database(DB_PATH, { readonly: true });
 			raceDb.pragma("journal_mode = WAL");
 			raceDb.pragma("busy_timeout = 5000");
 			return raceDb;
@@ -449,6 +448,8 @@ const runRace = async (count: number, timeoutMs: number) => {
 	};
 
 	const GOAL = "food";
+	initLogger(RACE_ID);
+	registerRace(RACE_ID, "race", count, timeoutMs / 1000, GOAL);
 
 	const MILESTONES = [
 		{ name: "wood", query: "item_name LIKE '%_log'" },
@@ -473,9 +474,9 @@ const runRace = async (count: number, timeoutMs: number) => {
 			try {
 				const row = db
 					.prepare(
-						`SELECT bot_id FROM inventory_snapshots WHERE ${m.query} LIMIT 1`,
+						`SELECT bot_id FROM inventory_snapshots WHERE race_id = ? AND (${m.query}) LIMIT 1`,
 					)
-					.get() as { bot_id: string } | undefined;
+					.get(RACE_ID) as { bot_id: string } | undefined;
 				if (row) {
 					milestonesHit.add(m.name);
 					const elapsed = Math.round((Date.now() - raceStart) / 1000);
@@ -492,22 +493,22 @@ const runRace = async (count: number, timeoutMs: number) => {
 			// Food goal: check for Gather Food step success
 			const evt = db
 				.prepare(
-					"SELECT COUNT(*) as c FROM events WHERE bot_id = ? AND event = 'success' AND detail LIKE 'Gather Food:%'",
+					"SELECT COUNT(*) as c FROM events WHERE race_id = ? AND bot_id = ? AND event = 'success' AND detail LIKE 'Gather Food:%'",
 				)
-				.get(botId) as { c: number };
+				.get(RACE_ID, botId) as { c: number };
 			if (evt.c > 0) return true;
 			// Also check inventory for 10+ food items (use MAX per item to avoid double-counting snapshots)
 			const inv = db
 				.prepare(
 					`SELECT SUM(m) as c FROM (
-						SELECT MAX(count) as m FROM inventory_snapshots WHERE bot_id = ? AND (
+						SELECT MAX(count) as m FROM inventory_snapshots WHERE race_id = ? AND bot_id = ? AND (
 							item_name LIKE 'cooked_%' OR item_name = 'bread' OR item_name = 'apple'
 							OR item_name = 'beef' OR item_name = 'porkchop' OR item_name = 'mutton'
 							OR item_name = 'chicken' OR item_name = 'rabbit'
 						) GROUP BY item_name
 					)`,
 				)
-				.get(botId) as { c: number | null };
+				.get(RACE_ID, botId) as { c: number | null };
 			return (inv.c ?? 0) >= 10;
 		} catch {
 			return false;
@@ -520,9 +521,9 @@ const runRace = async (count: number, timeoutMs: number) => {
 		try {
 			const rows = db
 				.prepare(
-					"SELECT item_name || 'x' || MAX(count) as inv FROM inventory_snapshots WHERE bot_id = ? GROUP BY item_name ORDER BY MAX(count) DESC LIMIT 5",
+					"SELECT item_name || 'x' || MAX(count) as inv FROM inventory_snapshots WHERE race_id = ? AND bot_id = ? GROUP BY item_name ORDER BY MAX(count) DESC LIMIT 5",
 				)
-				.all(botId) as { inv: string }[];
+				.all(RACE_ID, botId) as { inv: string }[];
 			return rows.map((r) => r.inv).join(", ") || "empty";
 		} catch {
 			return "db error";
@@ -544,8 +545,7 @@ const runRace = async (count: number, timeoutMs: number) => {
 				...process.env,
 				MC_PORT: String(SERVER_PORT),
 				MC_USERNAME: username,
-				STEVE_DATA_DIR: RACE_DIR,
-				STEVE_DB_PATH: RACE_DB,
+				STEVE_RACE_ID: RACE_ID,
 				STEVE_BOT_MODE: "1",
 				STEVE_TIMEOUT: String(timeoutMs / 1000),
 				STEVE_VIEWER_PORT: idx < NUM_VIEWERS ? String(3001 + idx) : "",
@@ -573,7 +573,7 @@ const runRace = async (count: number, timeoutMs: number) => {
 				const elapsed = Math.round((Date.now() - start) / 1000);
 				winner = idx;
 				console.log(
-					`\n${username} WINS — ${GOAL} in ${elapsed}s (db: ${RACE_DB})\n`,
+					`\n${username} WINS — ${GOAL} in ${elapsed}s (race: ${RACE_ID})\n`,
 				);
 				const { notify } = await import("./lib/notify.ts");
 				await notify("Steve Bot", `${username} got ${GOAL} in ${elapsed}s`);
@@ -698,7 +698,9 @@ const isBotMode = process.env.STEVE_BOT_MODE === "1";
 
 if (isBotMode) {
 	// Child bot process — run single bot directly
-	initLogger(process.env.STEVE_DB_PATH);
+	const raceId = process.env.STEVE_RACE_ID ?? new Date().toISOString();
+	initLogger(raceId);
+	if (!process.env.STEVE_RACE_ID) registerRace(raceId, "solo", 1);
 	startBot();
 } else {
 	// Orchestrator — parse args, spawn bot(s)

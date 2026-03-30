@@ -1,6 +1,6 @@
 /**
  * SQLite logger for Steve bot.
- * Shared db: all bots write to one file with bot_id column.
+ * Shared db: all bots write to one file with bot_id + race_id columns.
  * Uses WAL mode for safe concurrent writes.
  */
 
@@ -10,33 +10,36 @@ import Database from "better-sqlite3";
 import type { Bot } from "typecraft";
 
 let db: Database.Database | null = null;
-let sessionId: string = "";
-let dbPath: string = "";
+let raceId: string = "";
 let botId: string = "";
 let tickInterval: ReturnType<typeof setInterval> | null = null;
 
+const DB_PATH = join(process.cwd(), "data", "steve.db");
+
 /** Initialize the database and start a new session */
-export const initLogger = (overrideDbPath?: string): string => {
-	const dataDir = process.env.STEVE_DATA_DIR ?? join(process.cwd(), "data");
-	mkdirSync(dataDir, { recursive: true });
+export const initLogger = (race: string): void => {
+	mkdirSync(join(process.cwd(), "data"), { recursive: true });
 
 	botId = process.env.MC_USERNAME ?? "Steve";
-	sessionId = new Date().toISOString();
+	raceId = race;
 
-	if (overrideDbPath) {
-		dbPath = overrideDbPath;
-	} else {
-		const safeId = sessionId.replace(/:/g, "-");
-		dbPath = join(dataDir, `${safeId}.db`);
-	}
-
-	db = new Database(dbPath);
+	db = new Database(DB_PATH);
 	db.pragma("journal_mode = WAL");
 	db.pragma("busy_timeout = 5000");
 
 	db.exec(`
+    CREATE TABLE IF NOT EXISTS races (
+      race_id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      bot_count INTEGER NOT NULL DEFAULT 1,
+      timeout_sec INTEGER,
+      goal TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS ticks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      race_id TEXT NOT NULL,
       bot_id TEXT NOT NULL,
       ts TEXT NOT NULL,
       x REAL, y REAL, z REAL,
@@ -52,6 +55,7 @@ export const initLogger = (overrideDbPath?: string): string => {
 
     CREATE TABLE IF NOT EXISTS events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      race_id TEXT NOT NULL,
       bot_id TEXT NOT NULL,
       ts TEXT NOT NULL,
       category TEXT NOT NULL,
@@ -62,6 +66,7 @@ export const initLogger = (overrideDbPath?: string): string => {
 
     CREATE TABLE IF NOT EXISTS inventory_snapshots (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      race_id TEXT NOT NULL,
       bot_id TEXT NOT NULL,
       ts TEXT NOT NULL,
       slot INTEGER NOT NULL,
@@ -69,12 +74,33 @@ export const initLogger = (overrideDbPath?: string): string => {
       count INTEGER NOT NULL
     );
 
+    CREATE INDEX IF NOT EXISTS idx_events_race ON events(race_id);
     CREATE INDEX IF NOT EXISTS idx_events_cat ON events(category);
     CREATE INDEX IF NOT EXISTS idx_events_bot ON events(bot_id);
+    CREATE INDEX IF NOT EXISTS idx_inv_race_bot ON inventory_snapshots(race_id, bot_id);
     CREATE INDEX IF NOT EXISTS idx_inv_bot ON inventory_snapshots(bot_id);
   `);
+};
 
-	return sessionId;
+/** Register a race/session in the races table */
+export const registerRace = (
+	id: string,
+	kind: string,
+	botCount: number,
+	timeoutSec?: number,
+	goal?: string,
+): void => {
+	if (!db) return;
+	db.prepare(
+		"INSERT OR IGNORE INTO races (race_id, kind, started_at, bot_count, timeout_sec, goal) VALUES (?, ?, ?, ?, ?, ?)",
+	).run(
+		id,
+		kind,
+		new Date().toISOString(),
+		botCount,
+		timeoutSec ?? null,
+		goal ?? null,
+	);
 };
 
 const ts = () => new Date().toISOString();
@@ -86,7 +112,7 @@ let stmtInv: Database.Statement | null = null;
 const getTickStmt = () => {
 	if (!stmtTick && db) {
 		stmtTick = db.prepare(
-			`INSERT INTO ticks (bot_id, ts, x, y, z, yaw, pitch, health, food, dimension, block_below, block_at_cursor, is_in_water, on_ground) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO ticks (race_id, bot_id, ts, x, y, z, yaw, pitch, health, food, dimension, block_below, block_at_cursor, is_in_water, on_ground) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		);
 	}
 	return stmtTick;
@@ -95,7 +121,7 @@ const getTickStmt = () => {
 const getEventStmt = () => {
 	if (!stmtEvent && db) {
 		stmtEvent = db.prepare(
-			`INSERT INTO events (bot_id, ts, category, event, detail, x, y, z) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO events (race_id, bot_id, ts, category, event, detail, x, y, z) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		);
 	}
 	return stmtEvent;
@@ -104,7 +130,7 @@ const getEventStmt = () => {
 const getInvStmt = () => {
 	if (!stmtInv && db) {
 		stmtInv = db.prepare(
-			`INSERT INTO inventory_snapshots (bot_id, ts, slot, item_name, count) VALUES (?, ?, ?, ?, ?)`,
+			`INSERT INTO inventory_snapshots (race_id, bot_id, ts, slot, item_name, count) VALUES (?, ?, ?, ?, ?, ?)`,
 		);
 	}
 	return stmtInv;
@@ -121,6 +147,7 @@ export const logEvent = (
 	const stmt = getEventStmt();
 	if (!stmt) return;
 	stmt.run(
+		raceId,
 		botId,
 		ts(),
 		category,
@@ -163,6 +190,7 @@ const logTick = (bot: Bot): void => {
 	const stmt = getTickStmt();
 	if (!stmt) return;
 	stmt.run(
+		raceId,
 		botId,
 		ts(),
 		p.x,
@@ -191,7 +219,7 @@ const logTick = (bot: Bot): void => {
 				const def = registry.itemsById.get(item.type);
 				if (def) name = def.name;
 			}
-			invStmt.run(botId, t, i, name, item.count);
+			invStmt.run(raceId, botId, t, i, name, item.count);
 		}
 	}
 };
@@ -220,8 +248,8 @@ export const stopLogger = (): void => {
 	}
 };
 
-/** Get current session ID */
-export const getSessionId = (): string => sessionId;
+/** Get current race ID */
+export const getRaceId = (): string => raceId;
 
-/** Get current db path */
-export const getDbPath = (): string => dbPath;
+/** Get db path (always data/steve.db) */
+export const getDbPath = (): string => DB_PATH;

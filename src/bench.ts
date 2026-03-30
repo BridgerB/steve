@@ -12,7 +12,7 @@
 
 import type { Bot } from "typecraft";
 import { createBot } from "typecraft";
-import { initLogger, logEvent } from "./lib/logger.ts";
+import { initLogger, logEvent, registerRace } from "./lib/logger.ts";
 import { connect as rconConnect } from "./lib/rcon.ts";
 import { syncFromBot } from "./state.ts";
 import { steps } from "./steps.ts";
@@ -235,14 +235,13 @@ const main = async () => {
 	const count = parseInt(process.argv[3] ?? "10", 10);
 	const timeoutSec = parseInt(process.argv[4] ?? "120", 10);
 
-	const dbPath = `data/bench-${stepId}-${new Date()
-		.toISOString()
-		.replace(/:/g, "-")}.db`;
-	initLogger(dbPath);
+	const raceId = `bench-${stepId}-${new Date().toISOString().replace(/:/g, "-")}`;
+	initLogger(raceId);
+	registerRace(raceId, "bench", count, timeoutSec, stepId);
 	console.log(
 		`Bench: ${step.name} (${stepId}) — ${count} bots, ${timeoutSec}s timeout`,
 	);
-	console.log(`DB: ${dbPath}`);
+	console.log(`Race: ${raceId}`);
 	console.log(`Setup: ${(SETUP[stepId] ?? []).join(", ") || "(none)"}\n`);
 
 	let winner: Result | null = null;
