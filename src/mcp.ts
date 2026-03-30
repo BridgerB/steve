@@ -124,9 +124,15 @@ const spawnBot = async (name: string): Promise<Bot> => {
 				let settled = false;
 				b.on("error", (err) => {
 					if (err.message.includes("waypoint")) return;
-					// Non-fatal packet parse errors — don't reject
-					if (err.message.includes("Unknown type:")) return;
-					if (err.message.includes("Unknown NBT")) return;
+					// Non-fatal packet parse errors — log but don't reject
+					if (
+						err.message.startsWith("[") &&
+						(err.message.includes("offset") ||
+							err.message.includes("Unknown type") ||
+							err.message.includes("Unknown NBT") ||
+							err.message.includes("NaN"))
+					)
+						return;
 					if (!settled) {
 						settled = true;
 						reject(err);
