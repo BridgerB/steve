@@ -1231,6 +1231,172 @@ server.tool(
 	},
 );
 
+server.tool(
+	"stress",
+	"Protocol stress test. Spawns entities, gives items, triggers particles/explosions/advancements/dimension changes, and reports packet parse errors.",
+	{},
+	async () => {
+		const b = await requireBot();
+		const errors: string[] = [];
+		const onError = (e: Error) => errors.push(e.message.slice(0, 300));
+		b.on("error", onError);
+
+		const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+		const chat = (cmd: string) => b.chat(cmd);
+
+		chat("/clear @s");
+		await sleep(300);
+
+		// Chat
+		chat("/say stress test");
+		chat("/me test");
+		await sleep(500);
+
+		// Entities
+		const mobs = [
+			"horse",
+			"cat",
+			"wolf",
+			"villager",
+			"cow",
+			"pig",
+			"chicken",
+			"sheep",
+			"frog",
+			"armadillo",
+			"warden",
+			"breeze",
+			"camel",
+			"sniffer",
+			"allay",
+			"bee",
+			"blaze",
+			"creeper",
+			"enderman",
+			"ghast",
+			"guardian",
+			"phantom",
+			"shulker",
+			"skeleton",
+			"spider",
+			"witch",
+			"zombie",
+			"drowned",
+			"piglin",
+			"hoglin",
+			"strider",
+			"fox",
+			"axolotl",
+			"goat",
+			"rabbit",
+			"mooshroom",
+			"turtle",
+			"salmon",
+			"cod",
+			"pufferfish",
+			"tropical_fish",
+			"dolphin",
+		];
+		for (const m of mobs) chat(`/summon ${m} ~ ~ ~`);
+		await sleep(5000);
+
+		// Items with components
+		const items = [
+			'written_book[written_book_content={title:"T",author:"A",pages:[\'{"text":"p"}\']}]',
+			"diamond_sword[enchantments={levels:{sharpness:5,fire_aspect:2}}]",
+			'netherite_chestplate[trim={material:"minecraft:gold",pattern:"minecraft:coast"}]',
+			'firework_rocket[fireworks={flight_duration:2,explosions:[{shape:"large_ball",colors:[I;11743532],has_trail:1b}]}]',
+			'crossbow[charged_projectiles=[{id:"minecraft:arrow",count:1}]]',
+			'bundle[bundle_contents=[{id:"minecraft:diamond",count:5}]]',
+			'splash_potion[potion_contents={potion:"minecraft:strong_healing"}]',
+			'goat_horn[instrument="minecraft:ponder_goat_horn"]',
+			"leather_chestplate[dyed_color={rgb:16711680}]",
+			'shield[banner_patterns=[{pattern:"minecraft:stripe_top",color:"red"}]]',
+			"filled_map[map_id=0]",
+			'suspicious_stew[suspicious_stew_effects=[{id:"minecraft:regeneration",duration:200}]]',
+		];
+		for (const item of items) chat(`/give @s ${item} 1`);
+		await sleep(2000);
+
+		// Explosions
+		chat("/summon tnt ~ ~5 ~ {fuse:20}");
+		await sleep(3000);
+
+		// Particles
+		chat("/particle dust 1 0 0 1 ~ ~ ~ 1 1 1 5 force @a");
+		chat(
+			"/particle dust_color_transition 1 0 0 1 0 1 0 ~ ~ ~ 1 1 1 5 force @a",
+		);
+		chat("/particle block minecraft:stone ~ ~ ~ 0.5 0.5 0.5 0 5 force @a");
+		chat("/particle item minecraft:diamond ~ ~ ~ 0.5 0.5 0.5 0 5 force @a");
+		await sleep(1000);
+
+		// Advancements
+		chat("/advancement grant @s everything");
+		await sleep(1000);
+
+		// Dimension changes
+		chat("/execute in minecraft:the_nether run tp @s 0 64 0");
+		await sleep(2000);
+		chat("/execute in minecraft:the_end run tp @s 0 64 0");
+		await sleep(2000);
+		chat("/execute in minecraft:overworld run tp @s ~ ~ ~");
+		await sleep(2000);
+
+		// Scoreboards, teams, bossbars
+		chat("/scoreboard objectives add _st dummy");
+		chat("/scoreboard players set @s _st 1");
+		chat("/team add _st");
+		chat("/team join _st @s");
+		chat('/bossbar add _st:b {"text":"B"}');
+		chat("/bossbar set _st:b players @a");
+		await sleep(500);
+
+		// Effects
+		chat("/effect give @s speed 3 2");
+		chat("/effect give @s glowing 3");
+		await sleep(500);
+
+		// Weather
+		chat("/weather thunder");
+		await sleep(500);
+		chat("/summon lightning_bolt ~ ~ ~");
+		await sleep(500);
+
+		// Gamemode
+		chat("/gamemode creative");
+		await sleep(300);
+		chat("/gamemode survival");
+		await sleep(300);
+
+		// Cleanup
+		chat("/kill @e[type=!player,distance=..200]");
+		chat("/clear @s");
+		chat("/advancement revoke @s everything");
+		chat("/scoreboard objectives remove _st");
+		chat("/team remove _st");
+		chat("/bossbar remove _st:b");
+		chat("/effect clear @s");
+		chat("/weather clear");
+		await sleep(1000);
+
+		b.removeListener("error", onError);
+
+		const unique = [...new Set(errors)].filter(
+			(e) => !e.includes("EPIPE") && !e.includes("ECONNRESET"),
+		);
+		const summary =
+			unique.length === 0
+				? "All packets parsed successfully — zero errors."
+				: `${unique.length} unique error(s):\n${unique.join("\n")}`;
+
+		return {
+			content: [{ type: "text" as const, text: summary }],
+			isError: unique.length > 0,
+		};
+	},
+);
+
 // ── Bootstrap ──
 
 const main = async () => {
