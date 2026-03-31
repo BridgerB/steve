@@ -10,6 +10,7 @@ import {
 	failure,
 	findItem,
 	getCraftingTable,
+	goTo,
 	success,
 } from "../../lib/bot-utils.ts";
 import type { StepResult } from "../../types.ts";
@@ -116,6 +117,9 @@ export const craftFlintAndSteel = async (bot: Bot): Promise<StepResult> => {
 	if (gravel) {
 		try {
 			await bot.dig(gravel);
+			await bot.collectDrops(6, 3000, async (p) => {
+				await goTo(bot, p, { range: 1.4, timeout: 3000 });
+			});
 		} catch {
 			// Ignore
 		}

@@ -87,7 +87,6 @@ export interface MineAndCollectOptions {
 	/** Time to wait after dig before checking (default: 100ms) */
 	postDigDelay?: number;
 	/** Time to wait for item collection (default: 300ms) */
-	collectDelay?: number;
 	/** Custom block validation function */
 	isValidBlock?: (block: { name: string } | null) => boolean;
 }
@@ -105,6 +104,7 @@ export const getPathfinder = (bot: Bot): Pathfinder => {
 	let pf = pathfinderCache.get(bot);
 	if (!pf) {
 		pf = createPathfinder(bot);
+		pf.setMovements({ liquidCost: 100 });
 		pathfinderCache.set(bot, pf);
 	}
 	return pf;
@@ -273,7 +273,6 @@ export const mineAndCollect = async (
 	const {
 		maxMineDistance = 4.5,
 		postDigDelay = 100,
-		collectDelay = 300,
 		isValidBlock = () => true,
 	} = options;
 
@@ -313,13 +312,9 @@ export const mineAndCollect = async (
 	}
 
 	// Walk to collect drop
-	const dropPos = offset(pos, 0.5, 0, 0.5);
-	await bot.lookAt(dropPos);
-
-	bot.setControlState("forward", true);
-	await sleep(500);
-	bot.setControlState("forward", false);
-	await sleep(collectDelay);
+	await bot.collectDrops(6, 3000, async (p) => {
+		await goTo(bot, p, { range: 1.4, timeout: 3000 });
+	});
 
 	return true;
 };

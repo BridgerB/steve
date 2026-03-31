@@ -294,12 +294,10 @@ export const mineBlock = async (
 			logEvent("mine", "mined", `${blockType} ${mined}/${targetCount}`);
 			await sleep(100);
 
-			// Walk to the mined block to collect drops — bot is already facing it from lookAt
-			await sleep(200);
-			bot.setControlState("forward", true);
-			await sleep(1000);
-			bot.setControlState("forward", false);
-			await sleep(1000);
+			// Navigate to dropped item for pickup
+			await bot.collectDrops(6, 3000, async (p) => {
+				await goTo(bot, p, { range: 1.4, timeout: 3000 });
+			});
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : "unknown";
 			logEvent("mine", "fail", msg);
