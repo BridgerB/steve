@@ -2,6 +2,7 @@
  * SQLite logger for Steve bot.
  * Shared db: all bots write to one file with bot_id + race_id columns.
  * Uses WAL mode for safe concurrent writes.
+ * Events are buffered in memory and flushed in a single transaction every 500ms.
  */
 
 import { mkdirSync } from "node:fs";
@@ -13,8 +14,46 @@ let db: Database.Database | null = null;
 let raceId: string = "";
 let botId: string = "";
 let tickInterval: ReturnType<typeof setInterval> | null = null;
+let flushInterval: ReturnType<typeof setInterval> | null = null;
 
 const DB_PATH = join(process.cwd(), "data", "steve.db");
+
+// ── Write buffer ──────────────────────────────────────────────────
+type EventRow = [
+	string,
+	string,
+	string,
+	string,
+	string,
+	string | null,
+	number | null,
+	number | null,
+	number | null,
+];
+type TickRow = [
+	string,
+	string,
+	string,
+	number,
+	number,
+	number,
+	number,
+	number,
+	number,
+	number,
+	string,
+	string,
+	string,
+	number,
+	number,
+];
+type InvRow = [string, string, string, number, string, number];
+
+const eventBuf: EventRow[] = [];
+const tickBuf: TickRow[] = [];
+const invBuf: InvRow[] = [];
+
+const FLUSH_INTERVAL_MS = 500;
 
 /** Initialize the database and start a new session */
 export const initLogger = (race: string): void => {
@@ -80,6 +119,8 @@ export const initLogger = (race: string): void => {
     CREATE INDEX IF NOT EXISTS idx_inv_race_bot ON inventory_snapshots(race_id, bot_id);
     CREATE INDEX IF NOT EXISTS idx_inv_bot ON inventory_snapshots(bot_id);
   `);
+
+	flushInterval = setInterval(flushBuffers, FLUSH_INTERVAL_MS);
 };
 
 /** Register a race/session in the races table */
@@ -136,6 +177,27 @@ const getInvStmt = () => {
 	return stmtInv;
 };
 
+// ── Flush: write all buffered rows in one transaction ─────────────
+const flushBuffers = (): void => {
+	if (!db) return;
+	if (eventBuf.length === 0 && tickBuf.length === 0 && invBuf.length === 0)
+		return;
+
+	const events = eventBuf.splice(0);
+	const ticks = tickBuf.splice(0);
+	const inv = invBuf.splice(0);
+
+	const eventStmt = getEventStmt();
+	const tickStmt = getTickStmt();
+	const invStmt = getInvStmt();
+
+	db.transaction(() => {
+		if (eventStmt) for (const row of events) eventStmt.run(...row);
+		if (tickStmt) for (const row of ticks) tickStmt.run(...row);
+		if (invStmt) for (const row of inv) invStmt.run(...row);
+	})();
+};
+
 /** Log a discrete event */
 export const logEvent = (
 	category: string,
@@ -144,9 +206,7 @@ export const logEvent = (
 	pos?: { x: number; y: number; z: number },
 ): void => {
 	if (!db) return;
-	const stmt = getEventStmt();
-	if (!stmt) return;
-	stmt.run(
+	eventBuf.push([
 		raceId,
 		botId,
 		ts(),
@@ -156,7 +216,7 @@ export const logEvent = (
 		pos?.x ?? null,
 		pos?.y ?? null,
 		pos?.z ?? null,
-	);
+	]);
 };
 
 /** Log a full tick snapshot */
@@ -186,13 +246,12 @@ const logTick = (bot: Bot): void => {
 	}
 
 	const dim = String(bot.game?.dimension ?? "overworld");
+	const t = ts();
 
-	const stmt = getTickStmt();
-	if (!stmt) return;
-	stmt.run(
+	tickBuf.push([
 		raceId,
 		botId,
-		ts(),
+		t,
 		p.x,
 		p.y,
 		p.z,
@@ -205,11 +264,8 @@ const logTick = (bot: Bot): void => {
 		blockCursor,
 		bot.entity.isInWater ? 1 : 0,
 		bot.entity.onGround ? 1 : 0,
-	);
+	]);
 
-	const invStmt = getInvStmt();
-	if (!invStmt) return;
-	const t = ts();
 	const registry = bot.registry;
 	for (let i = 0; i < bot.inventory.slots.length; i++) {
 		const item = bot.inventory.slots[i];
@@ -219,7 +275,7 @@ const logTick = (bot: Bot): void => {
 				const def = registry.itemsById.get(item.type);
 				if (def) name = def.name;
 			}
-			invStmt.run(raceId, botId, t, i, name, item.count);
+			invBuf.push([raceId, botId, t, i, name, item.count]);
 		}
 	}
 };
@@ -242,7 +298,17 @@ export const stopLogger = (): void => {
 		clearInterval(tickInterval);
 		tickInterval = null;
 	}
+	if (flushInterval) {
+		clearInterval(flushInterval);
+		flushInterval = null;
+	}
+	// Flush remaining buffered data before closing
 	if (db) {
+		try {
+			flushBuffers();
+		} catch {
+			/* closing anyway */
+		}
 		db.close();
 		db = null;
 	}
