@@ -222,6 +222,104 @@
             echo "Server ready. (PID $SERVER_PID)"
             wait $SERVER_PID
           '';
+
+          startZellij = pkgs.writeShellScriptBin "steve-dev" ''
+            set -euo pipefail
+            STEVE_DIR="''${STEVE_DIR:-$(pwd)}"
+            TYPECRAFT_DIR="''${TYPECRAFT_DIR:-$(dirname "$STEVE_DIR")/typecraft}"
+            MC_SERVER="${startServer}/bin/minecraft-server"
+
+            export PATH="$HOME/.local/bin:$PATH:${
+              pkgs.lib.makeBinPath [
+                pkgs.zellij
+                pkgs.lazygit
+                pkgs.btop
+                pkgs.nodejs_25
+                pkgs.jre
+                pkgs.git
+                pkgs.procps
+                pkgs.gnused
+                pkgs.gawk
+                pkgs.gnugrep
+              ]
+            }"
+
+            layout=/tmp/steve-dev-layout.kdl
+            cat > "$layout" <<'LAYOUT'
+            layout {
+              default_tab_template {
+                pane size=1 borderless=true {
+                  plugin location="zellij:tab-bar"
+                }
+                children
+                pane size=2 borderless=true {
+                  plugin location="zellij:status-bar"
+                }
+              }
+              tab name="steve" cwd="__STEVE_DIR__" {
+                pane stacked=true {
+                  pane expanded=true command="lazygit"
+                  pane command="nvim" {
+                    args "."
+                  }
+                }
+              }
+              tab name="typecraft" cwd="__TYPECRAFT_DIR__" {
+                pane stacked=true {
+                  pane expanded=true command="lazygit"
+                  pane command="nvim" {
+                    args "."
+                  }
+                }
+              }
+              tab name="server" cwd="__STEVE_DIR__" focus=true {
+                pane command="__MC_SERVER__"
+              }
+              tab name="claude" cwd="__STEVE_DIR__" {
+                pane command="bash" {
+                  args "-lc" "claude --dangerously-skip-permissions"
+                }
+              }
+              tab name="shell" cwd="__STEVE_DIR__" {
+                pane
+              }
+              tab name="rcon" cwd="__STEVE_DIR__" {
+                pane command="bash" {
+                  args "-lc" "node src/rcon-cli.ts; exec bash -l"
+                }
+              }
+              tab name="race" cwd="__STEVE_DIR__" {
+                pane command="bash" {
+                  args "-lc" "echo '$ node src/main.ts --bots 10 --timeout 600'; read; node src/main.ts --bots 10 --timeout 600; exec bash -l"
+                }
+              }
+              tab name="results" cwd="__STEVE_DIR__" {
+                pane command="bash" {
+                  args "-lc" "while true; do out=$(node src/race-summary.ts 2>&1); printf '\\033[H\\033[J%s\\n' \"$out\"; sleep 2; done"
+                }
+              }
+              tab name="system" {
+                pane command="btop"
+              }
+            }
+            LAYOUT
+            ${pkgs.gnused}/bin/sed -i \
+              -e "s|__STEVE_DIR__|$STEVE_DIR|g" \
+              -e "s|__TYPECRAFT_DIR__|$TYPECRAFT_DIR|g" \
+              -e "s|__MC_SERVER__|$MC_SERVER|g" \
+              "$layout"
+
+            SESSION="steve-dev"
+            status=$(zellij list-sessions 2>/dev/null | sed 's/\x1B\[[0-9;]*m//g' | grep "^$SESSION " || true)
+            if [[ "$status" == *"EXITED"* ]]; then
+              zellij delete-session "$SESSION" -y 2>/dev/null || true
+            fi
+            if [[ -n "$status" && "$status" != *"EXITED"* ]]; then
+              exec zellij attach "$SESSION"
+            else
+              exec zellij -s "$SESSION" -n "$layout"
+            fi
+          '';
         };
 
       treefmtEval = treefmt-nix.lib.evalModule devPkgs {
@@ -269,7 +367,7 @@
           p = makePackages (pkgsFor system);
         in
         {
-          default = p.startServer;
+          default = p.startZellij;
           server = p.startServer;
           reset = p.runReset;
         }
@@ -283,7 +381,7 @@
         {
           default = {
             type = "app";
-            program = "${p.startServer}/bin/minecraft-server";
+            program = "${p.startZellij}/bin/steve-dev";
           };
           reset = {
             type = "app";
