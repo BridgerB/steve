@@ -310,15 +310,8 @@
               "$layout"
 
             SESSION="steve-dev"
-            status=$(zellij list-sessions 2>/dev/null | sed 's/\x1B\[[0-9;]*m//g' | grep "^$SESSION " || true)
-            if [[ "$status" == *"EXITED"* ]]; then
-              zellij delete-session "$SESSION" -y 2>/dev/null || true
-            fi
-            if [[ -n "$status" && "$status" != *"EXITED"* ]]; then
-              exec zellij attach "$SESSION"
-            else
-              exec zellij -s "$SESSION" -n "$layout"
-            fi
+            zellij delete-session "$SESSION" 2>/dev/null || true
+            exec zellij -s "$SESSION" -n "$layout"
           '';
         };
 
