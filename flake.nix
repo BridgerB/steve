@@ -280,6 +280,11 @@
                   args "-lc" "npx @anthropic-ai/claude-code@latest --dangerously-skip-permissions"
                 }
               }
+              tab name="remote" cwd="__STEVE_DIR__" {
+                pane command="bash" {
+                  args "-lc" "npx @anthropic-ai/claude-code@latest remote-control --spawn worktree"
+                }
+              }
               tab name="shell" cwd="__STEVE_DIR__" {
                 pane
               }
