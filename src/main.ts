@@ -299,6 +299,31 @@ const startBot = async (): Promise<void> => {
 		log("Chunks loaded");
 		logEvent("lifecycle", "chunks_loaded");
 
+		// In race mode, wait for orchestrator to teleport us before starting
+		const targetX = parseInt(process.env.STEVE_SPAWN_X ?? "", 10);
+		const targetZ = parseInt(process.env.STEVE_SPAWN_Z ?? "", 10);
+		if (!isNaN(targetX)) {
+			log(`Waiting for teleport to ${targetX}, ${targetZ}...`);
+			await new Promise<void>((resolve) => {
+				const timeout = setTimeout(resolve, 30000);
+				const check = () => {
+					const dx = Math.abs(bot.entity.position.x - targetX);
+					const dz = Math.abs(bot.entity.position.z - targetZ);
+					if (dx < 300 && dz < 300) {
+						clearTimeout(timeout);
+						bot.removeListener("forcedMove", check);
+						resolve();
+					}
+				};
+				bot.on("forcedMove", check);
+				check();
+			});
+			await bot.waitForChunksToLoad();
+			log(
+				`Teleported to ${Math.floor(bot.entity.position.x)}, ${Math.floor(bot.entity.position.z)}`,
+			);
+		}
+
 		log(
 			`Position: ${Math.floor(bot.entity.position.x)}, ${Math.floor(
 				bot.entity.position.y,
@@ -386,7 +411,7 @@ const runRace = async (count: number, timeoutMs: number) => {
 	const SERVER_PORT = parseInt(process.env.MC_PORT ?? "25565", 10);
 	const RCON_PORT = parseInt(process.env.MC_RCON_PORT ?? "25575", 10);
 	const RCON_PASS = process.env.MC_RCON_PASS ?? "minecraft-test-rcon";
-	const SPREAD_RADIUS = 50;
+	const SPAWN_SPACING = 250;
 
 	const RACE_ID = new Date().toISOString().replace(/:/g, "-");
 	const DB_PATH = join(ROOT, "data", "steve.db");
@@ -447,7 +472,7 @@ const runRace = async (count: number, timeoutMs: number) => {
 		}
 	};
 
-	const GOAL = "food";
+	const GOAL = "enter_end";
 	initLogger(RACE_ID);
 	registerRace(RACE_ID, "race", count, timeoutMs / 1000, GOAL);
 
@@ -462,6 +487,19 @@ const runRace = async (count: number, timeoutMs: number) => {
 			query:
 				"item_name LIKE 'cooked_%' OR item_name IN ('beef','porkchop','mutton','chicken','rabbit','bread','apple')",
 		},
+		{ name: "furnace", query: "item_name = 'furnace'" },
+		{ name: "coal", query: "item_name = 'coal'" },
+		{ name: "iron ore", query: "item_name = 'raw_iron'" },
+		{ name: "iron ingot", query: "item_name = 'iron_ingot'" },
+		{ name: "iron pickaxe", query: "item_name = 'iron_pickaxe'" },
+		{
+			name: "bucket",
+			query: "item_name = 'bucket' OR item_name = 'water_bucket'",
+		},
+		{ name: "flint & steel", query: "item_name = 'flint_and_steel'" },
+		{ name: "blaze rod", query: "item_name = 'blaze_rod'" },
+		{ name: "ender pearl", query: "item_name = 'ender_pearl'" },
+		{ name: "eye of ender", query: "item_name = 'ender_eye'" },
 	];
 	const milestonesHit = new Set<string>();
 	const raceStart = Date.now();
@@ -490,26 +528,12 @@ const runRace = async (count: number, timeoutMs: number) => {
 		const db = getRaceDb();
 		if (!db) return false;
 		try {
-			// Food goal: check for Gather Food step success
 			const evt = db
 				.prepare(
-					"SELECT COUNT(*) as c FROM events WHERE race_id = ? AND bot_id = ? AND event = 'success' AND detail LIKE 'Gather Food:%'",
+					"SELECT COUNT(*) as c FROM events WHERE race_id = ? AND bot_id = ? AND event = 'success' AND detail LIKE 'Enter The End:%'",
 				)
 				.get(RACE_ID, botId) as { c: number };
-			if (evt.c > 0) return true;
-			// Also check inventory for 10+ food items (use MAX per item to avoid double-counting snapshots)
-			const inv = db
-				.prepare(
-					`SELECT SUM(m) as c FROM (
-						SELECT MAX(count) as m FROM inventory_snapshots WHERE race_id = ? AND bot_id = ? AND (
-							item_name LIKE 'cooked_%' OR item_name = 'bread' OR item_name = 'apple'
-							OR item_name = 'beef' OR item_name = 'porkchop' OR item_name = 'mutton'
-							OR item_name = 'chicken' OR item_name = 'rabbit'
-						) GROUP BY item_name
-					)`,
-				)
-				.get(RACE_ID, botId) as { c: number | null };
-			return (inv.c ?? 0) >= 10;
+			return evt.c > 0;
 		} catch {
 			return false;
 		}
@@ -530,15 +554,16 @@ const runRace = async (count: number, timeoutMs: number) => {
 		}
 	};
 
-	const runBot = async (idx: number): Promise<InstanceResult> => {
-		const username = `Steve${idx}`;
+	// Web viewer count — needed before spawn loop for env vars
+	const hasDisplay = !!(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
+	const NUM_VIEWERS = hasDisplay ? Math.min(count, 4) : 0;
 
-		const angle = (idx / count) * 2 * Math.PI;
-		const spawnX = Math.floor(Math.cos(angle) * SPREAD_RADIUS);
-		const spawnZ = Math.floor(Math.sin(angle) * SPREAD_RADIUS);
-
-		await sleep(idx * 1000);
-
+	// Spawn all bot processes first, then teleport them
+	const botProcs: { proc: ChildProcess; username: string; exited: boolean }[] =
+		[];
+	for (let i = 0; i < count; i++) {
+		const username = `Steve${i}`;
+		await sleep(2000);
 		const steveProc = spawn(process.execPath, [join(ROOT, "src/main.ts")], {
 			cwd: ROOT,
 			env: {
@@ -547,26 +572,55 @@ const runRace = async (count: number, timeoutMs: number) => {
 				MC_USERNAME: username,
 				STEVE_RACE_ID: RACE_ID,
 				STEVE_BOT_MODE: "1",
+				STEVE_SPAWN_X: String(i * SPAWN_SPACING),
+				STEVE_SPAWN_Z: String(i * SPAWN_SPACING),
 				STEVE_TIMEOUT: String(timeoutMs / 1000),
-				STEVE_VIEWER_PORT: idx < NUM_VIEWERS ? String(3001 + idx) : "",
+				STEVE_VIEWER_PORT: i < NUM_VIEWERS ? String(3001 + i) : "",
 			},
 			stdio: ["ignore", "ignore", "ignore"],
 		});
 		allProcs.push(steveProc);
-
-		// Resolve when bot exits or timeout
-		let botExited = false;
+		const entry = { proc: steveProc, username, exited: false };
 		steveProc.on("exit", () => {
-			botExited = true;
+			entry.exited = true;
 		});
+		botProcs.push(entry);
+	}
 
-		await sleep(3000);
-		await rcon(`clear ${username}`);
-		await rcon(`spreadplayers ${spawnX} ${spawnZ} 0 5 false ${username}`);
+	// Teleport each bot as soon as it joins — poll and tp in one loop
+	const placed = new Set<string>();
+	for (let attempt = 0; attempt < 60 && placed.size < count; attempt++) {
+		await sleep(1000);
+		try {
+			const list = await rcon("list");
+			for (let i = 0; i < count; i++) {
+				const name = `Steve${i}`;
+				if (placed.has(name) || !list.includes(name)) continue;
+				const x = i * SPAWN_SPACING;
+				const z = i * SPAWN_SPACING;
+				await rcon(`clear ${name}`);
+				await rcon(`tp ${name} ${x} 200 ${z}`);
+				await sleep(3000); // let server generate chunks
+				placed.add(name);
+				console.log(`  ${name} → tp ${x}, ${z}`);
+			}
+		} catch {}
+	}
+	if (placed.size < count)
+		console.log(`  Warning: ${count - placed.size} bots did not join`);
+	console.log(`  All bots teleported — race starting\n`);
+
+	const runBot = async (idx: number): Promise<InstanceResult> => {
+		const username = `Steve${idx}`;
+		const entry = botProcs[idx]!;
+		const steveProc = entry.proc;
+		steveProc.on("exit", () => {
+			entry.exited = true;
+		});
 
 		const start = Date.now();
 
-		while (Date.now() - start < timeoutMs && winner === null && !botExited) {
+		while (Date.now() - start < timeoutMs && winner === null && !entry.exited) {
 			await sleep(3000);
 			checkMilestones();
 			if (checkForGoal(username)) {
@@ -585,7 +639,7 @@ const runRace = async (count: number, timeoutMs: number) => {
 		}
 
 		const elapsed = Math.round((Date.now() - start) / 1000);
-		if (!botExited) steveProc.kill("SIGKILL");
+		if (!entry.exited) steveProc.kill("SIGKILL");
 		if (winner !== null && winner !== idx) {
 			return {
 				idx,
@@ -616,9 +670,7 @@ const runRace = async (count: number, timeoutMs: number) => {
 	}
 	await sleep(1000);
 
-	// Web viewer grid — only on machines with a display (not headless servers)
-	const hasDisplay = !!(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
-	const NUM_VIEWERS = hasDisplay ? Math.min(count, 4) : 0;
+	// Web viewer grid
 	if (NUM_VIEWERS > 0) {
 		const { createServer: createHttpServer } = await import("node:http");
 		const gridHtml = `<!DOCTYPE html>

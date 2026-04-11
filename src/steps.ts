@@ -116,21 +116,9 @@ export const steps: readonly Step[] = [
 	},
 
 	{
-		id: "gather_food",
-		name: "Gather Food",
-		priority: 9,
-		canExecute: (s) => s.equipment.sword !== "none",
-		isComplete: (s) => s.inventory.food >= 10,
-		execute: async (bot, _state) => {
-			const { gatherFood } = await import("./tasks/food/main.ts");
-			return gatherFood(bot, 10);
-		},
-	},
-
-	{
 		id: "craft_furnace",
 		name: "Craft Furnace",
-		priority: 10,
+		priority: 9,
 		canExecute: (s) => s.inventory.cobblestone >= 8,
 		isComplete: (s) => s.equipment.hasFurnace,
 		execute: async (bot, _state) => {
@@ -157,10 +145,10 @@ export const steps: readonly Step[] = [
 		name: "Mine Iron Ore",
 		priority: 11,
 		canExecute: (s) => getPickaxeTier(s.equipment.pickaxe) >= 2,
-		isComplete: (s) => s.inventory.ironOre + s.inventory.ironIngots >= 9,
+		isComplete: (s) => s.inventory.ironOre + s.inventory.ironIngots >= 11,
 		execute: async (bot, _state) => {
 			const { mineBlock } = await import("./tasks/mining/main.ts");
-			return mineBlock(bot, "iron_ore", 9);
+			return mineBlock(bot, "iron_ore", 11);
 		},
 	},
 
@@ -172,10 +160,10 @@ export const steps: readonly Step[] = [
 			s.equipment.hasFurnace &&
 			s.inventory.ironOre >= 3 &&
 			(s.inventory.coal >= 2 || s.inventory.planks >= 4),
-		isComplete: (s) => s.inventory.ironIngots >= 9,
+		isComplete: (s) => s.inventory.ironIngots >= 11,
 		execute: async (bot, _state) => {
 			const { smeltItems } = await import("./tasks/smelt/main.ts");
-			return smeltItems(bot, "raw_iron", 9);
+			return smeltItems(bot, "raw_iron", 11);
 		},
 	},
 
@@ -216,6 +204,18 @@ export const steps: readonly Step[] = [
 			const r1 = await fillWaterBucket(bot);
 			if (!r1.success) return r1;
 			return fillWaterBucket(bot);
+		},
+	},
+
+	{
+		id: "gather_food",
+		name: "Gather Food",
+		priority: 16,
+		canExecute: (s) => s.equipment.sword !== "none",
+		isComplete: (s) => s.inventory.food >= 5,
+		execute: async (bot, _state) => {
+			const { gatherFood } = await import("./tasks/food/main.ts");
+			return gatherFood(bot, 5);
 		},
 	},
 

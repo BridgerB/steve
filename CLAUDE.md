@@ -10,8 +10,8 @@ Steve is an autonomous Minecraft bot that completes an Ender Dragon speedrun
 (custom Minecraft 1.21.11 protocol library) with TypeScript (ESM, strict mode,
 Node 25).
 
-**Current goal:** `food` — the bot must gather wood, craft tools (including a
-sword), then hunt animals to collect 20 food items.
+**Current goal:** `portal` — the bot must progress through wood, stone, iron,
+nether, and stronghold phases to activate the End Portal.
 
 ## Commands
 

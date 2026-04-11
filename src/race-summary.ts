@@ -70,14 +70,18 @@ const milestones = [
 	["cobblestone", "cobblestone"],
 	["stone pick", "stone_pickaxe"],
 	["stone sword", "stone_sword"],
+	["food", "cooked_%"],
 	["furnace", "furnace"],
 	["coal", "coal"],
 	["iron ore", "raw_iron"],
-	["smelt iron", "iron_ingot"],
+	["iron ingot", "iron_ingot"],
 	["iron pick", "iron_pickaxe"],
 	["bucket", "bucket"],
 	["water bucket", "water_bucket"],
-	["food", "cooked_%"],
+	["flint&steel", "flint_and_steel"],
+	["blaze rod", "blaze_rod"],
+	["ender pearl", "ender_pearl"],
+	["eye of ender", "ender_eye"],
 ] as const;
 
 // Fetch spawn times and first-seen inventory timestamps
