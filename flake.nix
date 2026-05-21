@@ -62,30 +62,6 @@
             url = "https://piston-data.mojang.com/v1/objects/64bb6d763bed0a9f1d632ec347938594144943ed/server.jar";
             sha256 = "09hpvmjnspf74k8ks9imcc3lqz8p3gjald3y3j9nz035704qwfzq";
           };
-          serverProperties = pkgs.writeText "server.properties" ''
-            max-players=100
-            online-mode=false
-            pvp=false
-            difficulty=peaceful
-            gamemode=survival
-            enable-command-block=true
-            spawn-protection=0
-            view-distance=10
-            simulation-distance=6
-            server-port=25565
-            level-seed=typecraft
-            motd=Steve Bot Testing Server
-            white-list=false
-            spawn-monsters=true
-            spawn-animals=true
-            spawn-npcs=true
-            allow-flight=false
-            rate-limit=0
-            enable-rcon=true
-            rcon.password=${rconPassword}
-            rcon.port=${rconPort}
-            broadcast-rcon-to-ops=true
-          '';
           opsJson = pkgs.writeText "ops.json" (
             builtins.toJSON [
               {
@@ -171,8 +147,51 @@
             # Setup eula
             echo "eula=true" > eula.txt
 
-            # Copy server.properties and ops.json
-            cp -f ${serverProperties} server.properties
+            # World preset — STEVE_WORLD=normal (default, speedrun) or
+            # flat (renderer testing: flat creative world, no mobs/structures)
+            WORLD="''${STEVE_WORLD:-normal}"
+            if [ "$WORLD" = "flat" ]; then
+              GAMEMODE=creative
+              LEVEL_TYPE=minecraft:flat
+              GEN_STRUCTURES=false
+              SPAWN_MOBS=false
+              ALLOW_FLIGHT=true
+            else
+              GAMEMODE=survival
+              LEVEL_TYPE=minecraft:normal
+              GEN_STRUCTURES=true
+              SPAWN_MOBS=true
+              ALLOW_FLIGHT=false
+            fi
+            echo "World preset: $WORLD"
+
+            # Generate server.properties
+            cat > server.properties <<PROPS
+            max-players=100
+            online-mode=false
+            pvp=false
+            difficulty=peaceful
+            gamemode=$GAMEMODE
+            enable-command-block=true
+            spawn-protection=0
+            view-distance=10
+            simulation-distance=6
+            server-port=25565
+            level-seed=typecraft
+            level-type=$LEVEL_TYPE
+            generate-structures=$GEN_STRUCTURES
+            motd=Steve Bot Testing Server
+            white-list=false
+            spawn-monsters=$SPAWN_MOBS
+            spawn-animals=$SPAWN_MOBS
+            spawn-npcs=$SPAWN_MOBS
+            allow-flight=$ALLOW_FLIGHT
+            rate-limit=0
+            enable-rcon=true
+            rcon.password=${rconPassword}
+            rcon.port=${rconPort}
+            broadcast-rcon-to-ops=true
+            PROPS
             cp -f ${opsJson} ops.json
             chmod +w server.properties ops.json
 
