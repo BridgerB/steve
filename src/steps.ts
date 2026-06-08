@@ -20,10 +20,11 @@ export const steps: readonly Step[] = [
 		name: "Gather Wood",
 		priority: 1,
 		canExecute: (s) => s.world.dimension === "overworld" && s.alive,
-		isComplete: (s) =>
-			s.inventory.logs >= 5 ||
-			s.inventory.planks >= 12 ||
-			s.equipment.hasCraftingTable,
+		// Maintain a wood/plank reserve so later steps (sticks, tools, beds) can
+		// always be crafted. Must NOT short-circuit on hasCraftingTable, or the
+		// bot stops replenishing wood once it has a table and deadlocks when
+		// planks run out. canExecute gates this to the overworld.
+		isComplete: (s) => s.inventory.logs >= 5 || s.inventory.planks >= 12,
 		execute: async (bot, _state) => {
 			const { gatherWood } = await import("./tasks/gather-wood/main.ts");
 			return gatherWood(bot, 5);
@@ -35,7 +36,9 @@ export const steps: readonly Step[] = [
 		name: "Craft Planks",
 		priority: 2,
 		canExecute: (s) => s.inventory.logs >= 2,
-		isComplete: (s) => s.inventory.planks >= 8 || s.equipment.hasCraftingTable,
+		// Keep a plank reserve; do not short-circuit on hasCraftingTable (see
+		// Gather Wood) — otherwise planks are never replenished after tools.
+		isComplete: (s) => s.inventory.planks >= 8,
 		execute: async (bot, _state) => {
 			const { craftPlanks } = await import("./tasks/craft/main.ts");
 			return craftPlanks(bot);
