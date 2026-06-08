@@ -20,6 +20,7 @@ import type { Bot } from "typecraft";
 import { createBot as createMcBot, vec3, windowItems } from "typecraft";
 import { z } from "zod";
 import {
+	attachSafety,
 	craftItem,
 	equipItem,
 	findBlock,
@@ -30,7 +31,7 @@ import {
 	goTo,
 	rememberResource,
 } from "./lib/bot-utils.ts";
-import { getDbPath } from "./lib/logger.ts";
+import { attachDiagnostics, getDbPath, initLogger } from "./lib/logger.ts";
 import { getPhase, syncFromBot } from "./state.ts";
 
 // ── stdio transport — NO console.log anywhere ──
@@ -162,6 +163,8 @@ const spawnBot = async (name: string): Promise<Bot> => {
 				`[${name}] ready at ${Math.floor(p.x)}, ${Math.floor(p.y)}, ${Math.floor(p.z)}`,
 			);
 			setupBot(b, name);
+			attachDiagnostics(b);
+			attachSafety(b);
 			bots.set(name, b);
 			if (!activeBotName) activeBotName = name;
 			return b;
@@ -1400,6 +1403,7 @@ server.tool(
 // ── Bootstrap ──
 
 const main = async () => {
+	initLogger(`mcp-${new Date().toISOString()}`);
 	if (await isServerReachable()) {
 		try {
 			await spawnBot(USERNAME);

@@ -12,12 +12,13 @@
 
 import type { Bot } from "typecraft";
 import { createBot as createMcBot, createWebViewer } from "typecraft";
-import { rememberResource } from "./lib/bot-utils.ts";
+import { attachSafety, rememberResource } from "./lib/bot-utils.ts";
 import {
+	attachDiagnostics,
 	initLogger,
 	logEvent,
+	NOISY_DEBUG,
 	registerRace,
-	startTickLogger,
 	stopLogger,
 } from "./lib/logger.ts";
 import { getPhase, isDragonDead, syncFromBot } from "./state.ts";
@@ -256,7 +257,7 @@ const startBot = async (): Promise<void> => {
 	}
 
 	bot.on("debug", (category: string, detail: Record<string, unknown>) => {
-		if (category === "packet_rx" || category === "packet_tx") return; // too noisy for SQLite
+		if (NOISY_DEBUG.has(category)) return; // packet_rx/tx/entity too noisy for SQLite
 		logEvent(category, "debug", JSON.stringify(detail), bot.entity?.position);
 	});
 
@@ -293,7 +294,8 @@ const startBot = async (): Promise<void> => {
 			bot.entity.position,
 		);
 
-		startTickLogger(bot);
+		attachDiagnostics(bot);
+		attachSafety(bot);
 
 		await bot.waitForChunksToLoad();
 		log("Chunks loaded");

@@ -12,7 +12,13 @@
 import { readFileSync, watchFile, writeFileSync } from "node:fs";
 import type { Bot } from "typecraft";
 import { createBot } from "typecraft";
-import { initLogger, logEvent } from "./logger.ts";
+import { attachSafety } from "./bot-utils.ts";
+import {
+	attachDiagnostics,
+	initLogger,
+	logEvent,
+	NOISY_DEBUG,
+} from "./logger.ts";
 
 const CMD_FILE = "/tmp/steve-cmd.txt";
 const HOST = process.env.MC_HOST ?? "localhost";
@@ -31,7 +37,10 @@ bot.on("error", (e) => {
 	if (!e.message.includes("waypoint")) console.log("ERR:", e.message);
 });
 initLogger(`repl-${new Date().toISOString()}`);
+attachDiagnostics(bot);
+attachSafety(bot);
 bot.on("debug", (category: string, detail: Record<string, unknown>) => {
+	if (NOISY_DEBUG.has(category)) return;
 	logEvent(category, "debug", JSON.stringify(detail));
 });
 
