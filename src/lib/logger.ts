@@ -18,6 +18,13 @@ let flushInterval: ReturnType<typeof setInterval> | null = null;
 
 const DB_PATH = join(process.cwd(), "data", "steve.db");
 
+/**
+ * Debug categories too high-volume to persist (per-packet / per-entity spam).
+ * `bot.on("debug")` loggers should skip these — otherwise the db balloons to
+ * hundreds of MB of `packet_rx` rows and buries the useful events.
+ */
+export const NOISY_DEBUG = new Set(["packet_rx", "packet_tx", "entity"]);
+
 // ── Write buffer ──────────────────────────────────────────────────
 type EventRow = [
 	string,
@@ -290,6 +297,211 @@ export const startTickLogger = (bot: Bot): void => {
 			/* don't crash */
 		}
 	}, 1000);
+};
+
+const HOSTILE_MOBS = new Set([
+	"zombie",
+	"zombie_villager",
+	"husk",
+	"drowned",
+	"skeleton",
+	"stray",
+	"wither_skeleton",
+	"bogged",
+	"creeper",
+	"spider",
+	"cave_spider",
+	"enderman",
+	"witch",
+	"slime",
+	"magma_cube",
+	"silverfish",
+	"phantom",
+	"pillager",
+	"vindicator",
+	"evoker",
+	"ravager",
+	"blaze",
+	"ghast",
+	"piglin",
+	"piglin_brute",
+	"zombified_piglin",
+	"hoglin",
+	"zoglin",
+	"warden",
+	"breeze",
+	"shulker",
+	"guardian",
+	"elder_guardian",
+	"vex",
+	"endermite",
+]);
+
+type Entityish = {
+	id?: number;
+	name?: string;
+	position?: { x: number; y: number; z: number };
+};
+
+/** Best-effort readable text from a chat-component NBT (death messages etc.). */
+const componentText = (v: unknown, depth = 0): string => {
+	if (v == null || depth > 8) return "";
+	if (typeof v === "string") return v;
+	if (typeof v === "number") return String(v);
+	if (Array.isArray(v)) return v.map((x) => componentText(x, depth + 1)).join(" ");
+	if (typeof v === "object") {
+		const o = v as Record<string, unknown>;
+		// Unwrap typecraft's tagged NBT ({ type, value })
+		if ("value" in o && "type" in o) return componentText(o.value, depth + 1);
+		const parts: string[] = [];
+		if (o.translate != null) parts.push(`[${componentText(o.translate, depth + 1)}]`);
+		if (o.text != null) parts.push(componentText(o.text, depth + 1));
+		if (o.with != null) parts.push(componentText(o.with, depth + 1));
+		if (o.extra != null) parts.push(componentText(o.extra, depth + 1));
+		if (parts.length === 0) {
+			// plain map of named entries (NBT compound) — recurse values
+			for (const val of Object.values(o)) parts.push(componentText(val, depth + 1));
+		}
+		return parts.filter(Boolean).join(" ").trim();
+	}
+	return "";
+};
+
+/**
+ * Attach rich diagnostics to a bot: logs death cause (combat-kill message +
+ * damage source), damage events, health drops, nearby hostile mobs, and starts
+ * the per-second tick logger. Call this for every bot so there are no blind
+ * spots — including the REPL/MCP bots, not just races.
+ */
+export const attachDiagnostics = (bot: Bot): void => {
+	let lastDamage: string | null = null;
+	let lastDeathMsg: string | null = null;
+	let lastHealth = bot.health ?? 20;
+
+	const posOf = () => {
+		const p = bot.entity?.position;
+		return p ? { x: p.x, y: p.y, z: p.z } : undefined;
+	};
+	const entities = () => bot.entities as unknown as Record<number, Entityish>;
+	const nearbyHostiles = (radius = 20): { name: string; d: number }[] => {
+		const p = bot.entity?.position;
+		if (!p) return [];
+		return Object.values(entities())
+			.filter((e) => e?.name && HOSTILE_MOBS.has(e.name) && e.position)
+			.map((e) => ({
+				name: e.name as string,
+				d: +Math.hypot(
+					(e.position as { x: number }).x - p.x,
+					(e.position as { y: number }).y - p.y,
+					(e.position as { z: number }).z - p.z,
+				).toFixed(1),
+			}))
+			.filter((e) => e.d <= radius)
+			.sort((a, b) => a.d - b.d)
+			.slice(0, 8);
+	};
+	const blockName = (dx: number, dy: number, dz: number): string => {
+		const p = bot.entity?.position;
+		if (!p) return "?";
+		try {
+			const b = bot.blockAt({
+				x: Math.floor(p.x) + dx,
+				y: Math.floor(p.y) + dy,
+				z: Math.floor(p.z) + dz,
+			} as { x: number; y: number; z: number }) as { name?: string } | null;
+			return b?.name ?? "?";
+		} catch {
+			return "?";
+		}
+	};
+
+	bot.client.on("damage_event", (pkt: Record<string, unknown>) => {
+		if (!bot.entity || pkt.entityId !== bot.entity.id) return;
+		const causeId = pkt.sourceCauseId as number | undefined;
+		const directId = pkt.sourceDirectId as number | undefined;
+		const cause = causeId ? entities()[causeId]?.name : null;
+		const direct = directId ? entities()[directId]?.name : null;
+		lastDamage = JSON.stringify({
+			damageTypeId: pkt.sourceTypeId,
+			cause: cause ?? null,
+			direct: direct ?? null,
+			srcPos: pkt.sourcePosition ?? null,
+			hp: bot.health,
+		});
+		logEvent("damage", "hit", lastDamage, posOf());
+	});
+
+	bot.client.on("player_combat_kill", (pkt: Record<string, unknown>) => {
+		if (bot.entity && pkt.playerId !== bot.entity.id) return;
+		const text = componentText(pkt.message);
+		lastDeathMsg = JSON.stringify({
+			text,
+			raw: JSON.stringify(pkt.message).slice(0, 300),
+		});
+		logEvent("death", "message", lastDeathMsg, posOf());
+	});
+
+	bot.on("death", () => {
+		logEvent(
+			"death",
+			"died",
+			JSON.stringify({
+				message: lastDeathMsg,
+				lastDamage,
+				y: bot.entity ? Math.floor(bot.entity.position.y) : null,
+				blockFeet: blockName(0, 0, 0),
+				blockBelow: blockName(0, -1, 0),
+				dimension: String(bot.game?.dimension ?? "overworld"),
+				hostiles: nearbyHostiles(),
+			}),
+			posOf(),
+		);
+		lastDamage = null;
+		lastDeathMsg = null;
+	});
+
+	bot.on("health", () => {
+		const h = bot.health ?? 20;
+		if (h < lastHealth - 0.01) {
+			logEvent(
+				"health",
+				"drop",
+				JSON.stringify({
+					from: +lastHealth.toFixed(1),
+					to: +h.toFixed(1),
+					dmg: +(lastHealth - h).toFixed(1),
+					food: bot.food,
+					lastDamage,
+					y: bot.entity ? Math.floor(bot.entity.position.y) : null,
+					blockFeet: blockName(0, 0, 0),
+					hostiles: nearbyHostiles(12),
+				}),
+				posOf(),
+			);
+		}
+		lastHealth = h;
+	});
+
+	bot.on("respawn", () => {
+		lastHealth = bot.health ?? 20;
+		logEvent("lifecycle", "respawn", undefined, posOf());
+	});
+
+	// Periodic threat scan — see mob buildup even when not taking damage yet.
+	const threatTimer = setInterval(() => {
+		const near = nearbyHostiles(14);
+		if (near.length > 0) {
+			logEvent(
+				"threat",
+				"hostiles",
+				JSON.stringify({ y: bot.entity ? Math.floor(bot.entity.position.y) : null, light: blockName(0, 0, 0), mobs: near }),
+				posOf(),
+			);
+		}
+	}, 3000);
+	bot.on("end", () => clearInterval(threatTimer));
+
+	startTickLogger(bot);
 };
 
 /** Stop logging and close the database */
