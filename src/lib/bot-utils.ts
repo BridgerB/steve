@@ -159,14 +159,19 @@ export const goTo = async (
 		const moved = distance(startPos, bot.entity.position);
 		if (distance(bot.entity.position, pos) <= range + 1) return true;
 
-		// Pathfinder failed — fallback to raw walk if we didn't move much
-		if (moved < 2) {
+		// Pathfinder failed — fallback to raw walk if we didn't move much.
+		// Never blind-walk toward lava: bail if lava is in reach, and re-check
+		// every step so we stop the instant it appears ahead.
+		if (moved < 2 && !lavaAround(bot)) {
 			await bot.lookAt(pos);
 			bot.setControlState("forward", true);
 			bot.setControlState("sprint", true);
 			bot.setControlState("jump", true);
-			const walkTime = Math.min(dist * 200, timeout * 0.6, 5000);
-			await sleep(walkTime);
+			const walkEnd = Date.now() + Math.min(dist * 200, timeout * 0.6, 5000);
+			while (Date.now() < walkEnd) {
+				await sleep(150);
+				if (lavaAround(bot)) break;
+			}
 			bot.setControlState("forward", false);
 			bot.setControlState("sprint", false);
 			bot.setControlState("jump", false);
@@ -1169,6 +1174,189 @@ export const escapeWater = async (bot: Bot): Promise<boolean> => {
 	bot.setControlState("sprint", false);
 	logEvent("nav", "water_escape_failed");
 	return false;
+};
+
+// ── Lava safety ──────────────────────────────────────────────────────
+// Goal: never die to lava. Pre-checks (below) refuse to walk/dig into it, and
+// attachSafety runs a continuous guard that yanks the bot out the instant it
+// ends up in lava — catching anything the pathfinder/pre-checks miss.
+
+const isLavaBlock = (b: { name: string } | null): boolean =>
+	!!b && b.name.includes("lava");
+
+/** True if the bot's feet or head cell is lava (already in it). */
+export const inLava = (bot: Bot): boolean => {
+	const p = bot.entity?.position;
+	if (!p) return false;
+	const fx = Math.floor(p.x);
+	const fy = Math.floor(p.y);
+	const fz = Math.floor(p.z);
+	return (
+		isLavaBlock(getBlock(bot, vec3(fx, fy, fz))) ||
+		isLavaBlock(getBlock(bot, vec3(fx, fy + 1, fz)))
+	);
+};
+
+/** True if any lava is in/adjacent to the bot's feet/head/below within radius. */
+export const lavaAround = (bot: Bot, radius = 1): boolean => {
+	const p = bot.entity?.position;
+	if (!p) return false;
+	const fx = Math.floor(p.x);
+	const fy = Math.floor(p.y);
+	const fz = Math.floor(p.z);
+	for (let dx = -radius; dx <= radius; dx++) {
+		for (let dz = -radius; dz <= radius; dz++) {
+			for (const dy of [0, 1, -1]) {
+				if (isLavaBlock(getBlock(bot, vec3(fx + dx, fy + dy, fz + dz)))) {
+					return true;
+				}
+			}
+		}
+	}
+	return false;
+};
+
+/** Landing column at (x,y,z) and its 4 neighbours are lava-free down `depth`. */
+export const dropColumnLavaFree = (
+	bot: Bot,
+	x: number,
+	y: number,
+	z: number,
+	depth = 6,
+): boolean => {
+	const cols: [number, number][] = [
+		[x, z],
+		[x + 1, z],
+		[x - 1, z],
+		[x, z + 1],
+		[x, z - 1],
+	];
+	for (const [cx, cz] of cols) {
+		for (let dy = 0; dy <= depth; dy++) {
+			if (isLavaBlock(getBlock(bot, vec3(cx, y - dy, cz)))) return false;
+		}
+	}
+	return true;
+};
+
+/** Would breaking the block at `pos` let lava flow onto the bot? (sides + above) */
+export const digExposesLava = (bot: Bot, pos: Vec3): boolean => {
+	const dirs: [number, number, number][] = [
+		[1, 0, 0],
+		[-1, 0, 0],
+		[0, 0, 1],
+		[0, 0, -1],
+		[0, 1, 0], // above: lava falls down onto us; the block below is safe
+	];
+	return dirs.some(([dx, dy, dz]) =>
+		isLavaBlock(getBlock(bot, vec3(pos.x + dx, pos.y + dy, pos.z + dz))),
+	);
+};
+
+/** Nearest cell (ring scan) with non-lava solid footing + clear head, to flee to. */
+const nearestSafeFooting = (bot: Bot): Vec3 | null => {
+	const p = bot.entity?.position;
+	if (!p) return null;
+	const fx = Math.floor(p.x);
+	const fy = Math.floor(p.y);
+	const fz = Math.floor(p.z);
+	for (let r = 1; r <= 3; r++) {
+		for (let dx = -r; dx <= r; dx++) {
+			for (let dz = -r; dz <= r; dz++) {
+				if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
+				const cell = getBlock(bot, vec3(fx + dx, fy, fz + dz));
+				const below = getBlock(bot, vec3(fx + dx, fy - 1, fz + dz));
+				const head = getBlock(bot, vec3(fx + dx, fy + 1, fz + dz));
+				const solidBelow =
+					!!below && below.name !== "air" && below.name !== "cave_air";
+				const clear = !cell || cell.name === "air" || cell.name === "cave_air";
+				if (
+					solidBelow &&
+					clear &&
+					!isLavaBlock(cell) &&
+					!isLavaBlock(below) &&
+					!isLavaBlock(head)
+				) {
+					return vec3(fx + dx, fy, fz + dz);
+				}
+			}
+		}
+	}
+	return null;
+};
+
+/** Get the bot out of lava: stop, jump (buoyancy), steer to safe footing. */
+export const escapeLava = async (
+	bot: Bot,
+	lastSafe?: Vec3,
+): Promise<boolean> => {
+	if (!inLava(bot)) return true;
+	logEvent("safety", "lava_escape_start", undefined, bot.entity?.position);
+	bot.clearControlStates();
+	bot.setControlState("jump", true);
+
+	const start = Date.now();
+	const TIMEOUT = 6000;
+	while (Date.now() - start < TIMEOUT) {
+		// Prefer the NEAREST safe rim (1-2 blocks) — minimizes time in lava and
+		// avoids walking far (and on fire) toward a stale cached position.
+		const target = nearestSafeFooting(bot) ?? lastSafe;
+		if (target && bot.entity?.position) {
+			await bot.lookAt(
+				vec3(target.x + 0.5, bot.entity.position.y, target.z + 0.5),
+			);
+		}
+		bot.setControlState("forward", true);
+		await sleep(150);
+		if (!inLava(bot) && bot.entity?.onGround) {
+			await sleep(300);
+			bot.clearControlStates();
+			logEvent("safety", "lava_escaped", undefined, bot.entity?.position);
+			return true;
+		}
+	}
+	bot.clearControlStates();
+	logEvent("safety", "lava_escape_failed", undefined, bot.entity?.position);
+	return false;
+};
+
+/**
+ * Continuous lava backstop. Every 100ms: if the bot is in/standing on lava,
+ * synchronously cancel all motion + stop the pathfinder, then escape. Catches
+ * anything the pathfinder/pre-checks miss (~4s lava-death window = dozens of
+ * recovery ticks). Attach once per bot, alongside attachDiagnostics.
+ */
+export const attachSafety = (bot: Bot): void => {
+	let lastSafe: Vec3 | undefined;
+	let escaping = false;
+
+	const guard = setInterval(() => {
+		if (!bot.entity?.position) return;
+		// Remember the last known-safe footing to retreat toward.
+		if (!escaping && bot.entity.onGround && !lavaAround(bot)) {
+			const p = bot.entity.position;
+			lastSafe = vec3(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z));
+		}
+		if (escaping) return;
+		// Trigger ONLY when feet/head are actually lava — not when merely standing
+		// on a solid floor above lava (safe), which would stall legitimate mining.
+		if (inLava(bot)) {
+			escaping = true;
+			logEvent("safety", "lava_guard_trigger", undefined, bot.entity.position);
+			// Hard-cancel motion immediately, don't wait on the async escape.
+			bot.clearControlStates();
+			bot.setControlState("jump", true);
+			try {
+				getPathfinder(bot).stop();
+			} catch {
+				/* pathfinder may be idle */
+			}
+			escapeLava(bot, lastSafe).finally(() => {
+				escaping = false;
+			});
+		}
+	}, 100);
+	bot.on("end", () => clearInterval(guard));
 };
 
 // =============================================================================
