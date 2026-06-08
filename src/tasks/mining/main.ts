@@ -5,10 +5,15 @@
 import type { Bot } from "typecraft";
 import { distance, offset, vec3 } from "typecraft";
 import {
+	craftItem,
+	digExposesLava,
+	dropColumnLavaFree,
+	equipItem,
 	escapeWater,
 	exploreRandom,
 	findBlock,
 	forgetResource,
+	getCraftingTable,
 	getRememberedResource,
 	goTo,
 	moveCloser,
@@ -35,6 +40,350 @@ const safeDig = async (
 	} finally {
 		if (timer) clearTimeout(timer);
 	}
+};
+
+// Ores that live deep underground — reached by staircasing down to their band
+// and strip-mining, rather than wandering the surface.
+const DEEP_ORE_LEVEL: Record<string, number> = {
+	iron_ore: 15,
+	deepslate_iron_ore: 15,
+	coal_ore: 50,
+	deepslate_coal_ore: 15,
+	copper_ore: 48,
+	gold_ore: -16,
+	deepslate_gold_ore: -16,
+	redstone_ore: -58,
+	deepslate_redstone_ore: -58,
+	lapis_ore: -1,
+	deepslate_lapis_ore: -1,
+	diamond_ore: -59,
+	deepslate_diamond_ore: -59,
+};
+
+const isAir = (b: Block | null): boolean =>
+	!b || b.name === "air" || b.name === "cave_air";
+const isLava = (b: Block | null): boolean => !!b && b.name.includes("lava");
+const isLiquid = (b: Block | null): boolean =>
+	!!b && (b.name.includes("water") || b.name.includes("lava"));
+
+const lookDig = async (bot: Bot, b: Block | null): Promise<boolean> => {
+	if (isAir(b)) return false;
+	if (isLiquid(b)) return false;
+	// Refuse to break a block that would let lava flow onto us (lava behind/above).
+	if (digExposesLava(bot, (b as Block).position)) return false;
+	try {
+		await bot.lookAt(offset((b as Block).position, 0.5, 0.5, 0.5));
+		await safeDig(bot, b as Block);
+		return true;
+	} catch {
+		return false;
+	}
+};
+
+const STONE_PLUS_PICKS = new Set([
+	"netherite_pickaxe",
+	"diamond_pickaxe",
+	"iron_pickaxe",
+	"stone_pickaxe",
+]);
+
+const invCount = (bot: Bot, sub: string): number =>
+	bot.inventory.slots
+		.filter((s) => s?.name.includes(sub))
+		.reduce((a, s) => a + (s as { count: number }).count, 0);
+
+/**
+ * Ensure a stone-or-better pickaxe is in hand — iron ore mined with a lesser
+ * tool (or bare hand) drops NOTHING. If the bot has worn through all its
+ * pickaxes, craft a fresh stone one from cobblestone + sticks, so a deep mine
+ * stays self-sustaining.
+ */
+const ensurePickaxe = async (bot: Bot): Promise<boolean> => {
+	const findPick = () =>
+		bot.inventory.slots.find((s) => s && STONE_PLUS_PICKS.has(s.name));
+	let pick = findPick();
+	if (pick) {
+		if (!bot.heldItem?.name.endsWith("_pickaxe")) {
+			await equipItem(bot, pick.name, "hand");
+		}
+		return true;
+	}
+	// None left — craft a stone pickaxe (3 cobblestone + 2 sticks, needs a table)
+	if (invCount(bot, "cobblestone") < 3) return false;
+	if (invCount(bot, "stick") < 2 && invCount(bot, "planks") >= 2) {
+		await craftItem(bot, "stick", 1);
+	}
+	if (invCount(bot, "stick") < 2) return false;
+	const table = await getCraftingTable(bot);
+	if (!table) return false;
+	await craftItem(bot, "stone_pickaxe", 1, table);
+	pick = findPick();
+	if (pick) {
+		await equipItem(bot, pick.name, "hand");
+		return true;
+	}
+	return false;
+};
+
+const HORIZ_DIRS: [number, number][] = [
+	[1, 0],
+	[-1, 0],
+	[0, 1],
+	[0, -1],
+];
+
+/**
+ * Dig a safe 2-high descending staircase toward targetY. Never digs the block
+ * directly under the bot's feet (avoids blind drops); checks for lava and big
+ * drops before each step, and re-routes if it walls into lava or gets stuck.
+ * Resumable: makes progress and returns; the caller can call again next tick.
+ */
+const descendStaircase = async (
+	bot: Bot,
+	targetY: number,
+	deadline: number,
+): Promise<{ y: number; stopped: string | null }> => {
+	const B = (x: number, y: number, z: number) => bot.blockAt(vec3(x, y, z));
+	let dir = pickDigDir(bot);
+	let stuck = 0;
+
+	while (
+		Math.floor(bot.entity.position.y) > targetY &&
+		Date.now() < deadline
+	) {
+		if ((bot.health ?? 20) < 8) return { y: floorY(bot), stopped: "low health" };
+		if (!bot.heldItem?.name.endsWith("_pickaxe")) await ensurePickaxe(bot);
+		const p = bot.entity.position;
+		const fx = Math.floor(p.x);
+		const fy = Math.floor(p.y);
+		const fz = Math.floor(p.z);
+		const [dx, dz] = dir;
+		const nx = fx + dx;
+		const nz = fz + dz;
+
+		const newHeadUp = B(nx, fy + 1, nz);
+		const newHead = B(nx, fy, nz);
+		const newFeet = B(nx, fy - 1, nz);
+		const newFloor = B(nx, fy - 2, nz);
+		const newFloor2 = B(nx, fy - 3, nz);
+
+		// Hazard: lava anywhere in the step we're about to open
+		if ([newHeadUp, newHead, newFeet, newFloor, newFloor2].some(isLava)) {
+			dir = rotate(dir);
+			if (++stuck > 4) return { y: floorY(bot), stopped: "boxed in by lava" };
+			continue;
+		}
+		// Drop ahead: small drops are fine — step/fall down through caves. But
+		// never drop into a column with lava below it, and reroute around a deep
+		// drop (fall damage).
+		if (isAir(newFloor)) {
+			if (!dropColumnLavaFree(bot, nx, fy - 2, nz)) {
+				dir = rotate(dir);
+				if (++stuck > 5) return { y: floorY(bot), stopped: "lava below drop" };
+				continue;
+			}
+			let depth = 1;
+			while (depth < 5 && isAir(B(nx, fy - 2 - depth, nz))) depth++;
+			if (depth >= 4) {
+				dir = rotate(dir);
+				if (++stuck > 5) return { y: floorY(bot), stopped: "boxed by drops" };
+				continue;
+			}
+		}
+
+		// Clear the diagonal step (head-up for clearance, head, feet)
+		await lookDig(bot, newHeadUp);
+		await lookDig(bot, newHead);
+		await lookDig(bot, newFeet);
+
+		// Walk forward + down into the cleared step
+		await bot.lookAt(vec3(p.x + dx, p.y - 0.5, p.z + dz));
+		bot.setControlState("forward", true);
+		await sleep(450);
+		bot.setControlState("forward", false);
+		await sleep(350);
+
+		const np = bot.entity.position;
+		const moved = Math.floor(np.x) !== fx || Math.floor(np.z) !== fz;
+		const descended = Math.floor(np.y) < fy;
+		if (moved || descended) {
+			stuck = 0;
+		} else {
+			// Re-dig and nudge; rotate direction after repeated failure
+			await lookDig(bot, B(nx, fy - 1, nz));
+			await lookDig(bot, B(nx, fy, nz));
+			bot.setControlState("forward", true);
+			await sleep(500);
+			bot.setControlState("forward", false);
+			await sleep(250);
+			if (
+				Math.floor(bot.entity.position.x) === fx &&
+				Math.floor(bot.entity.position.z) === fz
+			) {
+				dir = rotate(dir);
+				if (++stuck > 6) return { y: floorY(bot), stopped: "stuck" };
+			}
+		}
+	}
+	return { y: floorY(bot), stopped: null };
+};
+
+const floorY = (bot: Bot): number => Math.floor(bot.entity.position.y);
+const rotate = (d: [number, number]): [number, number] => [d[1], -d[0]];
+
+/** Pick a horizontal dig direction with solid ground ahead and no lava. */
+const pickDigDir = (bot: Bot): [number, number] => {
+	const p = bot.entity.position;
+	const fx = Math.floor(p.x);
+	const fy = Math.floor(p.y);
+	const fz = Math.floor(p.z);
+	let best: [number, number] = HORIZ_DIRS[0] ?? [1, 0];
+	let bestScore = -1;
+	for (const [dx, dz] of HORIZ_DIRS) {
+		let solid = 0;
+		let bad = false;
+		for (let i = 1; i <= 4; i++) {
+			const b = bot.blockAt(vec3(fx + dx * i, fy - 1, fz + dz * i));
+			if (isLava(b)) bad = true;
+			if (b && !isAir(b)) solid++;
+		}
+		if (!bad && solid > bestScore) {
+			bestScore = solid;
+			best = [dx, dz];
+		}
+	}
+	return best;
+};
+
+/**
+ * Strip-mine a 1x2 tunnel at the current Y, vacuuming any target ore exposed on
+ * the walls/floor/ceiling (and from blockSeen memory) as it goes. Returns how
+ * many target blocks it mined.
+ */
+const stripMineOre = async (
+	bot: Bot,
+	blockType: string,
+	isTarget: (name: string) => boolean,
+	targetCount: number,
+	deadline: number,
+): Promise<number> => {
+	let mined = 0;
+	let dir = pickDigDir(bot);
+	let sinceBranch = 0;
+
+	const mineNearbyOre = async (): Promise<boolean> => {
+		// Prefer remembered ore (blockSeen), then a wider scan
+		let ore: Block | null = null;
+		const rem = getRememberedResource(bot, blockType);
+		if (rem) {
+			const rb = bot.blockAt(vec3(rem.x, rem.y, rem.z));
+			if (rb && isTarget(rb.name)) ore = rb;
+			else forgetResource(bot, blockType, rem);
+		}
+		if (!ore) ore = findBlock(bot, isTarget, 20);
+		if (!ore) return false;
+		try {
+			if (distance(bot.entity.position, ore.position) > 3.5) {
+				await goTo(bot, ore.position, { range: 2, timeout: 12000 });
+			} else {
+				await moveCloser(bot, ore.position, { maxDistance: 2 });
+			}
+			// Only mine ore we actually reached — digging from afar (goTo failed to
+			// path through tunnel walls) spawns the drop out of pickup range, so the
+			// counter rises but nothing is collected.
+			if (distance(bot.entity.position, ore.position) > 4.5) return false;
+			const above = bot.blockAt(offset(ore.position, 0, 1, 0)) as Block | null;
+			if (above && !isAir(above) && !isLiquid(above)) await lookDig(bot, above);
+			if (await lookDig(bot, ore)) {
+				mined++;
+				logEvent("mine", "ore", `${blockType} ${mined}/${targetCount}`);
+				await bot.collectDrops(8, 4000, async (pp) => {
+					await goTo(bot, pp, { range: 1, timeout: 3000 });
+				});
+				// Fallback: stand on the mined spot to vacuum a drop collectDrops missed.
+				await goTo(bot, ore.position, { range: 1, timeout: 3000 }).catch(() => {});
+				return true;
+			}
+		} catch {}
+		return false;
+	};
+
+	while (mined < targetCount && Date.now() < deadline) {
+		if ((bot.health ?? 20) < 7) return mined;
+		await ensurePickaxe(bot);
+		// First, grab any exposed ore around us
+		if (await mineNearbyOre()) continue;
+
+		// No ore in reach — advance the 1x2 tunnel one block to expose new walls
+		const p = bot.entity.position;
+		const fx = Math.floor(p.x);
+		const fy = Math.floor(p.y);
+		const fz = Math.floor(p.z);
+		const [dx, dz] = dir;
+		const head = bot.blockAt(vec3(fx + dx, fy + 1, fz + dz));
+		const feet = bot.blockAt(vec3(fx + dx, fy, fz + dz));
+		const floor = bot.blockAt(vec3(fx + dx, fy - 1, fz + dz));
+		if ([head, feet, floor].some(isLava)) {
+			dir = rotate(dir);
+			continue;
+		}
+		await lookDig(bot, head);
+		await lookDig(bot, feet);
+		await bot.lookAt(vec3(p.x + dx, p.y, p.z + dz));
+		bot.setControlState("forward", true);
+		await sleep(400);
+		bot.setControlState("forward", false);
+		await sleep(200);
+		// Tunnel straight into fresh ground (the wide ore scan picks up veins to
+		// either side). Only turn when we fail to advance — never spiral.
+		if (
+			Math.floor(bot.entity.position.x) === fx &&
+			Math.floor(bot.entity.position.z) === fz
+		) {
+			if (++sinceBranch > 2) {
+				dir = rotate(dir);
+				sinceBranch = 0;
+			}
+		} else {
+			sinceBranch = 0;
+		}
+	}
+	return mined;
+};
+
+/**
+ * Full deep-ore collection: descend to the ore's band, then strip-mine until we
+ * have enough. Designed to be called repeatedly (resumable) — each call digs
+ * for up to `deadline`, then returns progress.
+ */
+const mineDeepOre = async (
+	bot: Bot,
+	blockType: string,
+	isTarget: (name: string) => boolean,
+	targetCount: number,
+	deadline: number,
+): Promise<StepResult> => {
+	const level = DEEP_ORE_LEVEL[blockType] ?? 15;
+	await ensurePickaxe(bot);
+
+	// While above the ore band, spend the whole call descending the staircase
+	// (resumable across ticks). Don't strip-mine at intermediate levels.
+	if (floorY(bot) > level + 2) {
+		const res = await descendStaircase(bot, level, deadline);
+		logEvent("mine", "descended", `y=${res.y} stopped=${res.stopped}`);
+		return {
+			success: false,
+			message: `Descending toward y${level}: at y=${res.y} (${res.stopped ?? "budget"})`,
+		};
+	}
+
+	// At the band — strip-mine for ore.
+	const mined = await stripMineOre(bot, blockType, isTarget, targetCount, deadline);
+	if (mined >= targetCount) return success(`Mined ${mined} ${blockType}`);
+	return {
+		success: false,
+		message: `Mined ${mined}/${targetCount} ${blockType} (y=${floorY(bot)})`,
+	};
 };
 
 export const mineBlock = async (
@@ -75,6 +424,12 @@ export const mineBlock = async (
 	const isStone = blockType === "stone";
 	const searchTypes = isStone ? ["stone"] : [blockType];
 	const isTarget = (name: string) => searchTypes.some((t) => name.includes(t));
+
+	// Deep ores (iron, diamond, …): descend to the ore band and strip-mine
+	// instead of wandering the surface. Resumable across step ticks.
+	if (blockType in DEEP_ORE_LEVEL) {
+		return await mineDeepOre(bot, blockType, isTarget, targetCount, deadline);
+	}
 
 	// Find initial block — check memory first, then scan
 	const remembered = getRememberedResource(bot, blockType);
