@@ -7,8 +7,10 @@ import { createGoalNear, distance, offset, type Vec3, vec3 } from "typecraft";
 import {
 	escapeWater,
 	getBlock,
+	getMineEntry,
 	getPathfinder,
 	goTo,
+	returnToSurface,
 	sleep,
 } from "../../lib/bot-utils.ts";
 import { logEvent } from "../../lib/logger.ts";
@@ -239,6 +241,29 @@ export const gatherWood = async (
 
 		return true;
 	};
+
+	// If we're down in a mine with no trees in sight, climb back up the staircase
+	// to the surface first — there are no trees underground. Resumable: if we
+	// haven't reached the top yet, return and let the step retry.
+	const entry = getMineEntry(bot);
+	if (entry && botPos().y < entry.y - 8 && !findClosestLog()) {
+		let reached = await returnToSurface(bot);
+		if (!reached) {
+			// The pathfinder can't climb the staircase back up (deep mines defeat
+			// it) — so dig/pillar straight up to the surface instead. Digging the
+			// ceiling yields the cobble it re-places, so it's self-sustaining.
+			// Without this the bot deadlocks underground forever once wood runs low.
+			const { pillarUp } = await import("../portal/cast.ts");
+			reached = await pillarUp(bot, entry.y - 2);
+			bot.setControlState("sneak", false); // pillarUp leaves it on for the cast
+		}
+		if (!reached) {
+			return {
+				success: false,
+				message: `Returning to surface for wood (y=${Math.floor(botPos().y)} → ${entry.y})`,
+			};
+		}
+	}
 
 	// ── MAIN LOOP ──
 

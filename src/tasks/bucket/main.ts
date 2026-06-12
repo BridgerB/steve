@@ -96,23 +96,25 @@ export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 		}
 		await sleep(300);
 
-		// Look at water
-		await bot.lookAt(
-			vec3(waterPos.x + 0.5, waterPos.y + 0.5, waterPos.z + 0.5),
-		);
-		await sleep(300);
-
-		// Use bucket on water
-		bot.activateItem();
-		await sleep(1500);
-
-		const waterBucket = windowItems(bot.inventory).find(
-			(i) => i.name === "water_bucket",
-		);
-
-		if (waterBucket) {
-			logEvent("bucket", "filled", "water_bucket");
-			return { success: true, message: "Filled water bucket" };
+		// Use bucket on water — retry, clearing the stuck `usingHeldItem` state
+		// that otherwise blocks repeated bucket use on 26.1.2.
+		for (let attempt = 0; attempt < 4; attempt++) {
+			await bot.lookAt(
+				vec3(waterPos.x + 0.5, waterPos.y + 0.5, waterPos.z + 0.5),
+			);
+			await sleep(350);
+			bot.activateItem();
+			await sleep(900);
+			try {
+				bot.deactivateItem();
+			} catch {
+				/* ignore */
+			}
+			(bot as unknown as { usingHeldItem: boolean }).usingHeldItem = false;
+			if (windowItems(bot.inventory).some((i) => i.name === "water_bucket")) {
+				logEvent("bucket", "filled", "water_bucket");
+				return { success: true, message: "Filled water bucket" };
+			}
 		}
 		return { success: false, message: "Failed to fill bucket" };
 	} catch (err) {

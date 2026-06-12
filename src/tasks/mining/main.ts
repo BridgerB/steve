@@ -17,6 +17,7 @@ import {
 	getRememberedResource,
 	goTo,
 	moveCloser,
+	rememberMineEntry,
 	sleep,
 	success,
 } from "../../lib/bot-utils.ts";
@@ -138,7 +139,7 @@ const HORIZ_DIRS: [number, number][] = [
  * drops before each step, and re-routes if it walls into lava or gets stuck.
  * Resumable: makes progress and returns; the caller can call again next tick.
  */
-const descendStaircase = async (
+export const descendStaircase = async (
 	bot: Bot,
 	targetY: number,
 	deadline: number,
@@ -365,6 +366,10 @@ const mineDeepOre = async (
 ): Promise<StepResult> => {
 	const level = DEEP_ORE_LEVEL[blockType] ?? 15;
 	await ensurePickaxe(bot);
+
+	// Remember where we entered (the highest point = the surface staircase top),
+	// so we can climb back up to resupply wood/tools instead of starving below.
+	rememberMineEntry(bot, bot.entity.position);
 
 	// While above the ore band, spend the whole call descending the staircase
 	// (resumable across ticks). Don't strip-mine at intermediate levels.

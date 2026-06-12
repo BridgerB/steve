@@ -201,11 +201,11 @@ export const steps: readonly Step[] = [
 		name: "Fill Water Buckets",
 		priority: 15,
 		canExecute: (s) => s.inventory.buckets >= 1,
-		isComplete: (s) => s.inventory.waterBuckets >= 2,
+		// Fill ONE bucket — the other stays empty for the cast to scoop lava from
+		// the pool. Water is reused by the sealed-bowl cast, so one is enough.
+		isComplete: (s) => s.inventory.waterBuckets >= 1,
 		execute: async (bot, _state) => {
 			const { fillWaterBucket } = await import("./tasks/bucket/main.ts");
-			const r1 = await fillWaterBucket(bot);
-			if (!r1.success) return r1;
 			return fillWaterBucket(bot);
 		},
 	},
@@ -239,14 +239,23 @@ export const steps: readonly Step[] = [
 		id: "build_nether_portal",
 		name: "Build Nether Portal",
 		priority: 18,
+		// Needs a water bucket (reused via the sealed-bowl cast) + one empty bucket
+		// (the cast fills it with lava from the pool, refilling each block) + flint.
 		canExecute: (s) =>
-			s.equipment.hasWaterBucket &&
+			s.inventory.waterBuckets >= 1 &&
+			s.inventory.buckets >= 1 &&
 			s.inventory.flintAndSteel >= 1 &&
 			s.world.dimension === "overworld",
 		isComplete: (s) => s.world.portalBuilt,
 		execute: async (bot, _state) => {
-			const { buildNetherPortal } = await import("./tasks/portal/build.ts");
-			return buildNetherPortal(bot);
+			const { prepareCastSite, buildPortalByCasting } = await import(
+				"./tasks/portal/cast.ts"
+			);
+			// Clear a flat site next to a lava pool + fill the lava bucket, then
+			// cast the 10-obsidian frame and light it (no diamond, no cheats).
+			const prep = await prepareCastSite(bot);
+			if (!prep.success) return prep;
+			return buildPortalByCasting(bot);
 		},
 	},
 

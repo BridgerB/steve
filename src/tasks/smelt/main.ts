@@ -69,49 +69,87 @@ export const smeltItems = async (
 			return { success: false, message: "No furnace in inventory or nearby" };
 		}
 
-		// Find solid ground to place on
+		// Find solid ground to place on — gather several candidates (a cramped
+		// 1-wide mine tunnel only has air ahead/behind), clearing the block above
+		// each so the furnace fits.
 		const positions = [
 			[1, 0],
 			[-1, 0],
 			[0, 1],
 			[0, -1],
+			[1, 1],
+			[-1, -1],
+			[1, -1],
+			[-1, 1],
 		] as const;
-		let ground: Block | null = null;
+		const candidates: Block[] = [];
 		for (const [dx, dz] of positions) {
 			const g = bot.blockAt(offset(bot.entity.position, dx, -1, dz));
 			if (!g || g.name === "air" || g.name === "water" || g.name === "lava")
 				continue;
-			const above = bot.blockAt(offset(g.position, 0, 1, 0));
-			if (above && above.name !== "air") continue;
 			// Don't place on top of existing furnace/table
 			if (isFurnace(g.name) || g.name === "crafting_table") continue;
-			ground = g;
-			break;
+			const above = bot.blockAt(offset(g.position, 0, 1, 0));
+			if (above && above.name !== "air" && above.name !== "cave_air") {
+				if (above.name === "water" || above.name === "lava") continue;
+				// Clear the obstruction so the furnace has room.
+				try {
+					await bot.lookAt(offset(above.position, 0.5, 0.5, 0.5));
+					await bot.dig(above);
+					await sleep(200);
+				} catch {
+					continue;
+				}
+			}
+			candidates.push(g);
 		}
 
-		if (!ground) {
+		if (candidates.length === 0) {
 			return { success: false, message: "Cannot find place for furnace" };
 		}
 
 		try {
-			await bot.equip(furnaceItem, "hand");
-			await sleep(300);
-			await bot.placeBlock(ground, vec3(0, 1, 0));
-			await sleep(500);
-
-			// Check exact expected position
-			const placed = bot.blockAt(offset(ground.position, 0, 1, 0));
-			if (placed && isFurnace(placed.name)) {
-				furnace = placed;
-			} else {
-				// Fallback search
+			// Equip via the hotbar (bot.equip is unreliable in 26.1.2) — same
+			// approach getCraftingTable uses to place successfully.
+			const fSlot = bot.inventory.slots.findIndex(
+				(s) => s?.name === "furnace",
+			);
+			if (fSlot >= 36 && fSlot <= 44) {
+				bot.setQuickBarSlot(fSlot - 36);
+			} else if (fSlot >= 0) {
+				try {
+					await bot.clickWindow(fSlot, 0, 0);
+					await bot.clickWindow(36, 0, 0);
+					bot.setQuickBarSlot(0);
+				} catch {
+					/* fall through */
+				}
+			}
+			await sleep(200);
+			// Try each candidate, looking at the placement face first.
+			for (const g of candidates) {
+				try {
+					await bot.lookAt(offset(g.position, 0.5, 1, 0.5));
+					await sleep(150);
+					await bot.placeBlock(g, vec3(0, 1, 0));
+					await sleep(400);
+					const placed = bot.blockAt(offset(g.position, 0, 1, 0));
+					if (placed && isFurnace(placed.name)) {
+						furnace = placed;
+						break;
+					}
+				} catch {
+					/* try the next candidate */
+				}
+			}
+			if (!furnace) {
+				// Fallback search in case it landed somewhere unexpected
 				const found = bot.findBlock({
 					matching: (name) => isFurnace(name),
 					maxDistance: 4,
 				});
 				if (found) furnace = found;
 			}
-
 			if (!furnace) {
 				return { success: false, message: "Failed to place furnace" };
 			}
@@ -132,67 +170,88 @@ export const smeltItems = async (
 	try {
 		// Open the furnace
 		const furnaceWindow = await bot.openFurnace(furnace);
+		// Let the window's slot contents sync before we start clicking, otherwise
+		// picked-up items get lost (placed into an unsynced slot).
+		await sleep(500);
 
-		// Get the items to smelt
-		const itemsToSmelt = windowItems(bot.inventory).filter((i) =>
-			i.name.includes(inputItem),
-		);
+		// Move a stack from the inventory portion to a furnace slot via clickWindow.
+		// bot.transfer / putInput / putFuel are silent no-ops on 26.1.2, but raw
+		// clickWindow works.
+		const moveToSlot = async (
+			pred: (n: string) => boolean,
+			dest: number,
+		): Promise<boolean> => {
+			const src = furnaceWindow.slots.findIndex(
+				(s, i) => i >= furnaceWindow.inventoryStart && !!s && pred(s.name),
+			);
+			if (src < 0) return false;
+			await bot.clickWindow(src, 0, 0);
+			await sleep(350);
+			await bot.clickWindow(dest, 0, 0);
+			await sleep(350);
+			if (furnaceWindow.selectedItem) {
+				await bot.clickWindow(src, 0, 0); // dest full — put it back
+				await sleep(200);
+			}
+			return true;
+		};
 
-		if (itemsToSmelt.length === 0) {
+		// Load fuel if the fuel slot is empty.
+		if (!furnaceWindow.slots[1]) {
+			const hasFuel = await moveToSlot(
+				(n) => n === "coal" || n === "charcoal",
+				1,
+			);
+			if (!hasFuel) {
+				await moveToSlot((n) => n.includes("planks") || n.includes("_log"), 1);
+			}
+		}
+		// Load input if the input slot is empty.
+		if (!furnaceWindow.slots[0]) {
+			await moveToSlot((n) => n.includes(inputItem), 0);
+		}
+		// Nothing queued and nothing waiting in the output — give up this call.
+		if (!furnaceWindow.slots[0] && !furnaceWindow.slots[2]) {
 			bot.closeWindow(furnaceWindow);
 			return { success: false, message: `No ${inputItem} to smelt` };
 		}
 
-		// Get fuel — coal/charcoal preferred, planks/logs as fallback
-		let fuel = windowItems(bot.inventory).find(
-			(i) => i.name === "coal" || i.name === "charcoal",
-		);
-		if (!fuel) {
-			fuel = windowItems(bot.inventory).find(
-				(i) => i.name.includes("planks") || i.name.includes("_log"),
-			);
-		}
-
-		if (!fuel) {
-			bot.closeWindow(furnaceWindow);
-			return { success: false, message: "No fuel for furnace" };
-		}
-
-		// Put fuel in furnace
-		await furnaceWindow.putFuel(fuel.type, null, Math.min(fuel.count, 8));
-
-		// Put items to smelt
-		const toSmelt = itemsToSmelt[0];
-		if (!toSmelt) {
-			bot.closeWindow(furnaceWindow);
-			return { success: false, message: `No ${inputItem} in inventory` };
-		}
-		const smeltCount = Math.min(toSmelt.count, count);
-		await furnaceWindow.putInput(toSmelt.type, null, smeltCount);
-
-		// Wait for smelting (10s per item)
-		const smeltTime = smeltCount * 10 * 1000;
-		const maxWait = Math.min(smeltTime, 60000);
-
-		logEvent(
-			"smelt",
-			"waiting",
-			`${smeltCount}x ${inputItem} (${maxWait / 1000}s)`,
-		);
+		// Wait for smelting progress (~10s per item, capped at 60s).
+		const pending = Math.min(furnaceWindow.slots[0]?.count ?? 0, count);
+		const maxWait = Math.min(Math.max(pending, 1) * 10_000, 60_000);
+		logEvent("smelt", "waiting", `${pending}x ${inputItem} (${maxWait / 1000}s)`);
 		await sleep(maxWait);
 
-		// Take output
-		const output = furnaceWindow.outputItem();
-		if (output) {
-			await furnaceWindow.takeOutput();
+		// Take the finished output stack into inventory.
+		let took = 0;
+		if (furnaceWindow.slots[2]) {
+			took = furnaceWindow.slots[2].count;
+			await bot.clickWindow(2, 0, 0);
+			await sleep(300);
+			const empty = furnaceWindow.slots.findIndex(
+				(s, i) => i >= furnaceWindow.inventoryStart && !s,
+			);
+			if (empty >= 0) {
+				await bot.clickWindow(empty, 0, 0);
+				await sleep(300);
+			} else if (furnaceWindow.selectedItem) {
+				await bot.clickWindow(2, 0, 0); // no inventory space — put it back
+				took = 0;
+			}
 		}
 
+		// Never close while carrying an item — it would be dropped on the ground.
+		if (furnaceWindow.selectedItem) {
+			const empty = furnaceWindow.slots.findIndex(
+				(s, i) => i >= furnaceWindow.inventoryStart && !s,
+			);
+			if (empty >= 0) {
+				await bot.clickWindow(empty, 0, 0);
+				await sleep(200);
+			}
+		}
 		bot.closeWindow(furnaceWindow);
-
-		return {
-			success: true,
-			message: `Smelted ${smeltCount} ${inputItem}`,
-		};
+		return { success: true, message: `Smelted ${inputItem} (+${took})` };
 	} catch (err) {
 		return {
 			success: false,

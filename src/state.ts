@@ -235,6 +235,13 @@ export const syncFromBot = (bot: Bot): GameState => {
 		return "overworld";
 	};
 
+	// A lit nether portal nearby means the Build step is done and we can enter.
+	const netherPortal =
+		bot.findBlock?.({
+			matching: (n: string) => n === "nether_portal",
+			maxDistance: 16,
+		}) ?? null;
+
 	return {
 		inventory: {
 			logs: countItem("_log"),
@@ -288,8 +295,15 @@ export const syncFromBot = (bot: Bot): GameState => {
 		},
 		world: {
 			dimension: getDimension(),
-			portalBuilt: false, // Can't easily detect from inventory
-			portalLocation: null,
+			// Detect a lit nether portal nearby (the cast/build steps light one).
+			portalBuilt: !!netherPortal,
+			portalLocation: netherPortal
+				? {
+						x: netherPortal.position.x,
+						y: netherPortal.position.y,
+						z: netherPortal.position.z,
+					}
+				: null,
 			fortressFound: false,
 			fortressLocation: null,
 			strongholdFound: false,

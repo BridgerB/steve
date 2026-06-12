@@ -174,7 +174,7 @@ const runTick = async (bot: Bot): Promise<void> => {
 					`${stepName}: ${result.message}`,
 					bot.entity?.position,
 				);
-				if (consecutiveFailures >= 8) {
+				if (consecutiveFailures >= 20) {
 					log(
 						`ABORT: ${consecutiveFailures} consecutive failures on ${stepName}`,
 					);
@@ -413,7 +413,6 @@ const runRace = async (count: number, timeoutMs: number) => {
 	const SERVER_PORT = parseInt(process.env.MC_PORT ?? "25565", 10);
 	const RCON_PORT = parseInt(process.env.MC_RCON_PORT ?? "25575", 10);
 	const RCON_PASS = process.env.MC_RCON_PASS ?? "minecraft-test-rcon";
-	const SPAWN_SPACING = 250;
 
 	const RACE_ID = new Date().toISOString().replace(/:/g, "-");
 	const DB_PATH = join(ROOT, "data", "steve.db");
@@ -474,7 +473,7 @@ const runRace = async (count: number, timeoutMs: number) => {
 		}
 	};
 
-	const GOAL = "enter_end";
+	const GOAL = "enter_nether";
 	initLogger(RACE_ID);
 	registerRace(RACE_ID, "race", count, timeoutMs / 1000, GOAL);
 
@@ -532,7 +531,7 @@ const runRace = async (count: number, timeoutMs: number) => {
 		try {
 			const evt = db
 				.prepare(
-					"SELECT COUNT(*) as c FROM events WHERE race_id = ? AND bot_id = ? AND event = 'success' AND detail LIKE 'Enter The End:%'",
+					"SELECT COUNT(*) as c FROM events WHERE race_id = ? AND bot_id = ? AND event = 'success' AND detail LIKE 'Enter Nether:%'",
 				)
 				.get(RACE_ID, botId) as { c: number };
 			return evt.c > 0;
@@ -560,6 +559,14 @@ const runRace = async (count: number, timeoutMs: number) => {
 	const hasDisplay = !!(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
 	const NUM_VIEWERS = hasDisplay ? Math.min(count, 4) : 0;
 
+	// Line the bots up heading SOUTH (+Z), 50 blocks apart: bot 0 at (0,0), bot 1
+	// at (0,50), bot 2 at (0,100), … Each bot's (x,z) is used for BOTH its env
+	// var and its teleport below.
+	const spawns: { x: number; z: number }[] = [];
+	for (let i = 0; i < count; i++) {
+		spawns.push({ x: 0, z: 50 * i });
+	}
+
 	// Spawn all bot processes first, then teleport them
 	const botProcs: { proc: ChildProcess; username: string; exited: boolean }[] =
 		[];
@@ -574,8 +581,8 @@ const runRace = async (count: number, timeoutMs: number) => {
 				MC_USERNAME: username,
 				STEVE_RACE_ID: RACE_ID,
 				STEVE_BOT_MODE: "1",
-				STEVE_SPAWN_X: String(i * SPAWN_SPACING),
-				STEVE_SPAWN_Z: String(i * SPAWN_SPACING),
+				STEVE_SPAWN_X: String(spawns[i]?.x ?? 0),
+				STEVE_SPAWN_Z: String(spawns[i]?.z ?? 0),
 				STEVE_TIMEOUT: String(timeoutMs / 1000),
 				STEVE_VIEWER_PORT: i < NUM_VIEWERS ? String(3001 + i) : "",
 			},
@@ -598,8 +605,8 @@ const runRace = async (count: number, timeoutMs: number) => {
 			for (let i = 0; i < count; i++) {
 				const name = `Steve${i}`;
 				if (placed.has(name) || !list.includes(name)) continue;
-				const x = i * SPAWN_SPACING;
-				const z = i * SPAWN_SPACING;
+				const x = spawns[i]?.x ?? 0;
+				const z = spawns[i]?.z ?? 0;
 				await rcon(`clear ${name}`);
 				await rcon(`tp ${name} ${x} 200 ${z}`);
 				await sleep(3000); // let server generate chunks

@@ -532,16 +532,66 @@ export const findBlocks = (
 interface BotMemory {
 	craftingTablePos: { x: number; y: number; z: number } | null;
 	resources: Map<string, { x: number; y: number; z: number }[]>;
+	// Surface top of the mine staircase — the way back up for resupply.
+	mineEntry: { x: number; y: number; z: number } | null;
 }
 const botMemory = new WeakMap<Bot, BotMemory>();
 
 export const getMemory = (bot: Bot): BotMemory => {
 	let mem = botMemory.get(bot);
 	if (!mem) {
-		mem = { craftingTablePos: null, resources: new Map() };
+		mem = { craftingTablePos: null, resources: new Map(), mineEntry: null };
 		botMemory.set(bot, mem);
 	}
 	return mem;
+};
+
+/**
+ * Record the mine's surface entry (the top of the staircase) so the bot can
+ * climb back up to resupply. Keeps the highest point seen — i.e. the surface.
+ */
+export const rememberMineEntry = (
+	bot: Bot,
+	pos: { x: number; y: number; z: number },
+) => {
+	const mem = getMemory(bot);
+	if (!mem.mineEntry || pos.y > mem.mineEntry.y) {
+		mem.mineEntry = {
+			x: Math.floor(pos.x),
+			y: Math.floor(pos.y),
+			z: Math.floor(pos.z),
+		};
+	}
+};
+
+export const getMineEntry = (
+	bot: Bot,
+): { x: number; y: number; z: number } | null => getMemory(bot).mineEntry;
+
+/**
+ * Climb back to the recorded mine entry (surface staircase top). For when the
+ * bot needs a surface resource (wood) while deep underground — no point hunting
+ * for trees in the dark. Resumable: returns false while still climbing so the
+ * caller can retry on the next step tick.
+ */
+export const returnToSurface = async (bot: Bot): Promise<boolean> => {
+	const entry = getMineEntry(bot);
+	if (!entry) return false;
+	const atEntry = () => bot.entity.position.y >= entry.y - 4;
+	if (atEntry()) return true;
+	logEvent(
+		"nav",
+		"return_to_surface",
+		`climbing to y=${entry.y} from y=${Math.floor(bot.entity.position.y)}`,
+		bot.entity.position,
+	);
+	await goTo(bot, vec3(entry.x, entry.y, entry.z), {
+		range: 2,
+		timeout: 90000,
+	});
+	const reached = atEntry();
+	if (reached) logEvent("nav", "reached_surface", undefined, bot.entity.position);
+	return reached;
 };
 
 export const rememberResource = (
@@ -675,7 +725,28 @@ export const getCraftingTable = async (bot: Bot): Promise<Block | null> => {
 	let tableItem = findItem(bot, "crafting_table");
 	if (!tableItem) {
 		// Try crafting a new table from planks (need 4)
-		const planks = countItems(bot, "planks");
+		let planks = countItems(bot, "planks");
+		// Deep in a mine we often have logs but fewer than 4 spare planks (3 is
+		// enough to attempt a pickaxe but not a table) — top up from a log first.
+		if (planks < 4) {
+			const log = windowItems(bot.inventory).find((i) =>
+				i.name.includes("_log"),
+			);
+			const plankId =
+				log && bot.registry
+					? (bot.registry.itemsByName.get(log.name.replace("_log", "_planks"))
+							?.id ?? bot.registry.itemsByName.get("oak_planks")?.id)
+					: undefined;
+			if (plankId) {
+				try {
+					const recipe = bot.recipesFor(plankId, null, 1, null)[0];
+					if (recipe) await bot.craft(recipe, 1); // 1 log → 4 planks
+				} catch {
+					/* fall through to the planks check */
+				}
+				planks = countItems(bot, "planks");
+			}
+		}
 		if (planks >= 4) {
 			logEvent("craft", "table_crafting", "crafting new table from planks");
 			const result = await craftItem(bot, "crafting_table", 1);
@@ -726,13 +797,15 @@ export const getCraftingTable = async (bot: Bot): Promise<Block | null> => {
 	const isSpaceClear = (name: string) =>
 		name === "air" || name === "cave_air" || NON_SOLID.has(name);
 
-	// Randomize placement positions so retries try different blocks
+	// Randomize placement positions so retries try different blocks. Never use
+	// [0,0] — that places the table on the block under our own feet, i.e. inside
+	// our hitbox, which silently no-ops. In a 1-wide mining tunnel that was often
+	// the only "valid" ground found, so the bot looped forever and aborted.
 	const positions: [number, number][] = [
 		[1, 0],
 		[0, 1],
 		[-1, 0],
 		[0, -1],
-		[0, 0],
 		[1, 1],
 		[-1, 1],
 		[1, -1],
@@ -775,6 +848,31 @@ export const getCraftingTable = async (bot: Bot): Promise<Block | null> => {
 					ground = candidate;
 					break;
 				} catch {}
+			}
+		}
+	}
+	// Stuck on leaves/non-solid with nothing to place on (e.g. slow-fell into a
+	// tree, or perched on a canopy) — dig straight down until we drop onto solid
+	// ground, then re-scan the adjacent positions.
+	if (!ground) {
+		for (let i = 0; i < 8; i++) {
+			const below = getBlock(bot, offset(bot.entity.position, 0, -1, 0));
+			if (!below || isSolidGround(below.name)) break;
+			try {
+				await bot.lookAt(offset(below.position, 0.5, 0.5, 0.5));
+				await bot.dig(below);
+				await sleep(400);
+			} catch {
+				break;
+			}
+		}
+		for (const [dx, dz] of positions) {
+			const candidate = getBlock(bot, offset(bot.entity.position, dx, -1, dz));
+			if (!candidate || !isSolidGround(candidate.name)) continue;
+			const above = getBlock(bot, offset(candidate.position, 0, 1, 0));
+			if (above && isSpaceClear(above.name)) {
+				ground = candidate;
+				break;
 			}
 		}
 	}
@@ -842,6 +940,10 @@ export const getCraftingTable = async (bot: Bot): Promise<Block | null> => {
 		}
 		await sleep(200);
 		try {
+			// Look at the ground's top face first — without this, placement fails
+			// deep in a tunnel where the bot is looking horizontally.
+			await bot.lookAt(offset(ground.position, 0.5, 1, 0.5));
+			await sleep(150);
 			await bot.placeBlock(ground, vec3(0, 1, 0));
 		} catch {
 			// placeBlock may timeout but block could still be placed
@@ -1329,6 +1431,7 @@ export const escapeLava = async (
 export const attachSafety = (bot: Bot): void => {
 	let lastSafe: Vec3 | undefined;
 	let escaping = false;
+	let drowning = false;
 
 	const guard = setInterval(() => {
 		if (!bot.entity?.position) return;
@@ -1353,6 +1456,32 @@ export const attachSafety = (bot: Bot): void => {
 			}
 			escapeLava(bot, lastSafe).finally(() => {
 				escaping = false;
+			});
+		}
+		// Drowning guard: head underwater long enough that oxygen is dropping and
+		// no step is handling it (pathing through water, walking to a table) →
+		// take over and swim to the surface. Mirrors the lava guard above.
+		if (
+			!escaping &&
+			!drowning &&
+			bot.entity.isInWater &&
+			(bot.oxygenLevel ?? 20) < 12
+		) {
+			drowning = true;
+			logEvent(
+				"safety",
+				"drown_guard_trigger",
+				`o2=${bot.oxygenLevel}`,
+				bot.entity.position,
+			);
+			bot.clearControlStates();
+			try {
+				getPathfinder(bot).stop();
+			} catch {
+				/* pathfinder may be idle */
+			}
+			escapeWater(bot).finally(() => {
+				drowning = false;
 			});
 		}
 	}, 100);
