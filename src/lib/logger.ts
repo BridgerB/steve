@@ -23,7 +23,20 @@ const DB_PATH = join(process.cwd(), "data", "steve.db");
  * `bot.on("debug")` loggers should skip these — otherwise the db balloons to
  * hundreds of MB of `packet_rx` rows and buries the useful events.
  */
-export const NOISY_DEBUG = new Set(["packet_rx", "packet_tx", "entity"]);
+export const NOISY_DEBUG = new Set([
+	"packet_rx",
+	"packet_tx",
+	"entity",
+	// High-volume per-tick debug that bloated the DB to ~700 MB in one race
+	// (filling the disk). Lower-volume diagnostics (mine/step/wood/cast/safety/
+	// nav/smelt/craft) are kept for debugging.
+	"findBlocks",
+	"dig",
+	"inventory",
+	"collect",
+	"place",
+	"click",
+]);
 
 // ── Write buffer ──────────────────────────────────────────────────
 type EventRow = [
