@@ -6,7 +6,9 @@ import type { Bot } from "typecraft";
 import { distance, offset, type Vec3, vec3, windowItems } from "typecraft";
 import {
 	exploreRandom,
+	forgetResource,
 	getMineEntry,
+	getRememberedResource,
 	goTo,
 	returnToSurface,
 	sleep,
@@ -18,26 +20,6 @@ import type { StepResult } from "../../types.ts";
  * Fill an empty bucket with water.
  */
 export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
-	// Find water source blocks
-	const waterPositions = bot.findBlocks({
-		matching: (name) => name === "water",
-		maxDistance: 128,
-		count: 200,
-	});
-
-	// Prefer surface water (air/cave_air above), fall back to any
-	let waterPos: Vec3 | null = null;
-	for (const pos of waterPositions) {
-		const above = bot.blockAt(offset(pos, 0, 1, 0));
-		if (above && (above.name === "air" || above.name === "cave_air")) {
-			waterPos = pos;
-			break;
-		}
-	}
-	if (!waterPos && waterPositions.length > 0) {
-		waterPos = waterPositions[0] ?? null;
-	}
-
 	const pickWater = (list: Vec3[]): Vec3 | null => {
 		for (const p of list) {
 			const above = bot.blockAt(offset(p, 0, 1, 0));
@@ -45,9 +27,37 @@ export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 		}
 		return list[0] ?? null;
 	};
+	const search = (dist: number, count: number): Vec3 | null =>
+		pickWater(
+			bot.findBlocks({ matching: (n) => n === "water", maxDistance: dist, count }),
+		);
 
-	// Deep underground (after mining iron) there's rarely water in sight — climb
-	// back to the surface first, where lakes/rivers are, then look again.
+	let waterPos: Vec3 | null = null;
+
+	// 1. Water the bot already saw (blockSeen memory) — cave water it passed while
+	//    mining. In this world type water is underground, not on the surface.
+	const remembered = getRememberedResource(bot, "water");
+	if (remembered) {
+		const rb = bot.blockAt(vec3(remembered.x, remembered.y, remembered.z));
+		if (rb && rb.name === "water")
+			waterPos = vec3(remembered.x, remembered.y, remembered.z);
+		else forgetResource(bot, "water", remembered);
+	}
+
+	// 2. Anything currently in line-of-sight.
+	if (!waterPos) waterPos = search(128, 200);
+
+	// 3. Explore around the current level for more cave water.
+	if (!waterPos) {
+		for (let i = 0; i < 5; i++) {
+			logEvent("bucket", "exploring", `looking for water ${i + 1}/5`);
+			await exploreRandom(bot, 60);
+			waterPos = search(128, 30);
+			if (waterPos) break;
+		}
+	}
+
+	// 4. Last resort: surface water (lakes/rivers) — climb up if deep, then look.
 	if (!waterPos) {
 		const entry = getMineEntry(bot);
 		if (entry && bot.entity.position.y < entry.y - 6) {
@@ -57,29 +67,11 @@ export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 				`for water, from y=${Math.floor(bot.entity.position.y)}`,
 			);
 			await returnToSurface(bot);
-			waterPos = pickWater(
-				bot.findBlocks({
-					matching: (name) => name === "water",
-					maxDistance: 128,
-					count: 100,
-				}),
-			);
-		}
-	}
-
-	// Explore (on the surface now) if still no water found.
-	if (!waterPos) {
-		for (let i = 0; i < 6; i++) {
-			logEvent("bucket", "exploring", `looking for water ${i + 1}/6`);
-			await exploreRandom(bot, 60);
-			waterPos = pickWater(
-				bot.findBlocks({
-					matching: (name) => name === "water",
-					maxDistance: 128,
-					count: 20,
-				}),
-			);
-			if (waterPos) break;
+			waterPos = search(128, 100);
+			for (let i = 0; i < 3 && !waterPos; i++) {
+				await exploreRandom(bot, 80);
+				waterPos = search(128, 30);
+			}
 		}
 	}
 
