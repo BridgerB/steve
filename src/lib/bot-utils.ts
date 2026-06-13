@@ -1290,7 +1290,7 @@ export const escapeWater = async (bot: Bot): Promise<boolean> => {
 				above.name !== "air" &&
 				above.name !== "cave_air" &&
 				!above.name.includes("water") &&
-				isValidBlock(above);
+				above.name !== "bedrock";
 			if (solidCeiling) {
 				await bot.dig(above, true).catch(() => {});
 				logEvent("nav", "drown_dig_up", above.name, above.position);
