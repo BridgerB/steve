@@ -4,6 +4,7 @@
  */
 
 import type { Bot } from "typecraft";
+import { getMemory } from "./lib/bot-utils.ts";
 import type {
 	ArmorTier,
 	Dimension,
@@ -285,7 +286,12 @@ export const syncFromBot = (bot: Bot): GameState => {
 			pickaxe: getPickaxe(),
 			sword: getSword(),
 			armor: getArmor(),
-			hasCraftingTable: hasItem("crafting_table"),
+			// Also true if the bot has PLACED a table it remembers — otherwise the
+			// Craft Crafting Table step regresses the instant the bot walks off to
+			// mine (table left behind, none in inventory) and burns ticks re-crafting.
+			// Self-heals: getCraftingTable re-crafts if the remembered table is gone.
+			hasCraftingTable:
+				hasItem("crafting_table") || getMemory(bot).craftingTablePos != null,
 			hasFurnace: hasItem("furnace"),
 			hasBucket:
 				hasItem("bucket") || hasItem("water_bucket") || hasItem("lava_bucket"),
