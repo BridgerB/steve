@@ -1565,6 +1565,7 @@ export const attachSafety = (bot: Bot): void => {
 	let escaping = false;
 	let drowning = false;
 	let submergedSince = 0;
+	let lastWetTime = 0;
 
 	const guard = setInterval(() => {
 		if (!bot.entity?.position) return;
@@ -1608,15 +1609,20 @@ export const attachSafety = (bot: Bot): void => {
 		// exist), so detect submersion directly — the block at head height being
 		// water — and time it. MC starts drowning damage after ~15s underwater, so
 		// after 4s submerged we take over and surface (swim up, or dig up through a
-		// flooded-cave ceiling). This is where every death.attack.drown came from.
-		if (!headUnderwater) submergedSince = 0;
-		else if (!submergedSince) submergedSince = Date.now();
+		// flooded-cave ceiling). Fire after 2.5s, and treat brief surfacing
+		// (head out <1.2s) as still-submerged — bobbing at a pond surface kept
+		// resetting the timer so the guard never fired and the bot slowly drowned.
+		if (headUnderwater) {
+			lastWetTime = Date.now();
+			if (!submergedSince) submergedSince = Date.now();
+		} else if (Date.now() - lastWetTime > 1200) {
+			submergedSince = 0;
+		}
 		if (
 			!escaping &&
 			!drowning &&
-			headUnderwater &&
 			submergedSince > 0 &&
-			Date.now() - submergedSince > 4000
+			Date.now() - submergedSince > 2500
 		) {
 			drowning = true;
 			logEvent(

@@ -562,15 +562,16 @@ const runRace = async (count: number, timeoutMs: number) => {
 	const hasDisplay = !!(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
 	const NUM_VIEWERS = hasDisplay ? Math.min(count, 4) : 0;
 
-	// Cluster the bots in the forest near spawn (≈ -64,-128) — it has abundant
-	// trees (wood is the bottleneck in this seed: tools + pickaxe re-crafts need a
-	// steady supply) and a river right beside it (-128,-128) for the bucket cast.
-	// A 5×2 grid ~22 blocks apart keeps them all in the woods without overlapping.
-	const FX = -64;
-	const FZ = -128;
+	// Cluster the bots in the DRY part of the forest (≈ -25,-147). The forest's
+	// north side (-64,-128, z≈-111..-129) is a wet river valley where bots drowned
+	// constantly (every drowning death was there at y55-60); the south side
+	// (z≈-142..-152) is the same forest on dry ground. Tighter grid (16×12) to keep
+	// them on the dry strip while still spread enough not to fight over the trees.
+	const FX = -25;
+	const FZ = -147;
 	const spawns: { x: number; z: number }[] = [];
 	for (let i = 0; i < count; i++) {
-		spawns.push({ x: FX + ((i % 5) - 2) * 22, z: FZ + Math.floor(i / 5) * 26 });
+		spawns.push({ x: FX + ((i % 5) - 2) * 16, z: FZ + Math.floor(i / 5) * 12 });
 	}
 
 	// Spawn all bot processes first, then teleport them
