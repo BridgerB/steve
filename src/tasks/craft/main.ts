@@ -9,8 +9,10 @@ import {
 	craftItem,
 	failure,
 	findItem,
+	getBlock,
 	getCraftingTable,
 	goTo,
+	interactReliably,
 	success,
 } from "../../lib/bot-utils.ts";
 import type { StepResult } from "../../types.ts";
@@ -108,29 +110,41 @@ export const craftBucket = async (bot: Bot): Promise<StepResult> => {
 };
 
 export const craftFlintAndSteel = async (bot: Bot): Promise<StepResult> => {
-	// First need flint from gravel
-	const gravel = bot.findBlock({
-		matching: (name) => name === "gravel",
-		maxDistance: 32,
-	});
-
-	if (gravel) {
-		try {
-			await bot.dig(gravel);
+	// Flint drops from gravel only ~10% per block, so dig MANY until we get one —
+	// a single dig (the old behavior) failed ~90% of the time in one call.
+	const deadline = Date.now() + 90_000;
+	const giveUp = new Set<string>();
+	while (!findItem(bot, "flint") && Date.now() < deadline) {
+		const gravel = bot.findBlock({
+			matching: (name) => name === "gravel",
+			maxDistance: 32,
+		});
+		if (!gravel) break;
+		const key = `${gravel.position.x},${gravel.position.y},${gravel.position.z}`;
+		// Move into reach + face + dig + verify the gravel is gone — keep trying
+		// other gravel on failure rather than bailing on the first hiccup.
+		const dug = await interactReliably(bot, {
+			target: gravel.position,
+			reach: 3,
+			attempts: 3,
+			action: async () => {
+				await bot.dig(gravel);
+			},
+			verify: () => getBlock(bot, gravel.position)?.name !== "gravel",
+		});
+		if (dug) {
 			await bot.collectDrops(6, 3000, async (p) => {
 				await goTo(bot, p, { range: 1.4, timeout: 3000 });
 			});
-		} catch {
-			// Ignore
+		} else {
+			if (giveUp.has(key)) break; // same block won't dig twice — stop
+			giveUp.add(key);
 		}
 	}
 
 	const table = await getCraftingTable(bot);
 	if (!table) return failure("Need crafting table");
-
-	// Check for flint
-	const flint = findItem(bot, "flint");
-	if (!flint) return failure("Need flint (dig gravel)");
+	if (!findItem(bot, "flint")) return failure("Need flint (dig gravel)");
 
 	return craftItem(bot, "flint_and_steel", 1, table);
 };

@@ -658,6 +658,47 @@ export const forgetResource = (
 	if (idx >= 0) list.splice(idx, 1);
 };
 
+/**
+ * Robustly perform a flaky block interaction. On 26.1.2, placeBlock /
+ * activateItem / activateBlock / dig land only ~70-85% per attempt — a single
+ * shot is the root of the "Need crafting table" / "Failed to fill bucket" style
+ * failures. Each attempt: get within reach, face the target, run the action,
+ * then verify — retrying until `verify()` passes. Returns true on success.
+ */
+export const interactReliably = async (
+	bot: Bot,
+	opts: {
+		target: Vec3;
+		action: () => Promise<void>;
+		verify: () => boolean;
+		reach?: number;
+		attempts?: number;
+		settleMs?: number;
+	},
+): Promise<boolean> => {
+	const { target, action, verify } = opts;
+	const reach = opts.reach ?? 3;
+	const attempts = opts.attempts ?? 4;
+	const settleMs = opts.settleMs ?? 600;
+	const center = offset(target, 0.5, 0.5, 0.5);
+	for (let i = 0; i < attempts; i++) {
+		if (verify()) return true;
+		try {
+			if (distance(bot.entity.position, center) > reach) {
+				await moveCloser(bot, target, { maxDistance: reach });
+			}
+			await bot.lookAt(center, true);
+			await sleep(150);
+			await action();
+		} catch {
+			/* retry */
+		}
+		await sleep(settleMs);
+		if (verify()) return true;
+	}
+	return false;
+};
+
 export const getCraftingTable = async (bot: Bot): Promise<Block | null> => {
 	const mem = getMemory(bot);
 
