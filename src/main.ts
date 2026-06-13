@@ -273,7 +273,9 @@ const startBot = async (): Promise<void> => {
 		"deepslate_coal_ore",
 		"iron_ore",
 		"deepslate_iron_ore",
-		"water", // remember cave water seen while mining — needed for the bucket cast
+		// NOTE: do NOT watch "water" — it's so common (oceans/lakes/cave water) that
+		// the blockSeen firehose blocks the event loop and the bot keepalive-times-out
+		// and disconnects. fillWaterBucket finds water via findBlocks instead.
 	]) {
 		bot.watchBlocks.add(name);
 	}
