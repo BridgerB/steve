@@ -1245,7 +1245,21 @@ export const errorResult = (err: unknown, fallback: string): StepResult => ({
  * Holds jump to swim up, then walks forward to find shore.
  */
 export const escapeWater = async (bot: Bot): Promise<boolean> => {
-	if (!bot.entity?.isInWater) return true; // not in water
+	// typecraft's bot.entity.isInWater disagrees with actual submersion (it stays
+	// false in the flooded tunnels where bots drown), so detect drowning the same
+	// way the safety guard does: the block at head height is water. Relying on
+	// isInWater here made escapeWater a silent no-op — guard fired thousands of
+	// times, bot drowned anyway.
+	const headWet = (): boolean => {
+		const p = bot.entity?.position;
+		if (!p) return false;
+		const b = getBlock(
+			bot,
+			vec3(Math.floor(p.x), Math.floor(p.y) + 1, Math.floor(p.z)),
+		);
+		return !!b && b.name.includes("water");
+	};
+	if (!headWet()) return true; // head not submerged
 
 	logEvent("nav", "swimming_out");
 
@@ -1262,8 +1276,8 @@ export const escapeWater = async (bot: Bot): Promise<boolean> => {
 	while (Date.now() - start < timeout) {
 		await sleep(200);
 		if (!bot.entity?.position) break;
-		if (!bot.entity.isInWater) {
-			// Out of water, keep moving forward briefly to get on land
+		if (!headWet()) {
+			// Head's clear — keep moving forward briefly to get fully onto land.
 			await sleep(500);
 			bot.clearControlStates();
 			logEvent("nav", "escaped_water");
@@ -1279,7 +1293,7 @@ export const escapeWater = async (bot: Bot): Promise<boolean> => {
 		stuckMs = y - lastY < 0.05 ? stuckMs + 200 : 0;
 		lastY = y;
 
-		if (stuckMs >= 600) {
+		if (stuckMs >= 400) {
 			const p = bot.entity.position;
 			const above = getBlock(
 				bot,
