@@ -562,12 +562,15 @@ const runRace = async (count: number, timeoutMs: number) => {
 	const hasDisplay = !!(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
 	const NUM_VIEWERS = hasDisplay ? Math.min(count, 4) : 0;
 
-	// Line the bots up heading SOUTH (+Z), 50 blocks apart: bot 0 at (0,0), bot 1
-	// at (0,50), bot 2 at (0,100), … Each bot's (x,z) is used for BOTH its env
-	// var and its teleport below.
+	// Cluster the bots in the forest near spawn (≈ -64,-128) — it has abundant
+	// trees (wood is the bottleneck in this seed: tools + pickaxe re-crafts need a
+	// steady supply) and a river right beside it (-128,-128) for the bucket cast.
+	// A 5×2 grid ~22 blocks apart keeps them all in the woods without overlapping.
+	const FX = -64;
+	const FZ = -128;
 	const spawns: { x: number; z: number }[] = [];
 	for (let i = 0; i < count; i++) {
-		spawns.push({ x: 0, z: 50 * i });
+		spawns.push({ x: FX + ((i % 5) - 2) * 22, z: FZ + Math.floor(i / 5) * 26 });
 	}
 
 	// Spawn all bot processes first, then teleport them
