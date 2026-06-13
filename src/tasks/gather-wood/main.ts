@@ -29,6 +29,21 @@ const LOG_TYPES = [
 
 const isLogName = (name: string) => LOG_TYPES.includes(name);
 
+const LEAF_TYPES = [
+	"oak_leaves",
+	"birch_leaves",
+	"spruce_leaves",
+	"jungle_leaves",
+	"acacia_leaves",
+	"dark_oak_leaves",
+	"mangrove_leaves",
+	"cherry_leaves",
+	"azalea_leaves",
+	"flowering_azalea_leaves",
+];
+
+const isLeafName = (name: string) => LEAF_TYPES.includes(name);
+
 export const gatherWood = async (
 	bot: Bot,
 	targetCount: number,
@@ -106,6 +121,22 @@ export const gatherWood = async (
 			}
 		}
 		return null;
+	};
+
+	// In a dense forest, findClosestLog's raycast can't pierce the canopy to reach
+	// trunks — but the leaf blocks themselves are exposed and in line-of-sight, so
+	// the bot CAN see them honestly. Walking to a visible leaf column puts a trunk
+	// within point-blank range, where findClosestLog's raycast then succeeds.
+	const findVisibleFoliage = (): Vec3 | null => {
+		const positions = bot.findBlocks({
+			matching: (name: string) => isLeafName(name),
+			maxDistance: 48,
+			count: 40,
+		});
+		const reachable = positions
+			.filter((p) => !unreachable.has(posKey(p)))
+			.sort((a, b) => distance(botPos(), a) - distance(botPos(), b));
+		return reachable[0] ?? null;
 	};
 
 	// Navigate to a position
@@ -324,6 +355,25 @@ export const gatherWood = async (
 					);
 				}
 				continue;
+			}
+
+			// Head toward visible leaf canopy — trees are under it. This turns a
+			// blind random walk into a directed approach, so a bot standing in a
+			// forest reaches a trunk in seconds instead of timing out.
+			const foliage = findVisibleFoliage();
+			if (foliage) {
+				logEvent(
+					"wood",
+					"explore_foliage",
+					`leaves dist=${distance(botPos(), foliage).toFixed(0)}`,
+					foliage,
+				);
+				// Target the canopy's column at ground level, not the elevated leaf.
+				await navigateTo(vec3(foliage.x, botPos().y, foliage.z));
+				if (findClosestLog()) continue;
+				// Reached the canopy but still no trunk in raycast — blacklist this
+				// column so we don't oscillate back, then fall through to a walk.
+				unreachable.add(posKey(foliage));
 			}
 
 			// Walk in a consistent direction for longer to load new chunks
