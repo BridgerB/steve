@@ -24,7 +24,13 @@ export const steps: readonly Step[] = [
 		// always be crafted. Must NOT short-circuit on hasCraftingTable, or the
 		// bot stops replenishing wood once it has a table and deadlocks when
 		// planks run out. canExecute gates this to the overworld.
-		isComplete: (s) => s.inventory.logs >= 5 || s.inventory.planks >= 12,
+		// Once the iron pickaxe is crafted, nothing left (buckets/water/flint&steel/
+		// portal) needs wood — stop forcing pointless re-gathering, which deadlocks
+		// in tree-poor terrain.
+		isComplete: (s) =>
+			s.inventory.logs >= 5 ||
+			s.inventory.planks >= 12 ||
+			getPickaxeTier(s.equipment.pickaxe) >= 3,
 		execute: async (bot, _state) => {
 			const { gatherWood } = await import("./tasks/gather-wood/main.ts");
 			return gatherWood(bot, 5);
@@ -38,7 +44,8 @@ export const steps: readonly Step[] = [
 		canExecute: (s) => s.inventory.logs >= 2,
 		// Keep a plank reserve; do not short-circuit on hasCraftingTable (see
 		// Gather Wood) — otherwise planks are never replenished after tools.
-		isComplete: (s) => s.inventory.planks >= 8,
+		isComplete: (s) =>
+			s.inventory.planks >= 8 || getPickaxeTier(s.equipment.pickaxe) >= 3,
 		execute: async (bot, _state) => {
 			const { craftPlanks } = await import("./tasks/craft/main.ts");
 			return craftPlanks(bot);
@@ -62,7 +69,8 @@ export const steps: readonly Step[] = [
 		name: "Craft Sticks",
 		priority: 4,
 		canExecute: (s) => s.inventory.planks >= 2,
-		isComplete: (s) => s.inventory.sticks >= 4,
+		isComplete: (s) =>
+			s.inventory.sticks >= 4 || getPickaxeTier(s.equipment.pickaxe) >= 3,
 		execute: async (bot, _state) => {
 			const { craftSticks } = await import("./tasks/craft/main.ts");
 			return craftSticks(bot);
