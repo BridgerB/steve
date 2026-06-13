@@ -20,13 +20,23 @@ import type { StepResult } from "../../types.ts";
 /**
  * Fill an empty bucket with water.
  */
+// Water blocks whose scoop failed (flowing/unreachable cave water). Persisted
+// per-bot so the bot skips them on retries and cycles to a scoopable source —
+// otherwise it loops on one bad block until the consecutive-failure abort kills
+// it (this is what killed the first bot to reach the water step).
+const failedWater = new WeakMap<Bot, Set<string>>();
+const waterKey = (p: Vec3) => `${p.x},${p.y},${p.z}`;
+
 export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
+	const bad = (p: Vec3): boolean =>
+		failedWater.get(bot)?.has(waterKey(p)) ?? false;
 	const pickWater = (list: Vec3[]): Vec3 | null => {
-		for (const p of list) {
+		const ok = list.filter((p) => !bad(p));
+		for (const p of ok) {
 			const above = bot.blockAt(offset(p, 0, 1, 0));
 			if (above && (above.name === "air" || above.name === "cave_air")) return p;
 		}
-		return list[0] ?? null;
+		return ok[0] ?? null;
 	};
 	const search = (dist: number, count: number): Vec3 | null =>
 		pickWater(
@@ -38,7 +48,7 @@ export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 	// 1. Water the bot already saw (blockSeen memory) — cave water it passed while
 	//    mining. In this world type water is underground, not on the surface.
 	const remembered = getRememberedResource(bot, "water");
-	if (remembered) {
+	if (remembered && !bad(vec3(remembered.x, remembered.y, remembered.z))) {
 		const rb = bot.blockAt(vec3(remembered.x, remembered.y, remembered.z));
 		if (rb && rb.name === "water")
 			waterPos = vec3(remembered.x, remembered.y, remembered.z);
@@ -141,7 +151,13 @@ export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 			logEvent("bucket", "filled", "water_bucket");
 			return { success: true, message: "Filled water bucket" };
 		}
-		return { success: false, message: "Failed to fill bucket" };
+		// This block won't scoop (flowing/awkward) — blacklist it so the retry
+		// picks a different one instead of looping here until the abort.
+		const set = failedWater.get(bot) ?? new Set<string>();
+		set.add(waterKey(waterPos));
+		failedWater.set(bot, set);
+		logEvent("bucket", "scoop_blacklist", waterKey(waterPos));
+		return { success: false, message: "Failed to fill bucket (trying another)" };
 	} catch (err) {
 		return {
 			success: false,
