@@ -11,7 +11,7 @@
  */
 
 import type { Bot } from "typecraft";
-import { offset, vec3, type Vec3 } from "typecraft";
+import { distance, offset, vec3, type Vec3 } from "typecraft";
 import { getBlock, goTo, sleep, walkToXZ } from "../../lib/bot-utils.ts";
 import { logEvent } from "../../lib/logger.ts";
 import type { Block, StepResult } from "../../types.ts";
@@ -287,44 +287,38 @@ export const pillarUp = async (
 };
 
 /**
- * Scan loaded chunks directly for the nearest exposed fluid source (air above).
- * bot.findBlocks is unusable for this — with its default `exposed` it requires an
- * unobstructed line-of-sight raycast (canSeeBlock), so it misses a pool around a
- * corner or behind terrain even when the chunk data clearly has it. blockAt reads
- * raw chunk data and never lies.
+ * Find the nearest fluid source the bot can actually SEE — no X-ray. Uses
+ * bot.findBlocks, whose default `exposed` requires both an exposed face and an
+ * unobstructed line-of-sight raycast (canSeeBlock), so a pool behind rock is
+ * invisible until the bot physically digs through to it. Prefers a source with
+ * air directly above (pourable / scoopable surface).
  */
-const scanForFluid = (
+const findFluidSource = (
 	bot: Bot,
 	fluid: "water" | "lava",
-	radius = 20,
+	maxDistance = 30,
 ): Vec3 | null => {
+	const positions = bot.findBlocks({
+		matching: (n: string) => n === fluid,
+		maxDistance,
+		count: 64,
+	});
+	if (positions.length === 0) return null;
+	const withAir = positions.filter((p) =>
+		isAir(getBlock(bot, vec3(p.x, p.y + 1, p.z))?.name),
+	);
+	const pick = withAir.length ? withAir : positions;
 	const o = bot.entity.position;
-	const ox = Math.floor(o.x);
-	const oy = Math.floor(o.y);
-	const oz = Math.floor(o.z);
 	let best: Vec3 | null = null;
 	let bestD = Infinity;
-	let fallback: Vec3 | null = null;
-	let fbD = Infinity;
-	for (let dy = 4; dy >= -10; dy--) {
-		for (let dx = -radius; dx <= radius; dx++) {
-			for (let dz = -radius; dz <= radius; dz++) {
-				if (getBlock(bot, vec3(ox + dx, oy + dy, oz + dz))?.name !== fluid)
-					continue;
-				const d = dx * dx + dy * dy + dz * dz;
-				if (isAir(getBlock(bot, vec3(ox + dx, oy + dy + 1, oz + dz))?.name)) {
-					if (d < bestD) {
-						bestD = d;
-						best = vec3(ox + dx, oy + dy, oz + dz);
-					}
-				} else if (d < fbD) {
-					fbD = d;
-					fallback = vec3(ox + dx, oy + dy, oz + dz);
-				}
-			}
+	for (const p of pick) {
+		const d = distance(o, vec3(p.x, p.y, p.z));
+		if (d < bestD) {
+			bestD = d;
+			best = vec3(p.x, p.y, p.z);
 		}
 	}
-	return best ?? fallback;
+	return best;
 };
 
 /** Find a nearby fluid source and fill an empty bucket from it. */
@@ -333,7 +327,7 @@ const fillBucket = async (
 	fluid: "water" | "lava",
 ): Promise<boolean> => {
 	if (count(bot, "bucket") < 1) return false;
-	const src = scanForFluid(bot, fluid, 24);
+	const src = findFluidSource(bot, fluid, 24);
 	if (!src) return false;
 	// Stand on solid footing BESIDE the source (never on top — lava would burn).
 	let stand: Vec3 | null = null;
@@ -744,14 +738,25 @@ const isLava = (n?: string): boolean => n === "lava" || n === "flowing_lava";
  */
 export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 	const deadline = Date.now() + 6 * 60_000;
-	const findLava = (): Vec3 | null => scanForFluid(bot, "lava", 30);
+	const findLava = (): Vec3 | null => findFluidSource(bot, "lava", 30);
 
-	// 1. Locate a lava pool; dig down toward cave-lava depth if none nearby.
+	// 1. Locate a lava pool the bot can actually see. If none, descend toward
+	//    cave-lava depth and branch-mine to open walls until lava comes into
+	//    line-of-sight — never peeking through rock.
 	let lava = findLava();
 	if (!lava) {
-		const { descendStaircase } = await import("../mining/main.ts");
-		await descendStaircase(bot, 12, deadline);
-		lava = findLava();
+		const { descendStaircase, branchMineExplore } = await import(
+			"../mining/main.ts"
+		);
+		for (let pass = 0; pass < 8 && !lava && Date.now() < deadline; pass++) {
+			const budget = Math.min(deadline, Date.now() + 60_000);
+			if (Math.floor(bot.entity.position.y) > 13) {
+				await descendStaircase(bot, 12, budget);
+			} else {
+				await branchMineExplore(bot, budget);
+			}
+			lava = findLava();
+		}
 	}
 	if (!lava) return { success: false, message: "No lava pool found to cast at" };
 

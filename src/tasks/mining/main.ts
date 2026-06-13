@@ -14,10 +14,12 @@ import {
 	findBlock,
 	forgetResource,
 	getCraftingTable,
+	getMineEntry,
 	getRememberedResource,
 	goTo,
 	moveCloser,
 	rememberMineEntry,
+	returnToSurface,
 	sleep,
 	success,
 } from "../../lib/bot-utils.ts";
@@ -46,8 +48,8 @@ const safeDig = async (
 // Ores that live deep underground — reached by staircasing down to their band
 // and strip-mining, rather than wandering the surface.
 const DEEP_ORE_LEVEL: Record<string, number> = {
-	iron_ore: 15,
-	deepslate_iron_ore: 15,
+	iron_ore: 14,
+	deepslate_iron_ore: 14,
 	coal_ore: 50,
 	deepslate_coal_ore: 15,
 	copper_ore: 48,
@@ -59,6 +61,25 @@ const DEEP_ORE_LEVEL: Record<string, number> = {
 	deepslate_lapis_ore: -1,
 	diamond_ore: -59,
 	deepslate_diamond_ore: -59,
+};
+
+// What each ore block actually drops, so progress is measured by items COLLECTED
+// in the pack (which the step's isComplete checks), not by blocks dug — a block
+// dug whose drop fell in lava must not count toward the target.
+const DROP_ITEM: Record<string, string> = {
+	iron_ore: "raw_iron",
+	deepslate_iron_ore: "raw_iron",
+	coal_ore: "coal",
+	deepslate_coal_ore: "coal",
+	copper_ore: "raw_copper",
+	gold_ore: "raw_gold",
+	deepslate_gold_ore: "raw_gold",
+	redstone_ore: "redstone",
+	deepslate_redstone_ore: "redstone",
+	lapis_ore: "lapis_lazuli",
+	deepslate_lapis_ore: "lapis_lazuli",
+	diamond_ore: "diamond",
+	deepslate_diamond_ore: "diamond",
 };
 
 const isAir = (b: Block | null): boolean =>
@@ -256,33 +277,53 @@ const pickDigDir = (bot: Bot): [number, number] => {
 	return best;
 };
 
+const BRANCH_SPACING = 2; // dig side branches every N blocks of main tunnel
+const BRANCH_LEN = 6; // length of each side branch
+
 /**
- * Strip-mine a 1x2 tunnel at the current Y, vacuuming any target ore exposed on
- * the walls/floor/ceiling (and from blockSeen memory) as it goes. Returns how
- * many target blocks it mined.
+ * Branch-mine at the current Y to find ore the no-X-ray way: dig a 1x2 main
+ * tunnel and, every few blocks, perpendicular side branches — exposing a dense
+ * grid of walls. Digging each cell makes its neighbours exposed, so typecraft
+ * fires `blockSeen` for watched ores → memory → `mineNearbyOre` harvests them
+ * while the bot is adjacent. Nothing is found through walls; ore is only mined
+ * once physically uncovered. Returns blocks of ore mined and tunnel cells dug
+ * (the latter so a productive-but-oreless call still counts as progress).
  */
-const stripMineOre = async (
+const branchMineOre = async (
 	bot: Bot,
 	blockType: string,
 	isTarget: (name: string) => boolean,
 	targetCount: number,
+	level: number,
+	dropItem: string,
 	deadline: number,
-): Promise<number> => {
+): Promise<{ mined: number; dug: number }> => {
 	let mined = 0;
+	let dug = 0;
 	let dir = pickDigDir(bot);
-	let sinceBranch = 0;
+	// Progress is the drop item actually in the pack, not blocks dug.
+	const have = () => invCount(bot, dropItem);
 
 	const mineNearbyOre = async (): Promise<boolean> => {
 		// Prefer remembered ore (blockSeen), then a wider scan
 		let ore: Block | null = null;
+		let fromMem = false;
 		const rem = getRememberedResource(bot, blockType);
 		if (rem) {
 			const rb = bot.blockAt(vec3(rem.x, rem.y, rem.z));
-			if (rb && isTarget(rb.name)) ore = rb;
-			else forgetResource(bot, blockType, rem);
+			if (rb && isTarget(rb.name)) {
+				ore = rb;
+				fromMem = true;
+			} else forgetResource(bot, blockType, rem);
 		}
 		if (!ore) ore = findBlock(bot, isTarget, 20);
 		if (!ore) return false;
+		// Stay at the ore band — never chase ore down into deep caves/lava where the
+		// drop falls in lava and is lost. Skip (and forget) anything well below it.
+		if (level > 0 && ore.position.y < level - 2) {
+			if (fromMem) forgetResource(bot, blockType, ore.position);
+			return false;
+		}
 		try {
 			if (distance(bot.entity.position, ore.position) > 3.5) {
 				await goTo(bot, ore.position, { range: 2, timeout: 12000 });
@@ -309,25 +350,21 @@ const stripMineOre = async (
 		return false;
 	};
 
-	while (mined < targetCount && Date.now() < deadline) {
-		if ((bot.health ?? 20) < 7) return mined;
-		await ensurePickaxe(bot);
-		// First, grab any exposed ore around us
-		if (await mineNearbyOre()) continue;
-
-		// No ore in reach — advance the 1x2 tunnel one block to expose new walls
+	// Dig one 1x2 step in (dx,dz) and walk into it. Refuses to open a cell that
+	// touches lava (or would let lava flow in). Returns the outcome.
+	const digStep = async (
+		dx: number,
+		dz: number,
+	): Promise<"ok" | "lava" | "stuck"> => {
 		const p = bot.entity.position;
 		const fx = Math.floor(p.x);
 		const fy = Math.floor(p.y);
 		const fz = Math.floor(p.z);
-		const [dx, dz] = dir;
 		const head = bot.blockAt(vec3(fx + dx, fy + 1, fz + dz));
 		const feet = bot.blockAt(vec3(fx + dx, fy, fz + dz));
 		const floor = bot.blockAt(vec3(fx + dx, fy - 1, fz + dz));
-		if ([head, feet, floor].some(isLava)) {
-			dir = rotate(dir);
-			continue;
-		}
+		if ([head, feet, floor].some(isLava)) return "lava";
+		if (digExposesLava(bot, vec3(fx + dx, fy, fz + dz))) return "lava";
 		await lookDig(bot, head);
 		await lookDig(bot, feet);
 		await bot.lookAt(vec3(p.x + dx, p.y, p.z + dz));
@@ -335,21 +372,76 @@ const stripMineOre = async (
 		await sleep(400);
 		bot.setControlState("forward", false);
 		await sleep(200);
-		// Tunnel straight into fresh ground (the wide ore scan picks up veins to
-		// either side). Only turn when we fail to advance — never spiral.
 		if (
 			Math.floor(bot.entity.position.x) === fx &&
 			Math.floor(bot.entity.position.z) === fz
+		)
+			return "stuck";
+		dug++;
+		return "ok";
+	};
+
+	// Dig a side branch (harvesting ore each cell), then walk back out through the
+	// cleared branch to the main spine. A branch that meets lava simply stops.
+	const digBranch = async (perp: [number, number]): Promise<void> => {
+		let depth = 0;
+		for (
+			let i = 0;
+			i < BRANCH_LEN && have() < targetCount && Date.now() < deadline;
+			i++
 		) {
-			if (++sinceBranch > 2) {
-				dir = rotate(dir);
-				sinceBranch = 0;
-			}
-		} else {
-			sinceBranch = 0;
+			if (await mineNearbyOre()) continue;
+			const r = await digStep(perp[0], perp[1]);
+			if (r !== "ok") break;
+			depth++;
+			await mineNearbyOre();
 		}
+		// Retreat through the now-clear branch back toward the spine (no digging —
+		// just walk, far more reliable than pathfinding a fresh 1-wide tunnel).
+		for (let i = 0; i < depth; i++) {
+			const p = bot.entity.position;
+			await bot.lookAt(vec3(p.x - perp[0], p.y, p.z - perp[1]));
+			bot.setControlState("forward", true);
+			await sleep(350);
+			bot.setControlState("forward", false);
+			await sleep(150);
+		}
+	};
+
+	let sinceBranch = 0;
+	while (have() < targetCount && Date.now() < deadline) {
+		if ((bot.health ?? 20) < 7) return { mined, dug };
+		await ensurePickaxe(bot);
+		// First, grab any exposed ore around us
+		if (await mineNearbyOre()) continue;
+
+		// Every BRANCH_SPACING blocks of main tunnel, branch out both sides to
+		// expose the walls between branches.
+		if (sinceBranch >= BRANCH_SPACING) {
+			const perp: [number, number] = [dir[1], -dir[0]];
+			await digBranch(perp);
+			await digBranch([-perp[0], -perp[1]]);
+			sinceBranch = 0;
+			continue;
+		}
+
+		// Advance the main 1x2 tunnel one block to push into fresh ground.
+		const r = await digStep(dir[0], dir[1]);
+		if (r === "ok") sinceBranch++;
+		else dir = rotate(dir); // lava or stuck — turn and try another heading
 	}
-	return mined;
+	return { mined, dug };
+};
+
+/**
+ * Branch-mine purely to expose walls (no ore target) until the deadline — used
+ * to legitimately uncover cave lava for line-of-sight finding without X-ray.
+ */
+export const branchMineExplore = async (
+	bot: Bot,
+	deadline: number,
+): Promise<void> => {
+	await branchMineOre(bot, "__explore__", () => false, Number.MAX_SAFE_INTEGER, 0, "__none__", deadline);
 };
 
 /**
@@ -365,29 +457,72 @@ const mineDeepOre = async (
 	deadline: number,
 ): Promise<StepResult> => {
 	const level = DEEP_ORE_LEVEL[blockType] ?? 15;
+	const dropItem = DROP_ITEM[blockType] ?? blockType;
 	await ensurePickaxe(bot);
 
 	// Remember where we entered (the highest point = the surface staircase top),
 	// so we can climb back up to resupply wood/tools instead of starving below.
 	rememberMineEntry(bot, bot.entity.position);
 
-	// While above the ore band, spend the whole call descending the staircase
-	// (resumable across ticks). Don't strip-mine at intermediate levels.
+	// While well above the ore band, spend the call descending the staircase
+	// (resumable across ticks). Don't mine at intermediate levels.
 	if (floorY(bot) > level + 2) {
+		const startY = floorY(bot);
 		const res = await descendStaircase(bot, level, deadline);
 		logEvent("mine", "descended", `y=${res.y} stopped=${res.stopped}`);
-		return {
-			success: false,
-			message: `Descending toward y${level}: at y=${res.y} (${res.stopped ?? "budget"})`,
-		};
+		// Made downward progress — keep descending next call (counts as progress so
+		// the consecutive-failure abort doesn't trip during a long dig down).
+		if (res.y < startY)
+			return {
+				success: true,
+				message: `Descending toward y${level}: at y=${res.y}`,
+			};
+		// Boxed in by drops/caves/lava and can't get lower. If we're already near
+		// the iron band, branch-mine right here (y16 finds iron fine) instead of
+		// looping the descent forever and aborting. Only give up if stuck well
+		// above the band.
+		if (res.y > level + 6)
+			return {
+				success: false,
+				message: `Stuck descending at y=${res.y} (${res.stopped ?? "?"})`,
+			};
+		logEvent("mine", "mine_in_place", `boxed at y=${res.y}, branch-mining here`);
 	}
 
-	// At the band — strip-mine for ore.
-	const mined = await stripMineOre(bot, blockType, isTarget, targetCount, deadline);
-	if (mined >= targetCount) return success(`Mined ${mined} ${blockType}`);
+	// At the band — branch-mine until enough of the DROP is actually in the pack.
+	const before = invCount(bot, dropItem);
+	const { dug } = await branchMineOre(
+		bot,
+		blockType,
+		isTarget,
+		targetCount,
+		level,
+		dropItem,
+		deadline,
+	);
+	const have = invCount(bot, dropItem);
+	if (have >= targetCount) return success(`Collected ${have} ${dropItem}`);
+	// Fully boxed in (no new drops AND no tunnel cut) and stuck well below the mine
+	// entry → climb back up by placing blocks, rather than jittering at the bottom
+	// of a dead-end shaft. returnToSurface now pillars via the pathfinder; pillarUp
+	// is the proven manual fallback (same sequence gather-wood uses).
+	if (have <= before && dug === 0) {
+		const entry = getMineEntry(bot);
+		if (entry && floorY(bot) < entry.y - 6) {
+			logEvent("mine", "climb_out", `boxed at y=${floorY(bot)} → entry y=${entry.y}`);
+			if (!(await returnToSurface(bot))) {
+				const { pillarUp } = await import("../portal/cast.ts");
+				await pillarUp(bot, entry.y);
+				bot.setControlState("sneak", false); // pillarUp leaves it on
+			}
+		}
+	}
+	// Collecting ore OR cutting fresh tunnel both count as progress, so a
+	// multi-hour mine never trips the abort; only a fully boxed-in bot returns
+	// failure as the safety valve.
 	return {
-		success: false,
-		message: `Mined ${mined}/${targetCount} ${blockType} (y=${floorY(bot)})`,
+		success: have > before || dug > 0,
+		message: `Collected ${have}/${targetCount} ${dropItem} (y=${floorY(bot)}, dug=${dug})`,
 	};
 };
 

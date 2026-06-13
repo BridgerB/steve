@@ -118,7 +118,9 @@ export const gatherWood = async (
 		pf.setGoal(goal);
 		logEvent("wood", "nav_start", `dist=${dist.toFixed(1)}`, botPos());
 
-		const timeout = 15000;
+		// Scale with distance — a fixed 15s can't reach a tree 100+ blocks away,
+		// so the bot blacklists reachable trees and starves next to a forest.
+		const timeout = Math.min(45000, 10000 + dist * 250);
 		const start = Date.now();
 		let lastDist = dist;
 		let stuckTicks = 0;
@@ -222,9 +224,14 @@ export const gatherWood = async (
 			return msg === "dig timeout"; // timeout = block probably broke, continue
 		}
 
-		// Navigate to dropped item for pickup
+		// Navigate to dropped item for pickup, then stand on the stump to vacuum
+		// logs that fell to the ground (upper-trunk drops often land below).
 		await bot.collectDrops(6, 3000, async (p) => {
 			await goTo(bot, p, { range: 1.4, timeout: 3000 });
+		});
+		await goTo(bot, pos, { range: 1, timeout: 3000 }).catch(() => {});
+		await bot.collectDrops(8, 2500, async (p) => {
+			await goTo(bot, p, { range: 1.2, timeout: 2500 });
 		});
 
 		const logsNow = countLogs();
@@ -268,6 +275,8 @@ export const gatherWood = async (
 	// ── MAIN LOOP ──
 
 	logEvent("wood", "start", `gathering ${targetCount} logs`);
+	const startLogs = countLogs();
+	const huntStart = botPos();
 	let attempts = 0;
 	let blocksDug = 0;
 	let exploreAngle = Math.random() * Math.PI * 2;
@@ -352,12 +361,17 @@ export const gatherWood = async (
 
 		const dug = await mineBlock(target.pos, target.name);
 		if (dug) blocksDug++;
+		else unreachable.add(posKey(target.pos)); // couldn't reach/mine — don't loop on it
 	}
 
 	const logs = countLogs();
 	logEvent("wood", "done", `${logs}/${targetCount} logs`);
+	// Count "collected at least one more log" or "relocated while hunting" as
+	// progress, so a bot slowly working toward a distant forest doesn't trip the
+	// consecutive-failure abort before it gets there.
+	const progressed = logs > startLogs || distance(huntStart, botPos()) > 25;
 	return {
-		success: logs >= targetCount,
+		success: logs >= targetCount || progressed,
 		message: `Gathered ${logs}/${targetCount} logs`,
 	};
 };

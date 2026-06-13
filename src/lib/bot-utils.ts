@@ -159,14 +159,19 @@ export const goTo = async (
 		const moved = distance(startPos, bot.entity.position);
 		if (distance(bot.entity.position, pos) <= range + 1) return true;
 
-		// Pathfinder failed — fallback to raw walk if we didn't move much.
-		// Never blind-walk toward lava: bail if lava is in reach, and re-check
-		// every step so we stop the instant it appears ahead.
-		if (moved < 2 && !lavaAround(bot)) {
+		// Pathfinder failed — a horizontal raw-walk nudge if we didn't move much.
+		// NO jump here: blindly holding jump is what made a shaft-trapped bot bounce
+		// dozens of times. And skip the nudge entirely when the target is up a shaft
+		// (≥3 blocks above) — walking into a wall does nothing; the pathfinder pillars
+		// up instead (scaffoldingBlocks). Never blind-walk toward lava.
+		if (
+			moved < 2 &&
+			!lavaAround(bot) &&
+			pos.y - bot.entity.position.y < 3
+		) {
 			await bot.lookAt(pos);
 			bot.setControlState("forward", true);
 			bot.setControlState("sprint", true);
-			bot.setControlState("jump", true);
 			const walkEnd = Date.now() + Math.min(dist * 200, timeout * 0.6, 5000);
 			while (Date.now() < walkEnd) {
 				await sleep(150);
@@ -174,7 +179,6 @@ export const goTo = async (
 			}
 			bot.setControlState("forward", false);
 			bot.setControlState("sprint", false);
-			bot.setControlState("jump", false);
 			await sleep(200);
 		}
 		return distance(bot.entity.position, pos) <= range + 1;

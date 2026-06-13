@@ -609,7 +609,11 @@ const runRace = async (count: number, timeoutMs: number) => {
 				const z = spawns[i]?.z ?? 0;
 				await rcon(`clear ${name}`);
 				await rcon(`tp ${name} ${x} 200 ${z}`);
-				await sleep(3000); // let server generate chunks
+				// Stagger: the box has only 4 cores, so let each bot's fresh chunk
+				// generation settle before teleporting the next — otherwise 10
+				// simultaneous gens saturate the CPU and the server misses keepalives,
+				// dropping bots with "lost connection: Timed out".
+				await sleep(8000);
 				placed.add(name);
 				console.log(`  ${name} → tp ${x}, ${z}`);
 			}
