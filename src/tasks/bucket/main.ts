@@ -45,44 +45,46 @@ export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 
 	let waterPos: Vec3 | null = null;
 
-	// 1. Water the bot already saw (blockSeen memory) — cave water it passed while
-	//    mining. In this world type water is underground, not on the surface.
-	const remembered = getRememberedResource(bot, "water");
-	if (remembered && !bad(vec3(remembered.x, remembered.y, remembered.z))) {
-		const rb = bot.blockAt(vec3(remembered.x, remembered.y, remembered.z));
-		if (rb && rb.name === "water")
-			waterPos = vec3(remembered.x, remembered.y, remembered.z);
-		else forgetResource(bot, "water", remembered);
+	// 1. If deep underground, surface FIRST. The only water within reach down here
+	//    is flowing cave water that won't scoop (bots looped + drowned cycling
+	//    through it) — ponds/rivers up top are scoopable source water.
+	const entry = getMineEntry(bot);
+	if (entry && bot.entity.position.y < entry.y - 6) {
+		logEvent(
+			"bucket",
+			"return_surface",
+			`for water, from y=${Math.floor(bot.entity.position.y)}`,
+		);
+		await returnToSurface(bot);
+		waterPos = search(128, 100);
+		for (let i = 0; i < 4 && !waterPos; i++) {
+			logEvent("bucket", "exploring", `surface water ${i + 1}/4`);
+			await exploreRandom(bot, 80);
+			waterPos = search(128, 30);
+		}
 	}
 
-	// 2. Anything currently in line-of-sight.
+	// 2. Water the bot already saw (blockSeen memory), if not blacklisted.
+	if (!waterPos) {
+		const remembered = getRememberedResource(bot, "water");
+		if (remembered && !bad(vec3(remembered.x, remembered.y, remembered.z))) {
+			const rb = bot.blockAt(vec3(remembered.x, remembered.y, remembered.z));
+			if (rb && rb.name === "water")
+				waterPos = vec3(remembered.x, remembered.y, remembered.z);
+			else forgetResource(bot, "water", remembered);
+		}
+	}
+
+	// 3. Anything currently in line-of-sight.
 	if (!waterPos) waterPos = search(128, 200);
 
-	// 3. Explore around the current level for more cave water.
+	// 4. Explore around the current level for more water.
 	if (!waterPos) {
 		for (let i = 0; i < 5; i++) {
 			logEvent("bucket", "exploring", `looking for water ${i + 1}/5`);
 			await exploreRandom(bot, 60);
 			waterPos = search(128, 30);
 			if (waterPos) break;
-		}
-	}
-
-	// 4. Last resort: surface water (lakes/rivers) — climb up if deep, then look.
-	if (!waterPos) {
-		const entry = getMineEntry(bot);
-		if (entry && bot.entity.position.y < entry.y - 6) {
-			logEvent(
-				"bucket",
-				"return_surface",
-				`for water, from y=${Math.floor(bot.entity.position.y)}`,
-			);
-			await returnToSurface(bot);
-			waterPos = search(128, 100);
-			for (let i = 0; i < 3 && !waterPos; i++) {
-				await exploreRandom(bot, 80);
-				waterPos = search(128, 30);
-			}
 		}
 	}
 
