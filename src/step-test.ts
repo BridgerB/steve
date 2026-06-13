@@ -206,10 +206,13 @@ const runOrchestrator = async (): Promise<void> => {
 	initLogger(RACE_ID);
 	registerRace(RACE_ID, "isolation", count);
 
-	// 50-block grid (arenas are ~±12, so no overlap), parked away from the world.
+	// Grid spacing must exceed the craft task's 50-block "walk back to a known
+	// crafting table" radius — at 50, bot N walks toward bot N-1's table and
+	// fails "Need crafting table". 128 keeps each bot fully isolated (arenas are
+	// only ~±12). Parked away from the world.
 	const FX = 400;
 	const FZ = 400;
-	const SPACING = 50;
+	const SPACING = 128;
 	const spawns = Array.from({ length: count }, (_, i) => ({
 		x: FX + (i % 5) * SPACING,
 		z: FZ + Math.floor(i / 5) * SPACING,
