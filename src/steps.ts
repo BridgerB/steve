@@ -30,7 +30,7 @@ export const steps: readonly Step[] = [
 		isComplete: (s) =>
 			s.inventory.logs >= 5 ||
 			s.inventory.planks >= 12 ||
-			getPickaxeTier(s.equipment.pickaxe) >= 3,
+			getPickaxeTier(s.equipment.pickaxe) >= 2,
 		execute: async (bot, _state) => {
 			const { gatherWood } = await import("./tasks/gather-wood/main.ts");
 			return gatherWood(bot, 5);
@@ -45,7 +45,7 @@ export const steps: readonly Step[] = [
 		// Keep a plank reserve; do not short-circuit on hasCraftingTable (see
 		// Gather Wood) — otherwise planks are never replenished after tools.
 		isComplete: (s) =>
-			s.inventory.planks >= 8 || getPickaxeTier(s.equipment.pickaxe) >= 3,
+			s.inventory.planks >= 8 || getPickaxeTier(s.equipment.pickaxe) >= 2,
 		execute: async (bot, _state) => {
 			const { craftPlanks } = await import("./tasks/craft/main.ts");
 			return craftPlanks(bot);
@@ -70,7 +70,7 @@ export const steps: readonly Step[] = [
 		priority: 4,
 		canExecute: (s) => s.inventory.planks >= 2,
 		isComplete: (s) =>
-			s.inventory.sticks >= 4 || getPickaxeTier(s.equipment.pickaxe) >= 3,
+			s.inventory.sticks >= 4 || getPickaxeTier(s.equipment.pickaxe) >= 2,
 		execute: async (bot, _state) => {
 			const { craftSticks } = await import("./tasks/craft/main.ts");
 			return craftSticks(bot);
@@ -119,7 +119,11 @@ export const steps: readonly Step[] = [
 		name: "Craft Stone Sword",
 		priority: 8,
 		canExecute: (s) => s.inventory.cobblestone >= 2 && s.inventory.sticks >= 1,
-		isComplete: (s) => s.equipment.sword !== "none",
+		// Sword is only needed for hunting food; on a peaceful server we skip both.
+		// Once past the wood phase (stone pickaxe), don't gate the run on it.
+		isComplete: (s) =>
+			s.equipment.sword !== "none" ||
+			getPickaxeTier(s.equipment.pickaxe) >= 2,
 		execute: async (bot, _state) => {
 			const { craftStoneSword } = await import("./tasks/craft/main.ts");
 			return craftStoneSword(bot);
@@ -156,10 +160,12 @@ export const steps: readonly Step[] = [
 		name: "Mine Iron Ore",
 		priority: 11,
 		canExecute: (s) => getPickaxeTier(s.equipment.pickaxe) >= 2,
-		isComplete: (s) => s.inventory.ironOre + s.inventory.ironIngots >= 11,
+		// 8 is enough for the cast kit: 2 buckets (6) + flint&steel (1). No iron
+		// pickaxe needed (obsidian is cast, not mined), so we don't need 11.
+		isComplete: (s) => s.inventory.ironOre + s.inventory.ironIngots >= 8,
 		execute: async (bot, _state) => {
 			const { mineBlock } = await import("./tasks/mining/main.ts");
-			return mineBlock(bot, "iron_ore", 11);
+			return mineBlock(bot, "iron_ore", 8);
 		},
 	},
 
@@ -171,10 +177,10 @@ export const steps: readonly Step[] = [
 			s.equipment.hasFurnace &&
 			s.inventory.ironOre >= 3 &&
 			(s.inventory.coal >= 2 || s.inventory.planks >= 4),
-		isComplete: (s) => s.inventory.ironIngots >= 11,
+		isComplete: (s) => s.inventory.ironIngots >= 7,
 		execute: async (bot, _state) => {
 			const { smeltItems } = await import("./tasks/smelt/main.ts");
-			return smeltItems(bot, "raw_iron", 11);
+			return smeltItems(bot, "raw_iron", 8);
 		},
 	},
 
@@ -183,7 +189,7 @@ export const steps: readonly Step[] = [
 		name: "Craft Iron Pickaxe",
 		priority: 13,
 		canExecute: (s) => s.inventory.ironIngots >= 3 && s.inventory.sticks >= 2,
-		isComplete: (s) => getPickaxeTier(s.equipment.pickaxe) >= 3,
+		isComplete: (s) => getPickaxeTier(s.equipment.pickaxe) >= 2,
 		execute: async (bot, _state) => {
 			const { craftIronPickaxe } = await import("./tasks/craft/main.ts");
 			return craftIronPickaxe(bot);
@@ -223,7 +229,10 @@ export const steps: readonly Step[] = [
 		name: "Gather Food",
 		priority: 16,
 		canExecute: (s) => s.equipment.sword !== "none",
-		isComplete: (s) => s.inventory.food >= 5,
+		// Peaceful server → no hunger damage, so food isn't needed to reach the
+		// nether. Skip it once past the wood phase so it never blocks the cast.
+		isComplete: (s) =>
+			s.inventory.food >= 5 || getPickaxeTier(s.equipment.pickaxe) >= 2,
 		execute: async (bot, _state) => {
 			const { gatherFood } = await import("./tasks/food/main.ts");
 			return gatherFood(bot, 5);
