@@ -1255,29 +1255,54 @@ export const escapeWater = async (bot: Bot): Promise<boolean> => {
 	bot.setControlState("sprint", true);
 
 	const start = Date.now();
-	const timeout = 10000;
+	const timeout = 14000;
+	let lastY = bot.entity.position.y;
+	let stuckMs = 0;
 
 	while (Date.now() - start < timeout) {
 		await sleep(200);
-		if (!bot.entity?.isInWater) {
+		if (!bot.entity?.position) break;
+		if (!bot.entity.isInWater) {
 			// Out of water, keep moving forward briefly to get on land
 			await sleep(500);
-			bot.setControlState("jump", false);
-			bot.setControlState("forward", false);
-			bot.setControlState("sprint", false);
+			bot.clearControlStates();
 			logEvent("nav", "escaped_water");
 			return true;
 		}
-		// Rotate randomly to find shore
-		if ((Date.now() - start) % 2000 < 200) {
-			const angle = Math.random() * Math.PI * 2;
-			await bot.look(angle, 0);
+
+		// Are we actually rising? In open water (river/lake) holding jump surfaces
+		// us fast. In a FLOODED CAVE there's a stone ceiling overhead — we can't
+		// swim up through it and drown in place. Detect "not rising" and dig the
+		// block above the head to tunnel straight up toward air (this is where the
+		// drownings happen — y≈14 iron tunnels that flood when a block is mined).
+		const y = bot.entity.position.y;
+		stuckMs = y - lastY < 0.05 ? stuckMs + 200 : 0;
+		lastY = y;
+
+		if (stuckMs >= 600) {
+			const p = bot.entity.position;
+			const above = getBlock(
+				bot,
+				vec3(Math.floor(p.x), Math.floor(p.y) + 2, Math.floor(p.z)),
+			);
+			const solidCeiling =
+				!!above &&
+				above.name !== "air" &&
+				above.name !== "cave_air" &&
+				!above.name.includes("water") &&
+				isValidBlock(above);
+			if (solidCeiling) {
+				await bot.dig(above, true).catch(() => {});
+				logEvent("nav", "drown_dig_up", above.name, above.position);
+			} else {
+				// Open above but pinned sideways — turn to find a way up/out.
+				await bot.look(Math.random() * Math.PI * 2, 0.4);
+			}
+			stuckMs = 0;
 		}
 	}
 
-	bot.setControlState("jump", false);
-	bot.setControlState("forward", false);
-	bot.setControlState("sprint", false);
+	bot.clearControlStates();
 	logEvent("nav", "water_escape_failed");
 	return false;
 };
@@ -1469,7 +1494,7 @@ export const attachSafety = (bot: Bot): void => {
 			!escaping &&
 			!drowning &&
 			bot.entity.isInWater &&
-			(bot.oxygenLevel ?? 20) < 12
+			(bot.oxygenLevel ?? 20) < 18
 		) {
 			drowning = true;
 			logEvent(
