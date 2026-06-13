@@ -120,16 +120,21 @@ const runTick = async (bot: Bot): Promise<void> => {
 		logEvent("step", "start", stepName, bot.entity?.position);
 
 		try {
-			// Timeout step execution at 120s to prevent hangs
+			// Timeout step execution to prevent hangs. The obsidian cast (descend →
+			// find lava → clear a chamber → cast 10 obsidian → light) genuinely takes
+			// several minutes — at 120s it was cut off every time, before any obsidian
+			// (Steve5 reached y11 with the full kit but kept timing out). Give it a
+			// much larger budget.
+			const stepTimeoutMs = stepId === "build_nether_portal" ? 480000 : 120000;
 			const timeout = new Promise<{ success: false; message: string }>(
 				(resolve) =>
 					setTimeout(
 						() =>
 							resolve({
 								success: false,
-								message: `${stepName} timed out (120s)`,
+								message: `${stepName} timed out (${stepTimeoutMs / 1000}s)`,
 							}),
-						120000,
+						stepTimeoutMs,
 					),
 			);
 			const result = await Promise.race([
