@@ -355,7 +355,7 @@ const branchMineOre = async (
 	const digStep = async (
 		dx: number,
 		dz: number,
-	): Promise<"ok" | "lava" | "stuck"> => {
+	): Promise<"ok" | "lava" | "water" | "stuck"> => {
 		const p = bot.entity.position;
 		const fx = Math.floor(p.x);
 		const fy = Math.floor(p.y);
@@ -365,6 +365,28 @@ const branchMineOre = async (
 		const floor = bot.blockAt(vec3(fx + dx, fy - 1, fz + dz));
 		if ([head, feet, floor].some(isLava)) return "lava";
 		if (digExposesLava(bot, vec3(fx + dx, fy, fz + dz))) return "lava";
+		// Avoid water too: digging into or beside it floods the 1-wide tunnel and
+		// drowns the bot. Check the target cells + their 6 neighbors for water.
+		const touchesWater = (cx: number, cy: number, cz: number): boolean =>
+			(
+				[
+					[1, 0, 0],
+					[-1, 0, 0],
+					[0, 1, 0],
+					[0, -1, 0],
+					[0, 0, 1],
+					[0, 0, -1],
+				] as const
+			).some((o) => {
+				const b = bot.blockAt(vec3(cx + o[0], cy + o[1], cz + o[2]));
+				return !!b && b.name.includes("water");
+			});
+		if (
+			[head, feet, floor].some((b) => !!b && b.name.includes("water")) ||
+			touchesWater(fx + dx, fy, fz + dz) ||
+			touchesWater(fx + dx, fy + 1, fz + dz)
+		)
+			return "water";
 		await lookDig(bot, head);
 		await lookDig(bot, feet);
 		await bot.lookAt(vec3(p.x + dx, p.y, p.z + dz));
