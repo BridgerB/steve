@@ -562,16 +562,15 @@ const runRace = async (count: number, timeoutMs: number) => {
 	const hasDisplay = !!(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
 	const NUM_VIEWERS = hasDisplay ? Math.min(count, 4) : 0;
 
-	// Cluster the bots in the DRY part of the forest (≈ -25,-147). The forest's
-	// north side (-64,-128, z≈-111..-129) is a wet river valley where bots drowned
-	// constantly (every drowning death was there at y55-60); the south side
-	// (z≈-142..-152) is the same forest on dry ground. Tighter grid (16×12) to keep
-	// them on the dry strip while still spread enough not to fight over the trees.
-	const FX = -25;
-	const FZ = -147;
+	// Spawn in the DRY DENSE forest at (696,696). The near-spawn forest (-64,-128)
+	// is a wet river valley (constant drownings), and its dry strip is too small
+	// and sparse (bots strand at Gather Wood). (696,696) is a full forest on dry
+	// ground — fast wood AND no spawn drownings. Standard 20×22 grid.
+	const FX = 696;
+	const FZ = 704;
 	const spawns: { x: number; z: number }[] = [];
 	for (let i = 0; i < count; i++) {
-		spawns.push({ x: FX + ((i % 5) - 2) * 16, z: FZ + Math.floor(i / 5) * 12 });
+		spawns.push({ x: FX + ((i % 5) - 2) * 20, z: FZ + Math.floor(i / 5) * 22 });
 	}
 
 	// Spawn all bot processes first, then teleport them
