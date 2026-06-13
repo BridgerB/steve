@@ -3,8 +3,14 @@
  */
 
 import type { Bot } from "typecraft";
-import { distance, offset, vec3, windowItems } from "typecraft";
-import { exploreRandom, goTo, sleep } from "../../lib/bot-utils.ts";
+import { distance, offset, type Vec3, vec3, windowItems } from "typecraft";
+import {
+	exploreRandom,
+	getMineEntry,
+	goTo,
+	returnToSurface,
+	sleep,
+} from "../../lib/bot-utils.ts";
 import { logEvent } from "../../lib/logger.ts";
 import type { StepResult } from "../../types.ts";
 
@@ -20,7 +26,7 @@ export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 	});
 
 	// Prefer surface water (air/cave_air above), fall back to any
-	let waterPos = null;
+	let waterPos: Vec3 | null = null;
 	for (const pos of waterPositions) {
 		const above = bot.blockAt(offset(pos, 0, 1, 0));
 		if (above && (above.name === "air" || above.name === "cave_air")) {
@@ -32,26 +38,47 @@ export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 		waterPos = waterPositions[0] ?? null;
 	}
 
-	// Explore if no water found
+	const pickWater = (list: Vec3[]): Vec3 | null => {
+		for (const p of list) {
+			const above = bot.blockAt(offset(p, 0, 1, 0));
+			if (above && (above.name === "air" || above.name === "cave_air")) return p;
+		}
+		return list[0] ?? null;
+	};
+
+	// Deep underground (after mining iron) there's rarely water in sight — climb
+	// back to the surface first, where lakes/rivers are, then look again.
 	if (!waterPos) {
-		for (let i = 0; i < 3; i++) {
-			logEvent("bucket", "exploring", `looking for water ${i + 1}/3`);
-			await exploreRandom(bot, 50);
-			const more = bot.findBlocks({
-				matching: (name) => name === "water",
-				maxDistance: 128,
-				count: 10,
-			});
-			for (const p of more) {
-				const above = bot.blockAt(offset(p, 0, 1, 0));
-				if (above && (above.name === "air" || above.name === "cave_air")) {
-					waterPos = p;
-					break;
-				}
-			}
-			if (!waterPos && more.length > 0) {
-				waterPos = more[0] ?? null;
-			}
+		const entry = getMineEntry(bot);
+		if (entry && bot.entity.position.y < entry.y - 6) {
+			logEvent(
+				"bucket",
+				"return_surface",
+				`for water, from y=${Math.floor(bot.entity.position.y)}`,
+			);
+			await returnToSurface(bot);
+			waterPos = pickWater(
+				bot.findBlocks({
+					matching: (name) => name === "water",
+					maxDistance: 128,
+					count: 100,
+				}),
+			);
+		}
+	}
+
+	// Explore (on the surface now) if still no water found.
+	if (!waterPos) {
+		for (let i = 0; i < 6; i++) {
+			logEvent("bucket", "exploring", `looking for water ${i + 1}/6`);
+			await exploreRandom(bot, 60);
+			waterPos = pickWater(
+				bot.findBlocks({
+					matching: (name) => name === "water",
+					maxDistance: 128,
+					count: 20,
+				}),
+			);
 			if (waterPos) break;
 		}
 	}
