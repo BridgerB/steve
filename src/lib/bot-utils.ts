@@ -1461,6 +1461,7 @@ export const attachSafety = (bot: Bot): void => {
 	let lastSafe: Vec3 | undefined;
 	let escaping = false;
 	let drowning = false;
+	let submergedSince = 0;
 
 	const guard = setInterval(() => {
 		if (!bot.entity?.position) return;
@@ -1487,20 +1488,31 @@ export const attachSafety = (bot: Bot): void => {
 				escaping = false;
 			});
 		}
-		// Drowning guard: head underwater long enough that oxygen is dropping and
-		// no step is handling it (pathing through water, walking to a table) →
-		// take over and swim to the surface. Mirrors the lava guard above.
+		// Drowning guard: typecraft has NO air meter (bot.oxygenLevel doesn't
+		// exist), so detect submersion directly — the block at head height being
+		// water — and time it. MC starts drowning damage after ~15s underwater, so
+		// after 4s submerged we take over and surface (swim up, or dig up through a
+		// flooded-cave ceiling). This is where every death.attack.drown came from.
+		const hp = bot.entity.position;
+		const headBlock = getBlock(
+			bot,
+			vec3(Math.floor(hp.x), Math.floor(hp.y) + 1, Math.floor(hp.z)),
+		);
+		const headUnderwater = !!headBlock && headBlock.name.includes("water");
+		if (!headUnderwater) submergedSince = 0;
+		else if (!submergedSince) submergedSince = Date.now();
 		if (
 			!escaping &&
 			!drowning &&
-			bot.entity.isInWater &&
-			(bot.oxygenLevel ?? 20) < 18
+			headUnderwater &&
+			submergedSince > 0 &&
+			Date.now() - submergedSince > 4000
 		) {
 			drowning = true;
 			logEvent(
 				"safety",
 				"drown_guard_trigger",
-				`o2=${bot.oxygenLevel}`,
+				`submerged=${Date.now() - submergedSince}ms`,
 				bot.entity.position,
 			);
 			bot.clearControlStates();
