@@ -292,7 +292,8 @@ export const syncFromBot = (bot: Bot): GameState => {
 			// Self-heals: getCraftingTable re-crafts if the remembered table is gone.
 			hasCraftingTable:
 				hasItem("crafting_table") || getMemory(bot).craftingTablePos != null,
-			hasFurnace: hasItem("furnace"),
+			// Same regression fix as the table — count a remembered placed furnace.
+			hasFurnace: hasItem("furnace") || getMemory(bot).furnacePos != null,
 			hasBucket:
 				hasItem("bucket") || hasItem("water_bucket") || hasItem("lava_bucket"),
 			hasWaterBucket: hasItem("water_bucket"),

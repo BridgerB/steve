@@ -535,6 +535,7 @@ export const findBlocks = (
 
 interface BotMemory {
 	craftingTablePos: { x: number; y: number; z: number } | null;
+	furnacePos: { x: number; y: number; z: number } | null;
 	resources: Map<string, { x: number; y: number; z: number }[]>;
 	// Surface top of the mine staircase — the way back up for resupply.
 	mineEntry: { x: number; y: number; z: number } | null;
@@ -544,7 +545,12 @@ const botMemory = new WeakMap<Bot, BotMemory>();
 export const getMemory = (bot: Bot): BotMemory => {
 	let mem = botMemory.get(bot);
 	if (!mem) {
-		mem = { craftingTablePos: null, resources: new Map(), mineEntry: null };
+		mem = {
+			craftingTablePos: null,
+			furnacePos: null,
+			resources: new Map(),
+			mineEntry: null,
+		};
 		botMemory.set(bot, mem);
 	}
 	return mem;

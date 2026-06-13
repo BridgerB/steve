@@ -4,7 +4,7 @@
 
 import type { Bot } from "typecraft";
 import { distance, offset, vec3, windowItems } from "typecraft";
-import { goTo, sleep } from "../../lib/bot-utils.ts";
+import { getMemory, goTo, sleep } from "../../lib/bot-utils.ts";
 import { logEvent } from "../../lib/logger.ts";
 import type { Block, StepResult } from "../../types.ts";
 
@@ -66,6 +66,10 @@ export const smeltItems = async (
 			(i) => i.name === "furnace",
 		);
 		if (!furnaceItem) {
+			// No furnace nearby AND none to place — a remembered furnace is stale
+			// (e.g. died + respawned far from it). Clear it so hasFurnace flips false
+			// and the Craft Furnace step re-crafts one instead of deadlocking here.
+			getMemory(bot).furnacePos = null;
 			return { success: false, message: "No furnace in inventory or nearby" };
 		}
 
@@ -160,6 +164,15 @@ export const smeltItems = async (
 			};
 		}
 	}
+
+	// Remember the furnace so the Craft Furnace step doesn't regress + re-craft a
+	// new one the moment we walk off after smelting (the placed furnace leaves the
+	// inventory). Mirrors the crafting-table memory.
+	getMemory(bot).furnacePos = {
+		x: furnace.position.x,
+		y: furnace.position.y,
+		z: furnace.position.z,
+	};
 
 	// Navigate to furnace
 	const furnaceDist = distance(bot.entity.position, furnace.position);
