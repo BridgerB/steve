@@ -277,8 +277,11 @@ const runOrchestrator = async (): Promise<void> => {
 				const name = `Test${i}`;
 				if (placed.has(name) || !list.includes(name)) continue;
 				const { x, z } = spawns[i]!;
-				await rcon(`fill ${x - 12} 95 ${z - 12} ${x + 12} 120 ${z + 12} air`);
-				await rcon(`fill ${x - 12} 95 ${z - 12} ${x + 12} 99 ${z + 12} stone`);
+				// A THICK solid stone block (y70-99), not a thin floating slab —
+				// otherwise mining/digging steps punch through it and fall into the
+				// void. The bot stands on top at y100.
+				await rcon(`fill ${x - 12} 100 ${z - 12} ${x + 12} 130 ${z + 12} air`);
+				await rcon(`fill ${x - 12} 70 ${z - 12} ${x + 12} 99 ${z + 12} stone`);
 				await rcon(`gamemode survival ${name}`);
 				await rcon(`tp ${name} ${x} 100 ${z}`);
 				await sleep(8000);

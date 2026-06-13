@@ -216,11 +216,23 @@ export const smeltItems = async (
 			return { success: false, message: `No ${inputItem} to smelt` };
 		}
 
-		// Wait for smelting progress (~10s per item, capped at 60s).
-		const pending = Math.min(furnaceWindow.slots[0]?.count ?? 0, count);
-		const maxWait = Math.min(Math.max(pending, 1) * 10_000, 60_000);
-		logEvent("smelt", "waiting", `${pending}x ${inputItem} (${maxWait / 1000}s)`);
-		await sleep(maxWait);
+		// Wait for smelting — poll the output until every queued item is done (or
+		// the furnace stalls / a hard cap). A single blind capped sleep
+		// under-collected: 8 iron needs ~80s but the 60s cap took only 6, so the
+		// step never reached its ironIngots>=7 target in one call.
+		const target = Math.min(furnaceWindow.slots[0]?.count ?? 0, count);
+		logEvent("smelt", "waiting", `target ${target}x ${inputItem}`);
+		const waitDeadline = Date.now() + 120_000;
+		while (Date.now() < waitDeadline) {
+			await sleep(2500);
+			const out = furnaceWindow.slots[2]?.count ?? 0;
+			const inLeft = furnaceWindow.slots[0]?.count ?? 0;
+			if (out >= target) break;
+			if (inLeft === 0) {
+				await sleep(9000); // last item may still be cooking — let it finish
+				break;
+			}
+		}
 
 		// Take the finished output stack into inventory.
 		let took = 0;
