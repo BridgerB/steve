@@ -1244,12 +1244,13 @@ export const errorResult = (err: unknown, fallback: string): StepResult => ({
  * If bot is in water, swim up and try to get to land.
  * Holds jump to swim up, then walks forward to find shore.
  */
-export const escapeWater = async (bot: Bot): Promise<boolean> => {
-	// typecraft's bot.entity.isInWater disagrees with actual submersion (it stays
-	// false in the flooded tunnels where bots drown), so detect drowning the same
-	// way the safety guard does: the block at head height is water. Relying on
-	// isInWater here made escapeWater a silent no-op — guard fired thousands of
-	// times, bot drowned anyway.
+export const escapeWater = async (
+	bot: Bot,
+	lastSafe?: Vec3,
+): Promise<boolean> => {
+	// Drowning detection: the block at head height is water. (Don't trust
+	// bot.entity.isInWater for the *decision to act* — though with the physics
+	// sync it's now accurate, head-block is the precise "am I drowning" signal.)
 	const headWet = (): boolean => {
 		const p = bot.entity?.position;
 		if (!p) return false;
@@ -1263,38 +1264,40 @@ export const escapeWater = async (bot: Bot): Promise<boolean> => {
 
 	logEvent("nav", "swimming_out");
 
-	// Hold jump to swim up
+	// Phase 1: hold jump to float up. Buoyancy (now working since the isInWater
+	// sync fix) surfaces the bot fast in open water — most river/lake cases end
+	// here within a second.
 	bot.setControlState("jump", true);
-	bot.setControlState("forward", true);
-	bot.setControlState("sprint", true);
 
 	const start = Date.now();
 	const timeout = 14000;
-	let lastY = bot.entity.position.y;
-	let stuckMs = 0;
 
 	while (Date.now() - start < timeout) {
 		await sleep(200);
 		if (!bot.entity?.position) break;
 		if (!headWet()) {
-			// Head's clear — keep moving forward briefly to get fully onto land.
+			// Head's clear — nudge forward briefly to climb fully onto land.
+			bot.setControlState("forward", true);
 			await sleep(500);
 			bot.clearControlStates();
 			logEvent("nav", "escaped_water");
 			return true;
 		}
 
-		// Are we actually rising? In open water (river/lake) holding jump surfaces
-		// us fast. In a FLOODED CAVE there's a stone ceiling overhead — we can't
-		// swim up through it and drown in place. Detect "not rising" and dig the
-		// block above the head to tunnel straight up toward air (this is where the
-		// drownings happen — y≈14 iron tunnels that flood when a block is mined).
-		const y = bot.entity.position.y;
-		stuckMs = y - lastY < 0.05 ? stuckMs + 200 : 0;
-		lastY = y;
+		// Still submerged after floating for ~1.2s → we're trapped under a ceiling
+		// (a flooded tunnel) or bobbing mid-pool. Buoyancy alone won't free us.
+		if (Date.now() - start < 1200) continue;
 
-		if (stuckMs >= 400) {
-			const p = bot.entity.position;
+		const p = bot.entity.position;
+		if (lastSafe) {
+			// Best escape from a flooded tunnel: swim back toward the last DRY
+			// footing — the way we came in, which has air. Digging up just hits more
+			// stone (and is 5× slower underwater).
+			await bot.lookAt(vec3(lastSafe.x + 0.5, p.y, lastSafe.z + 0.5));
+			bot.setControlState("forward", true);
+			bot.setControlState("sprint", true);
+		} else {
+			// No retreat point: dig straight up through a solid ceiling toward air.
 			const above = getBlock(
 				bot,
 				vec3(Math.floor(p.x), Math.floor(p.y) + 2, Math.floor(p.z)),
@@ -1306,13 +1309,19 @@ export const escapeWater = async (bot: Bot): Promise<boolean> => {
 				!above.name.includes("water") &&
 				above.name !== "bedrock";
 			if (solidCeiling) {
-				await bot.dig(above, true).catch(() => {});
+				// Bound the dig — bot.dig blocks until the block breaks, and stone
+				// underwater takes far longer than the escape timeout (5× penalty),
+				// which would freeze escapeWater past its own deadline.
+				await Promise.race([
+					bot.dig(above, true).catch(() => {}),
+					sleep(3000),
+				]);
+				bot.stopDigging();
 				logEvent("nav", "drown_dig_up", above.name, above.position);
 			} else {
-				// Open above but pinned sideways — turn to find a way up/out.
-				await bot.look(Math.random() * Math.PI * 2, 0.4);
+				bot.setControlState("forward", true);
+				await bot.look(Math.random() * Math.PI * 2, 0.2);
 			}
-			stuckMs = 0;
 		}
 	}
 
@@ -1479,10 +1488,23 @@ export const attachSafety = (bot: Bot): void => {
 
 	const guard = setInterval(() => {
 		if (!bot.entity?.position) return;
-		// Remember the last known-safe footing to retreat toward.
-		if (!escaping && bot.entity.onGround && !lavaAround(bot)) {
-			const p = bot.entity.position;
-			lastSafe = vec3(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z));
+		const hp = bot.entity.position;
+		const headBlock = getBlock(
+			bot,
+			vec3(Math.floor(hp.x), Math.floor(hp.y) + 1, Math.floor(hp.z)),
+		);
+		const headUnderwater = !!headBlock && headBlock.name.includes("water");
+		// Remember the last known-safe DRY footing to retreat toward — used by both
+		// the lava and drowning escapes. Must exclude water, or the drowning retreat
+		// target is itself underwater.
+		if (
+			!escaping &&
+			!drowning &&
+			bot.entity.onGround &&
+			!lavaAround(bot) &&
+			!headUnderwater
+		) {
+			lastSafe = vec3(Math.floor(hp.x), Math.floor(hp.y), Math.floor(hp.z));
 		}
 		if (escaping) return;
 		// Trigger ONLY when feet/head are actually lava — not when merely standing
@@ -1507,12 +1529,6 @@ export const attachSafety = (bot: Bot): void => {
 		// water — and time it. MC starts drowning damage after ~15s underwater, so
 		// after 4s submerged we take over and surface (swim up, or dig up through a
 		// flooded-cave ceiling). This is where every death.attack.drown came from.
-		const hp = bot.entity.position;
-		const headBlock = getBlock(
-			bot,
-			vec3(Math.floor(hp.x), Math.floor(hp.y) + 1, Math.floor(hp.z)),
-		);
-		const headUnderwater = !!headBlock && headBlock.name.includes("water");
 		if (!headUnderwater) submergedSince = 0;
 		else if (!submergedSince) submergedSince = Date.now();
 		if (
@@ -1535,7 +1551,7 @@ export const attachSafety = (bot: Bot): void => {
 			} catch {
 				/* pathfinder may be idle */
 			}
-			escapeWater(bot).finally(() => {
+			escapeWater(bot, lastSafe).finally(() => {
 				drowning = false;
 			});
 		}
