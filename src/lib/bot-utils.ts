@@ -942,26 +942,33 @@ export const getCraftingTable = async (bot: Bot): Promise<Block | null> => {
 				bot.setQuickBarSlot(0);
 			} catch {}
 		}
-		await sleep(200);
-		try {
-			// Look at the ground's top face first — without this, placement fails
-			// deep in a tunnel where the bot is looking horizontally.
-			await bot.lookAt(offset(ground.position, 0.5, 1, 0.5));
-			await sleep(150);
-			await bot.placeBlock(ground, vec3(0, 1, 0));
-		} catch {
-			// placeBlock may timeout but block could still be placed
+		const destPos = offset(ground.position, 0, 1, 0);
+		// Retry the place — placeBlock silently misses often (a single miss is the
+		// "Need crafting table" failure). Verify by reading the dest block directly;
+		// placing a table does NOT open a window, so don't waste 5s waiting for one.
+		let result: Block | null = null;
+		for (let attempt = 0; attempt < 3 && !result; attempt++) {
+			await sleep(200);
+			try {
+				// Force-look at the ground's top face — without this, placement fails
+				// when the bot is looking horizontally.
+				await bot.lookAt(offset(ground.position, 0.5, 1, 0.5), true);
+				await sleep(150);
+				await bot.placeBlock(ground, vec3(0, 1, 0));
+			} catch {
+				// placeBlock may throw but the block could still land — verify below.
+			}
+			for (let i = 0; i < 6; i++) {
+				await sleep(250);
+				if (getBlock(bot, destPos)?.name === "crafting_table") break;
+			}
+			const destBlock = getBlock(bot, destPos);
+			result =
+				destBlock?.name === "crafting_table"
+					? destBlock
+					: findBlock(bot, "crafting_table", 4);
 		}
-		// Wait for the crafting window to open (placing a table opens it)
-		for (let i = 0; i < 10; i++) {
-			await sleep(500);
-			if (bot.currentWindow) break;
-		}
-		const placed = findBlock(bot, "crafting_table", 4);
-		const destBlock = getBlock(bot, offset(ground.position, 0, 1, 0));
-		// findBlock may miss the table due to exposed filter — fall back to direct check
-		const result =
-			placed ?? (destBlock?.name === "crafting_table" ? destBlock : null);
+		const destBlock = getBlock(bot, destPos);
 		if (result) {
 			mem.craftingTablePos = {
 				x: result.position.x,
@@ -1090,25 +1097,57 @@ export const craftItem = async (
 			})) ?? null,
 	};
 
-	try {
-		await bot.craft(fixedRecipe, count, craftingTable ?? undefined);
-		await sleep(500);
-		if (bot.currentWindow) {
-			bot.closeWindow(bot.currentWindow);
-			await sleep(500);
-		}
-		return { success: true, message: `Crafted ${count}x ${itemName}` };
-	} catch (err) {
-		const msg =
-			err instanceof Error ? err.message : `Failed to craft ${itemName}`;
-		logEvent("craft", "error", `${itemName}: ${msg}`);
-		if (bot.currentWindow) {
+	// bot.craft opens a table via activateBlock + `once(windowOpen, 5000)` — if
+	// we're out of reach or not facing it, the window never opens and it throws
+	// "Promise timed out". So get in reach + face the table first, and retry once
+	// (the activate occasionally misses even in range). This is the #1 cause of
+	// the "Promise timed out" / "Need crafting table" failures that stall races.
+	const attemptCraft = async () => {
+		if (craftingTable) {
 			try {
-				bot.closeWindow(bot.currentWindow);
+				await moveCloser(bot, craftingTable.position, { maxDistance: 2.5 });
+				await bot.lookAt(
+					offset(craftingTable.position, 0.5, 0.5, 0.5),
+					true,
+				);
+				await sleep(150);
 			} catch {}
 		}
-		return { success: false, message: msg };
+		await bot.craft(fixedRecipe, count, craftingTable ?? undefined);
+	};
+
+	let lastErr: unknown;
+	for (let attempt = 0; attempt < 2; attempt++) {
+		try {
+			await attemptCraft();
+			await sleep(500);
+			if (bot.currentWindow) {
+				try {
+					bot.closeWindow(bot.currentWindow);
+				} catch {}
+				await sleep(400);
+			}
+			return { success: true, message: `Crafted ${count}x ${itemName}` };
+		} catch (err) {
+			lastErr = err;
+			logEvent(
+				"craft",
+				"craft_retry",
+				`${itemName} attempt ${attempt}: ${err instanceof Error ? err.message : String(err)}`,
+			);
+			if (bot.currentWindow) {
+				try {
+					bot.closeWindow(bot.currentWindow);
+				} catch {}
+				await sleep(400);
+			}
+			await sleep(300);
+		}
 	}
+	const msg =
+		lastErr instanceof Error ? lastErr.message : `Failed to craft ${itemName}`;
+	logEvent("craft", "error", `${itemName}: ${msg}`);
+	return { success: false, message: msg };
 };
 
 /** Build map of tag-equivalent item IDs. Each member maps to the full group. */
