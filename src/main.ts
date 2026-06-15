@@ -251,6 +251,10 @@ const startBot = async (): Promise<void> => {
 		username: CONFIG.username,
 		version,
 		auth: "offline",
+		// Match the server view-distance (6 chunks) instead of requesting "far" (16,
+		// capped to 6 anyway) — keeps the bot's chunk view aligned with what's
+		// actually loaded so findBlocks/pathfinding never reference unloaded chunks.
+		viewDistance: 6,
 	});
 
 	// Start web viewer if port assigned (first 4 bots get viewers)
@@ -345,6 +349,17 @@ const startBot = async (): Promise<void> => {
 
 		log(`Starting tick loop (every ${CONFIG.tickInterval / 1000}s)`);
 		setInterval(() => {
+			// Remember surface water the bot wades through so the bucket step can path
+			// back to ponds it passed; water isn't watched (see watchBlocks) to avoid
+			// the blockSeen firehose. Use the already-computed isInWater flag — FREE,
+			// no findBlocks scan (a per-tick scan blocked the event loop ~100ms and
+			// halved race throughput). Surface-only (y>=44) to skip deep cave water.
+			try {
+				const wp = bot.entity?.position;
+				if (bot.entity?.isInWater && wp && wp.y >= 44) {
+					rememberResource(bot, "water", wp);
+				}
+			} catch {}
 			runTick(bot).catch((err) => {
 				log(`Tick error: ${err instanceof Error ? err.message : "unknown"}`);
 			});
@@ -402,7 +417,7 @@ const startBot = async (): Promise<void> => {
 // ============================================
 
 import { type ChildProcess, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import Database from "better-sqlite3";
 
@@ -418,6 +433,22 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 const runRace = async (count: number, timeoutMs: number) => {
 	const ROOT = process.cwd();
+	// Persistent, monotonically-increasing bot serials — continue from the last
+	// race so names never repeat. Stored in .race-serial at the repo root, which
+	// survives world/DB resets (only data/steve.db* is cleared on reset).
+	const serialFile = join(ROOT, ".race-serial");
+	let serialStart = 1;
+	try {
+		const prev = JSON.parse(readFileSync(serialFile, "utf8"));
+		if (typeof prev.next === "number" && prev.next > 0) serialStart = prev.next;
+	} catch {}
+	const names = Array.from({ length: count }, (_, i) =>
+		`steve-race-${String(serialStart + i).padStart(3, "0")}`,
+	);
+	try {
+		writeFileSync(serialFile, JSON.stringify({ next: serialStart + count }));
+	} catch {}
+	console.log(`  Bots: ${names.join(", ")}`);
 	const SERVER_PORT = parseInt(process.env.MC_PORT ?? "25565", 10);
 	const RCON_PORT = parseInt(process.env.MC_RCON_PORT ?? "25575", 10);
 	const RCON_PASS = process.env.MC_RCON_PASS ?? "minecraft-test-rcon";
@@ -565,7 +596,11 @@ const runRace = async (count: number, timeoutMs: number) => {
 
 	// Web viewer count — needed before spawn loop for env vars
 	const hasDisplay = !!(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
-	const NUM_VIEWERS = hasDisplay ? Math.min(count, 4) : 0;
+	const NUM_VIEWERS = process.env.STEVE_NUM_VIEWERS
+		? parseInt(process.env.STEVE_NUM_VIEWERS, 10)
+		: hasDisplay
+			? Math.min(count, 4)
+			: 0;
 
 	// Spawn in the DRY DENSE forest at (696,696). The near-spawn forest (-64,-128)
 	// is a wet river valley (constant drownings), and its dry strip is too small
@@ -582,7 +617,7 @@ const runRace = async (count: number, timeoutMs: number) => {
 	const botProcs: { proc: ChildProcess; username: string; exited: boolean }[] =
 		[];
 	for (let i = 0; i < count; i++) {
-		const username = `Steve${i}`;
+		const username = names[i]!;
 		await sleep(2000);
 		const steveProc = spawn(process.execPath, [join(ROOT, "src/main.ts")], {
 			cwd: ROOT,
@@ -614,7 +649,7 @@ const runRace = async (count: number, timeoutMs: number) => {
 		try {
 			const list = await rcon("list");
 			for (let i = 0; i < count; i++) {
-				const name = `Steve${i}`;
+				const name = names[i]!;
 				if (placed.has(name) || !list.includes(name)) continue;
 				const x = spawns[i]?.x ?? 0;
 				const z = spawns[i]?.z ?? 0;
@@ -635,7 +670,7 @@ const runRace = async (count: number, timeoutMs: number) => {
 	console.log(`  All bots teleported — race starting\n`);
 
 	const runBot = async (idx: number): Promise<InstanceResult> => {
-		const username = `Steve${idx}`;
+		const username = names[idx]!;
 		const entry = botProcs[idx]!;
 		const steveProc = entry.proc;
 		steveProc.on("exit", () => {
@@ -690,8 +725,11 @@ const runRace = async (count: number, timeoutMs: number) => {
 
 	// Op all bot usernames
 	for (let i = 0; i < count; i++) {
-		await rcon(`op Steve${i}`);
+		await rcon(`op ${names[i]}`);
 	}
+	// Keep inventory on death — a bot that drowns/falls deep keeps its hard-won
+	// iron instead of resetting to square one (deaths were the main progress-sink).
+	await rcon("gamerule keep_inventory true");
 	await sleep(1000);
 
 	// Web viewer grid
@@ -783,7 +821,7 @@ if (isBotMode) {
 	const { parseArgs } = await import("node:util");
 	const { values } = parseArgs({
 		options: {
-			bots: { type: "string", short: "b", default: "10" },
+			bots: { type: "string", short: "b", default: "4" },
 			timeout: { type: "string", short: "t", default: "600" },
 		},
 		allowPositionals: true,

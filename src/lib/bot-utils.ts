@@ -630,6 +630,7 @@ export const rememberResource = (
 export const getRememberedResource = (
 	bot: Bot,
 	name: string,
+	skipYFilter = false,
 ): { x: number; y: number; z: number } | null => {
 	const mem = getMemory(bot);
 	const list = mem.resources.get(name);
@@ -639,7 +640,7 @@ export const getRememberedResource = (
 	let nearest: { x: number; y: number; z: number } | null = null;
 	let nearestDist = Infinity;
 	for (const p of list) {
-		if (Math.abs(p.y - botY) > 10) continue;
+		if (!skipYFilter && Math.abs(p.y - botY) > 10) continue;
 		const d = distance(bot.entity.position, vec3(p.x, p.y, p.z));
 		if (d < nearestDist) {
 			nearestDist = d;

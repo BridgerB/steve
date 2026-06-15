@@ -163,6 +163,18 @@ const spawnBot = async (name: string): Promise<Bot> => {
 				`[${name}] ready at ${Math.floor(p.x)}, ${Math.floor(p.y)}, ${Math.floor(p.z)}`,
 			);
 			setupBot(b, name);
+			// Optional live web viewer for the first bot — lets eye-of-steve's /mcp
+			// page stream this bot's perspective. Gated on MCP_VIEWER_PORT.
+			const vp = parseInt(process.env.MCP_VIEWER_PORT ?? "0", 10);
+			if (vp > 0 && bots.size === 0) {
+				try {
+					const { createWebViewer } = await import("typecraft");
+					createWebViewer(b, { port: vp, viewDistance: 4 });
+					log(`[${name}] web viewer on :${vp}`);
+				} catch (e) {
+					log(`[${name}] viewer failed:`, e);
+				}
+			}
 			attachDiagnostics(b);
 			attachSafety(b);
 			bots.set(name, b);

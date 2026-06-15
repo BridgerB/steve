@@ -66,7 +66,7 @@ export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 
 	// 2. Water the bot already saw (blockSeen memory), if not blacklisted.
 	if (!waterPos) {
-		const remembered = getRememberedResource(bot, "water");
+		const remembered = getRememberedResource(bot, "water", true);
 		if (remembered && !bad(vec3(remembered.x, remembered.y, remembered.z))) {
 			const rb = bot.blockAt(vec3(remembered.x, remembered.y, remembered.z));
 			if (rb && rb.name === "water")

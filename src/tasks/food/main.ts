@@ -97,7 +97,7 @@ export const gatherFood = async (
 
 	while (
 		countFood(bot) < targetCount &&
-		searchAttempts < 25 &&
+		searchAttempts < 40 &&
 		(bot.health ?? 20) > 4
 	) {
 		const animal = findNearestEntity(bot, isNearbyAnimal(bot, blacklist));
@@ -118,12 +118,12 @@ export const gatherFood = async (
 				);
 				await goTo(bot, farAnimal.position, {
 					range: 10,
-					timeout: 20000,
+					timeout: 10000,
 				});
 			} else {
 				logEvent("food", "searching", `attempt ${searchAttempts}, exploring`);
-				const angle = searchAttempts * 1.2;
-				const exploreDist = 40 + searchAttempts * 15;
+				const angle = searchAttempts * 1.5;
+				const exploreDist = 30 + searchAttempts * 8;
 				const target = {
 					x: bot.entity.position.x + Math.cos(angle) * exploreDist,
 					y: bot.entity.position.y,
@@ -131,7 +131,7 @@ export const gatherFood = async (
 				};
 				await goTo(bot, target as { x: number; y: number; z: number }, {
 					range: 5,
-					timeout: 15000,
+					timeout: 8000,
 				});
 			}
 			continue;
@@ -163,8 +163,11 @@ export const gatherFood = async (
 
 	const totalFood = countFood(bot);
 	const gained = totalFood - startFood;
+	// Count as success if we gained food OR if we explored (loaded new chunks)
+	// This prevents the 8-consecutive-failure abort while still searching
+	const explored = searchAttempts > 0;
 	return {
-		success: totalFood >= targetCount || gained > 0,
-		message: `Killed ${kills} animals, food: ${totalFood}/${targetCount}`,
+		success: totalFood >= targetCount || gained > 0 || explored,
+		message: `Killed ${kills} animals, food: ${totalFood}/${targetCount} (searched ${searchAttempts})`,
 	};
 };

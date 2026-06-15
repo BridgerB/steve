@@ -29,8 +29,12 @@ export const steps: readonly Step[] = [
 		// in tree-poor terrain.
 		isComplete: (s) =>
 			s.inventory.logs >= 5 ||
-			s.inventory.planks >= 12 ||
-			getPickaxeTier(s.equipment.pickaxe) >= 2,
+			s.inventory.planks >= 20 ||
+			getPickaxeTier(s.equipment.pickaxe) >= 3 ||
+			s.inventory.ironOre + s.inventory.ironIngots >= 1 ||
+			// A furnace means the bot is past the wood phase — never deadlock
+			// re-gathering wood when stranded in the mine away from trees.
+			s.equipment.hasFurnace,
 		execute: async (bot, _state) => {
 			const { gatherWood } = await import("./tasks/gather-wood/main.ts");
 			return gatherWood(bot, 5);
@@ -45,7 +49,10 @@ export const steps: readonly Step[] = [
 		// Keep a plank reserve; do not short-circuit on hasCraftingTable (see
 		// Gather Wood) — otherwise planks are never replenished after tools.
 		isComplete: (s) =>
-			s.inventory.planks >= 8 || getPickaxeTier(s.equipment.pickaxe) >= 2,
+			s.inventory.planks >= 20 ||
+			getPickaxeTier(s.equipment.pickaxe) >= 3 ||
+			s.inventory.ironOre + s.inventory.ironIngots >= 1 ||
+			s.equipment.hasFurnace,
 		execute: async (bot, _state) => {
 			const { craftPlanks } = await import("./tasks/craft/main.ts");
 			return craftPlanks(bot);
@@ -70,7 +77,7 @@ export const steps: readonly Step[] = [
 		priority: 4,
 		canExecute: (s) => s.inventory.planks >= 2,
 		isComplete: (s) =>
-			s.inventory.sticks >= 4 || getPickaxeTier(s.equipment.pickaxe) >= 2,
+			s.inventory.sticks >= 8 || getPickaxeTier(s.equipment.pickaxe) >= 3,
 		execute: async (bot, _state) => {
 			const { craftSticks } = await import("./tasks/craft/main.ts");
 			return craftSticks(bot);
@@ -148,7 +155,11 @@ export const steps: readonly Step[] = [
 		name: "Mine Coal",
 		priority: 10,
 		canExecute: (s) => getPickaxeTier(s.equipment.pickaxe) >= 1,
-		isComplete: (s) => s.inventory.coal >= 10,
+		// Coal is only fuel for smelting (1 coal smelts 8 items). Once iron is
+		// smelted, more coal is dead weight — short-circuit, or the bot grinds
+		// sparse no-x-ray coal forever (coal drops <10 after smelting → refires)
+		// and never advances to buckets/water/cast.
+		isComplete: (s) => s.inventory.coal >= 6 || s.inventory.ironIngots >= 7,
 		execute: async (bot, _state) => {
 			const { mineBlock } = await import("./tasks/mining/main.ts");
 			return mineBlock(bot, "coal_ore", 10);
