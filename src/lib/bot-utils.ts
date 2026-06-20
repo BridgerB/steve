@@ -1334,36 +1334,101 @@ export const errorResult = (err: unknown, fallback: string): StepResult => ({
 export const escapeWater = async (
 	bot: Bot,
 	lastSafe?: Vec3,
+	opts: { final?: boolean } = {},
 ): Promise<boolean> => {
-	// Drowning detection: the block at head height is water. (Don't trust
-	// bot.entity.isInWater for the *decision to act* — though with the physics
-	// sync it's now accurate, head-block is the precise "am I drowning" signal.)
-	const headWet = (): boolean => {
+	// "Out" = dry footing, NOT in water. A head-only check isn't enough: a bot
+	// floating at the surface of a sealed flooded cave has a dry head but no
+	// footing — it can't walk or progress, so we must keep working until it's
+	// actually standing on land out of the water.
+	const isOut = (): boolean => {
 		const p = bot.entity?.position;
-		if (!p) return false;
-		const b = getBlock(
+		if (!p || bot.entity.isInWater || !bot.entity.onGround) return false;
+		const head = getBlock(
 			bot,
 			vec3(Math.floor(p.x), Math.floor(p.y) + 1, Math.floor(p.z)),
 		);
-		return !!b && b.name.includes("water");
+		return !head || !head.name.includes("water");
 	};
-	if (!headWet()) return true; // head not submerged
+	if (isOut()) return true;
 
-	logEvent("nav", "swimming_out");
+	const isSolidUp = (
+		b: ReturnType<typeof getBlock>,
+	): b is NonNullable<ReturnType<typeof getBlock>> =>
+		!!b &&
+		b.name !== "air" &&
+		b.name !== "cave_air" &&
+		!b.name.includes("water") &&
+		b.name !== "bedrock";
 
-	// Phase 1: hold jump to float up. Buoyancy (now working since the isInWater
-	// sync fix) surfaces the bot fast in open water — most river/lake cases end
-	// here within a second.
-	bot.setControlState("jump", true);
+	// The first solid, diggable block straight up within arm's reach (or null for
+	// an air/water column). Starts at head level (dy 1) so a cap the bot is
+	// buoyant against — the case where dig-up actually lets us ascend — counts.
+	const reachableCeiling = (): ReturnType<typeof getBlock> => {
+		const p = bot.entity?.position;
+		if (!p) return null;
+		const fx = Math.floor(p.x);
+		const fy = Math.floor(p.y);
+		const fz = Math.floor(p.z);
+		for (let dy = 1; dy <= 4; dy++) {
+			const b = getBlock(bot, vec3(fx, fy + dy, fz));
+			if (isSolidUp(b)) return b;
+		}
+		return null;
+	};
+
+	// Nearest column where the water is capped by solid within ~1 block of its
+	// surface — a spot we CAN dig straight up from (buoyancy presses our head to
+	// the cap). Floating under a tall air pocket, we steer toward the closest
+	// such column instead of wandering blindly. Returns a cardinal step, or null.
+	const stepToCappedColumn = (): { dx: number; dz: number } | null => {
+		const p = bot.entity?.position;
+		if (!p) return null;
+		const cx = Math.floor(p.x);
+		const cy = Math.floor(p.y);
+		const cz = Math.floor(p.z);
+		let best: { dx: number; dz: number; dist: number } | null = null;
+		const R = 5;
+		for (let dx = -R; dx <= R; dx++) {
+			for (let dz = -R; dz <= R; dz++) {
+				if (dx === 0 && dz === 0) continue;
+				const x = cx + dx;
+				const z = cz + dz;
+				let surf = -2;
+				for (let y = cy + 2; y >= cy - 4; y--) {
+					const b = getBlock(bot, vec3(x, y, z));
+					if (b && b.name.includes("water")) {
+						surf = y;
+						break;
+					}
+				}
+				if (surf === -2) continue;
+				let gap = 0;
+				for (let y = surf + 1; y <= surf + 3; y++) {
+					if (isSolidUp(getBlock(bot, vec3(x, y, z)))) break;
+					gap++;
+				}
+				if (gap !== 0) continue; // only a cap directly on the water is ascendable
+				const dist = Math.abs(dx) + Math.abs(dz);
+				if (!best || dist < best.dist) best = { dx, dz, dist };
+			}
+		}
+		if (!best) return null;
+		return { dx: Math.sign(best.dx), dz: Math.sign(best.dz) };
+	};
+
+	logEvent("nav", opts.final ? "water_escape_final" : "swimming_out");
+	bot.setControlState("jump", true); // hold jump → swim up the whole time
 
 	const start = Date.now();
-	const timeout = 14000;
+	// Normal pass is brief (open water/flooded tunnels end fast); the final-backup
+	// pass — fired after 120s stuck in water — commits to tunnelling out and gets
+	// a long window so it can relocate + dig all the way to the surface.
+	const timeout = opts.final ? 90000 : 14000;
 
 	while (Date.now() - start < timeout) {
 		await sleep(200);
 		if (!bot.entity?.position) break;
-		if (!headWet()) {
-			// Head's clear — nudge forward briefly to climb fully onto land.
+		if (isOut()) {
 			bot.setControlState("forward", true);
 			await sleep(500);
 			bot.clearControlStates();
@@ -1371,49 +1436,60 @@ export const escapeWater = async (
 			return true;
 		}
 
-		// Still submerged after floating for ~1.2s → we're trapped under a ceiling
-		// (a flooded tunnel) or bobbing mid-pool. Buoyancy alone won't free us.
+		// Give buoyancy a moment to surface us before doing anything drastic.
 		if (Date.now() - start < 1200) continue;
 
 		const p = bot.entity.position;
-		if (lastSafe) {
-			// Best escape from a flooded tunnel: swim back toward the last DRY
-			// footing — the way we came in, which has air. Digging up just hits more
-			// stone (and is 5× slower underwater).
+		const above = reachableCeiling();
+		if (above) {
+			// Buoyancy presses us up against a solid ceiling (a flooded tunnel/low
+			// pocket) — digging it lets us rise a block; repeat up to daylight. Bound
+			// the dig: stone underwater is ~5× slower and would overrun the deadline.
+			await bot.lookAt(
+				vec3(above.position.x + 0.5, above.position.y + 0.5, above.position.z + 0.5),
+			);
+			await Promise.race([bot.dig(above, true).catch(() => {}), sleep(3000)]);
+			bot.stopDigging();
+			logEvent("nav", "drown_dig_up", above.name, above.position);
+		} else if (lastSafe && Date.now() - start < 4000) {
+			// Early on, retreat toward the dry footing we came from (the air-having
+			// way into a flooded tunnel) before committing to digging.
 			await bot.lookAt(vec3(lastSafe.x + 0.5, p.y, lastSafe.z + 0.5));
 			bot.setControlState("forward", true);
 			bot.setControlState("sprint", true);
 		} else {
-			// No retreat point: dig straight up through a solid ceiling toward air.
-			const above = getBlock(
-				bot,
-				vec3(Math.floor(p.x), Math.floor(p.y) + 2, Math.floor(p.z)),
-			);
-			const solidCeiling =
-				!!above &&
-				above.name !== "air" &&
-				above.name !== "cave_air" &&
-				!above.name.includes("water") &&
-				above.name !== "bedrock";
-			if (solidCeiling) {
-				// Bound the dig — bot.dig blocks until the block breaks, and stone
-				// underwater takes far longer than the escape timeout (5× penalty),
-				// which would freeze escapeWater past its own deadline.
-				await Promise.race([
-					bot.dig(above, true).catch(() => {}),
-					sleep(3000),
-				]);
-				bot.stopDigging();
-				logEvent("nav", "drown_dig_up", above.name, above.position);
+			// Floating under a tall air pocket: no ceiling in reach, and we can't
+			// pillar (placeBlock times out underwater). Head for the nearest column
+			// whose water is capped by solid — its cap often sits at our level as a
+			// wall, so tunnel through toward it, then the dig-up branch ascends us.
+			bot.setControlState("sprint", false);
+			const step = stepToCappedColumn();
+			if (step && (step.dx || step.dz)) {
+				const fx = Math.floor(p.x);
+				const fy = Math.floor(p.y);
+				const fz = Math.floor(p.z);
+				for (const c of [
+					vec3(fx + step.dx, fy, fz + step.dz),
+					vec3(fx + step.dx, fy + 1, fz + step.dz),
+				]) {
+					const b = getBlock(bot, c);
+					if (isSolidUp(b)) {
+						await bot.lookAt(vec3(c.x + 0.5, c.y + 0.5, c.z + 0.5));
+						await Promise.race([bot.dig(b, true).catch(() => {}), sleep(2500)]);
+						bot.stopDigging();
+					}
+				}
+				await bot.lookAt(vec3(p.x + step.dx, p.y, p.z + step.dz));
 			} else {
-				bot.setControlState("forward", true);
-				await bot.look(Math.random() * Math.PI * 2, 0.2);
+				await bot.look(Math.random() * Math.PI * 2, 0.0);
 			}
+			bot.setControlState("forward", true);
+			await sleep(300);
 		}
 	}
 
 	bot.clearControlStates();
-	logEvent("nav", "water_escape_failed");
+	logEvent("nav", opts.final ? "water_escape_failed_final" : "water_escape_failed");
 	return false;
 };
 
@@ -1573,6 +1649,7 @@ export const attachSafety = (bot: Bot): void => {
 	let drowning = false;
 	let submergedSince = 0;
 	let lastWetTime = 0;
+	let inWaterSince = 0;
 
 	const guard = setInterval(() => {
 		if (!bot.entity?.position) return;
@@ -1614,28 +1691,38 @@ export const attachSafety = (bot: Bot): void => {
 		}
 		// Drowning guard: typecraft has NO air meter (bot.oxygenLevel doesn't
 		// exist), so detect submersion directly — the block at head height being
-		// water — and time it. MC starts drowning damage after ~15s underwater, so
-		// after 4s submerged we take over and surface (swim up, or dig up through a
-		// flooded-cave ceiling). Fire after 2.5s, and treat brief surfacing
-		// (head out <1.2s) as still-submerged — bobbing at a pond surface kept
-		// resetting the timer so the guard never fired and the bot slowly drowned.
+		// water — and time it. Treat brief surfacing (head out <1.2s) as
+		// still-submerged — bobbing at a pond surface kept resetting the timer.
 		if (headUnderwater) {
 			lastWetTime = Date.now();
 			if (!submergedSince) submergedSince = Date.now();
 		} else if (Date.now() - lastWetTime > 1200) {
 			submergedSince = 0;
 		}
-		if (
-			!escaping &&
-			!drowning &&
-			submergedSince > 0 &&
-			Date.now() - submergedSince > 2500
-		) {
+		// Continuous time the body has been in water — even with a DRY head. A bot
+		// floating at the surface of a sealed flooded cave never trips the drown
+		// timer, yet it's just as stuck (no footing, can't progress). Resets the
+		// instant we're back on dry land.
+		if (bot.entity.isInWater) {
+			if (!inWaterSince) inWaterSince = Date.now();
+		} else {
+			inWaterSince = 0;
+		}
+
+		// Engage the water escape whenever we're stuck: drowning (head wet >2.5s),
+		// OR in water with no escape >12s (surface-trapped). After 120s of unbroken
+		// water time, escalate to the committed dig-to-surface final backup — it
+		// relocates + tunnels up with a long window and never gives up (never dies).
+		const drownStuck = submergedSince > 0 && Date.now() - submergedSince > 2500;
+		const inWaterMs = inWaterSince ? Date.now() - inWaterSince : 0;
+		const surfaceStuck = inWaterMs > 12000;
+		const finalBackup = inWaterMs > 120000;
+		if (!escaping && !drowning && (drownStuck || surfaceStuck || finalBackup)) {
 			drowning = true;
 			logEvent(
 				"safety",
-				"drown_guard_trigger",
-				`submerged=${Date.now() - submergedSince}ms`,
+				finalBackup ? "water_stuck_final" : "drown_guard_trigger",
+				`inWater=${inWaterMs}ms submerged=${submergedSince ? Date.now() - submergedSince : 0}ms`,
 				bot.entity.position,
 			);
 			bot.clearControlStates();
@@ -1644,7 +1731,7 @@ export const attachSafety = (bot: Bot): void => {
 			} catch {
 				/* pathfinder may be idle */
 			}
-			escapeWater(bot, lastSafe).finally(() => {
+			escapeWater(bot, lastSafe, { final: finalBackup }).finally(() => {
 				drowning = false;
 			});
 		}

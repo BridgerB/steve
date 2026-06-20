@@ -31,7 +31,8 @@ import {
 	goTo,
 	rememberResource,
 } from "./lib/bot-utils.ts";
-import { attachDiagnostics, getDbPath, initLogger } from "./lib/logger.ts";
+import { connectDb } from "./lib/db.ts";
+import { attachDiagnostics, initLogger } from "./lib/logger.ts";
 import { getPhase, syncFromBot } from "./state.ts";
 
 // ── stdio transport — NO console.log anywhere ──
@@ -1100,30 +1101,17 @@ server.tool(
 	},
 	async ({ count = 20, category }) => {
 		await requireBot(); // ensure connected
+		const sql = connectDb();
 		try {
-			const dbPath = getDbPath();
-			if (!dbPath)
-				return {
-					content: [{ type: "text" as const, text: "No database initialized" }],
-					isError: true,
-				};
-			const Database = (await import("better-sqlite3")).default;
-			const db = new Database(dbPath, { readonly: true });
 			const query = category
-				? db
-						.prepare(
-							"SELECT ts, category, event, detail FROM events WHERE category = ? ORDER BY id DESC LIMIT ?",
-						)
-						.all(category, count)
-				: db
-						.prepare(
-							"SELECT ts, category, event, detail FROM events ORDER BY id DESC LIMIT ?",
-						)
-						.all(count);
-			db.close();
+				? await sql`SELECT ts, category, event, detail FROM events WHERE category = ${category} ORDER BY id DESC LIMIT ${count}`
+				: await sql`SELECT ts, category, event, detail FROM events ORDER BY id DESC LIMIT ${count}`;
 			return {
 				content: [
-					{ type: "text" as const, text: JSON.stringify(query, null, 2) },
+					{
+						type: "text" as const,
+						text: JSON.stringify(query, null, 2),
+					},
 				],
 			};
 		} catch (err) {
@@ -1136,6 +1124,8 @@ server.tool(
 				],
 				isError: true,
 			};
+		} finally {
+			await sql.end({ timeout: 5 });
 		}
 	},
 );

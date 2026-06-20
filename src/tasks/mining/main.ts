@@ -85,6 +85,7 @@ const DROP_ITEM: Record<string, string> = {
 const isAir = (b: Block | null): boolean =>
 	!b || b.name === "air" || b.name === "cave_air";
 const isLava = (b: Block | null): boolean => !!b && b.name.includes("lava");
+const isWater = (b: Block | null): boolean => !!b && b.name.includes("water");
 const isLiquid = (b: Block | null): boolean =>
 	!!b && (b.name.includes("water") || b.name.includes("lava"));
 
@@ -174,6 +175,10 @@ export const descendStaircase = async (
 		Date.now() < deadline
 	) {
 		if ((bot.health ?? 20) < 8) return { y: floorY(bot), stopped: "low health" };
+		// Already submerged: stop digging down and hand off to the drowning guard.
+		// Continuing here would issue forward/down controls + digs that fight
+		// escapeWater's upward climb, leaving the bot bobbing in the flooded shaft.
+		if (bot.entity?.isInWater) return { y: floorY(bot), stopped: "in water" };
 		if (!bot.heldItem?.name.endsWith("_pickaxe")) await ensurePickaxe(bot);
 		const p = bot.entity.position;
 		const fx = Math.floor(p.x);
@@ -193,6 +198,15 @@ export const descendStaircase = async (
 		if ([newHeadUp, newHead, newFeet, newFloor, newFloor2].some(isLava)) {
 			dir = rotate(dir);
 			if (++stuck > 4) return { y: floorY(bot), stopped: "boxed in by lava" };
+			continue;
+		}
+		// Hazard: water in the step floods the 1-wide shaft and drowns us. Reroute
+		// around it like we do for lava — digging in here is what traps the bot
+		// bobbing against the drowning guard. If boxed in by water on all sides,
+		// stop descending rather than opening the flood.
+		if ([newHeadUp, newHead, newFeet, newFloor, newFloor2].some(isWater)) {
+			dir = rotate(dir);
+			if (++stuck > 4) return { y: floorY(bot), stopped: "boxed in by water" };
 			continue;
 		}
 		// Drop ahead: small drops are fine — step/fall down through caves. But

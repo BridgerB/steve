@@ -1,39 +1,33 @@
-import { existsSync } from "node:fs";
-import { join } from "node:path";
-import Database from "better-sqlite3";
+import { connectDb } from "./lib/db.ts";
 
-const dbPath = join(process.cwd(), "data", "steve.db");
+const sql = connectDb();
 
-if (!existsSync(dbPath)) {
-	console.log("\n  No races yet. Start one from the race tab:");
-	console.log("  nix run .#race -- 20 600\n");
-	process.exit(0);
-}
-
-const db = new Database(dbPath, { readonly: true });
-db.pragma("journal_mode = WAL");
-
-const latestRace = db
-	.prepare(
-		"SELECT race_id, started_at, bot_count FROM races WHERE kind = 'race' ORDER BY started_at DESC LIMIT 1",
-	)
-	.get() as
+let latestRace:
 	| { race_id: string; started_at: string; bot_count: number }
 	| undefined;
+try {
+	const rows = (await sql`
+		SELECT race_id, started_at, bot_count FROM races WHERE kind = 'race' ORDER BY started_at DESC LIMIT 1
+	`) as unknown as { race_id: string; started_at: string; bot_count: number }[];
+	latestRace = rows[0];
+} catch {
+	latestRace = undefined;
+}
 
 if (!latestRace) {
 	console.log("\n  No races yet. Start one from the race tab:");
 	console.log("  nix run .#race -- 20 600\n");
-	db.close();
+	await sql.end();
 	process.exit(0);
 }
 
 const raceId = latestRace.race_id;
 
 // Status — use latest event timestamp for age
-const lastEvent = db
-	.prepare("SELECT MAX(ts) as ts FROM events WHERE race_id = ?")
-	.get(raceId) as { ts: string | null } | undefined;
+const lastEventRows = (await sql`
+	SELECT MAX(ts) AS ts FROM events WHERE race_id = ${raceId}
+`) as unknown as { ts: string | null }[];
+const lastEvent = lastEventRows[0];
 const lastTs = lastEvent?.ts ? new Date(lastEvent.ts).getTime() : Date.now();
 const ageSec = Math.round((Date.now() - lastTs) / 1000);
 const ageStr =
@@ -85,17 +79,17 @@ const milestones = [
 ] as const;
 
 // Fetch spawn times and first-seen inventory timestamps
-const spawns = db
-	.prepare(
-		"SELECT bot_id, MIN(ts) as ts FROM events WHERE race_id = ? AND category = 'lifecycle' AND event = 'spawn' GROUP BY bot_id",
-	)
-	.all(raceId) as { bot_id: string; ts: string }[];
+const spawns = (await sql`
+	SELECT bot_id, MIN(ts) AS ts FROM events
+	WHERE race_id = ${raceId} AND category = 'lifecycle' AND event = 'spawn'
+	GROUP BY bot_id
+`) as unknown as { bot_id: string; ts: string }[];
 
-const invFirstSeen = db
-	.prepare(
-		"SELECT bot_id, item_name, MIN(ts) as ts FROM inventory_snapshots WHERE race_id = ? AND count > 0 GROUP BY bot_id, item_name",
-	)
-	.all(raceId) as { bot_id: string; item_name: string; ts: string }[];
+const invFirstSeen = (await sql`
+	SELECT bot_id, item_name, MIN(ts) AS ts FROM inventory_snapshots
+	WHERE race_id = ${raceId} AND count > 0
+	GROUP BY bot_id, item_name
+`) as unknown as { bot_id: string; item_name: string; ts: string }[];
 
 // Build per-bot milestone data
 type BotData = { done: boolean; timeSec: number | null }[];
@@ -203,4 +197,4 @@ for (let mi = 0; mi < milestones.length; mi++) {
 }
 console.log("");
 
-db.close();
+await sql.end();

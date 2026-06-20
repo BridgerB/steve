@@ -11,13 +11,12 @@
 	},
 	"dependencies": {
 		"@modelcontextprotocol/sdk": "^1.27.1",
-		"better-sqlite3": "^12.8.0",
+		"postgres": "^3.4.9",
 		"typecraft": "file:../typecraft",
 		"zod": "^4.3.6"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.4.8",
-		"@types/better-sqlite3": "^7.6.13",
 		"@types/node": "^22.0.0",
 		"typescript": "^5.7.0"
 	}

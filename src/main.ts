@@ -29,7 +29,7 @@ import { getNextStep, getProgress, type Step, steps } from "./steps.ts";
 // ============================================
 
 const CONFIG = {
-	host: process.env.MC_HOST ?? "localhost",
+	host: process.env.MC_HOST ?? "mc.bridgerb.com",
 	port: parseInt(process.env.MC_PORT ?? "25565", 10),
 	username: process.env.MC_USERNAME ?? "Steve",
 	tickInterval: 5000,
@@ -417,9 +417,9 @@ const startBot = async (): Promise<void> => {
 // ============================================
 
 import { type ChildProcess, spawn } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import Database from "better-sqlite3";
+import { connectDb, type Sql } from "./lib/db.ts";
 
 interface InstanceResult {
 	idx: number;
@@ -454,11 +454,10 @@ const runRace = async (count: number, timeoutMs: number) => {
 	const RCON_PASS = process.env.MC_RCON_PASS ?? "minecraft-test-rcon";
 
 	const RACE_ID = new Date().toISOString().replace(/:/g, "-");
-	const DB_PATH = join(ROOT, "data", "steve.db");
 
 	const allProcs: ChildProcess[] = [];
 	let winner: number | null = null;
-	let raceDb: Database.Database | null = null;
+	let raceDb: Sql | null = null;
 
 	const viewerBots: Bot[] = [];
 	const killAll = async () => {
@@ -477,8 +476,9 @@ const runRace = async (count: number, timeoutMs: number) => {
 			} catch {}
 		}
 		if (raceDb) {
-			raceDb.close();
+			const s = raceDb;
 			raceDb = null;
+			await s.end({ timeout: 2 }).catch(() => {});
 		}
 	};
 	process.on("SIGINT", () => {
@@ -499,13 +499,10 @@ const runRace = async (count: number, timeoutMs: number) => {
 		} catch {}
 	});
 
-	const getRaceDb = (): Database.Database | null => {
+	const getRaceDb = (): Sql | null => {
 		if (raceDb) return raceDb;
-		if (!existsSync(DB_PATH)) return null;
 		try {
-			raceDb = new Database(DB_PATH, { readonly: true });
-			raceDb.pragma("journal_mode = WAL");
-			raceDb.pragma("busy_timeout = 5000");
+			raceDb = connectDb();
 			return raceDb;
 		} catch {
 			return null;
@@ -544,17 +541,16 @@ const runRace = async (count: number, timeoutMs: number) => {
 	const milestonesHit = new Set<string>();
 	const raceStart = Date.now();
 
-	const checkMilestones = (): void => {
+	const checkMilestones = async (): Promise<void> => {
 		const db = getRaceDb();
 		if (!db) return;
 		for (const m of MILESTONES) {
 			if (milestonesHit.has(m.name)) continue;
 			try {
-				const row = db
-					.prepare(
-						`SELECT bot_id FROM inventory_snapshots WHERE race_id = ? AND (${m.query}) LIMIT 1`,
-					)
-					.get(RACE_ID) as { bot_id: string } | undefined;
+				const rows = (await db`SELECT bot_id FROM inventory_snapshots WHERE race_id = ${RACE_ID} AND (${db.unsafe(m.query)}) LIMIT 1`) as unknown as {
+					bot_id: string;
+				}[];
+				const row = rows[0];
 				if (row) {
 					milestonesHit.add(m.name);
 					const elapsed = Math.round((Date.now() - raceStart) / 1000);
@@ -564,43 +560,37 @@ const runRace = async (count: number, timeoutMs: number) => {
 		}
 	};
 
-	const checkForGoal = (botId: string): boolean => {
+	const checkForGoal = async (botId: string): Promise<boolean> => {
 		const db = getRaceDb();
 		if (!db) return false;
 		try {
-			const evt = db
-				.prepare(
-					"SELECT COUNT(*) as c FROM events WHERE race_id = ? AND bot_id = ? AND event = 'success' AND detail LIKE 'Enter Nether:%'",
-				)
-				.get(RACE_ID, botId) as { c: number };
-			return evt.c > 0;
+			const rows = (await db`SELECT COUNT(*)::int AS c FROM events WHERE race_id = ${RACE_ID} AND bot_id = ${botId} AND event = 'success' AND detail LIKE 'Enter Nether:%'`) as unknown as {
+				c: number;
+			}[];
+			return (rows[0]?.c ?? 0) > 0;
 		} catch {
 			return false;
 		}
 	};
 
-	const getInventory = (botId: string): string => {
+	const getInventory = async (botId: string): Promise<string> => {
 		const db = getRaceDb();
 		if (!db) return "no data";
 		try {
-			const rows = db
-				.prepare(
-					"SELECT item_name || 'x' || MAX(count) as inv FROM inventory_snapshots WHERE race_id = ? AND bot_id = ? GROUP BY item_name ORDER BY MAX(count) DESC LIMIT 5",
-				)
-				.all(RACE_ID, botId) as { inv: string }[];
+			const rows = (await db`SELECT item_name || 'x' || MAX(count)::text AS inv FROM inventory_snapshots WHERE race_id = ${RACE_ID} AND bot_id = ${botId} GROUP BY item_name ORDER BY MAX(count) DESC LIMIT 5`) as unknown as {
+				inv: string;
+			}[];
 			return rows.map((r) => r.inv).join(", ") || "empty";
 		} catch {
 			return "db error";
 		}
 	};
 
-	// Web viewer count — needed before spawn loop for env vars
-	const hasDisplay = !!(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
+	// Web viewer count — defaults to the bot count so the dashboard's 3D windows
+	// always render; override with STEVE_NUM_VIEWERS (set 0 to disable / headless).
 	const NUM_VIEWERS = process.env.STEVE_NUM_VIEWERS
 		? parseInt(process.env.STEVE_NUM_VIEWERS, 10)
-		: hasDisplay
-			? Math.min(count, 4)
-			: 0;
+		: count;
 
 	// Spawn in the DRY DENSE forest at (696,696). The near-spawn forest (-64,-128)
 	// is a wet river valley (constant drownings), and its dry strip is too small
@@ -681,8 +671,8 @@ const runRace = async (count: number, timeoutMs: number) => {
 
 		while (Date.now() - start < timeoutMs && winner === null && !entry.exited) {
 			await sleep(3000);
-			checkMilestones();
-			if (checkForGoal(username)) {
+			await checkMilestones();
+			if (await checkForGoal(username)) {
 				const elapsed = Math.round((Date.now() - start) / 1000);
 				winner = idx;
 				console.log(
@@ -705,7 +695,7 @@ const runRace = async (count: number, timeoutMs: number) => {
 				username,
 				elapsed,
 				won: false,
-				inventory: getInventory(username),
+				inventory: await getInventory(username),
 			};
 		}
 		return {
@@ -713,7 +703,7 @@ const runRace = async (count: number, timeoutMs: number) => {
 			username,
 			elapsed,
 			won: false,
-			inventory: getInventory(username),
+			inventory: await getInventory(username),
 		};
 	};
 
@@ -730,6 +720,8 @@ const runRace = async (count: number, timeoutMs: number) => {
 	// Keep inventory on death — a bot that drowns/falls deep keeps its hard-won
 	// iron instead of resetting to square one (deaths were the main progress-sink).
 	await rcon("gamerule keep_inventory true");
+	// Start the world at morning (time 0) so it's lit for the dashboard 3D views.
+	await rcon("time set 0");
 	await sleep(1000);
 
 	// Web viewer grid
@@ -822,7 +814,7 @@ if (isBotMode) {
 	const { values } = parseArgs({
 		options: {
 			bots: { type: "string", short: "b", default: "4" },
-			timeout: { type: "string", short: "t", default: "600" },
+			timeout: { type: "string", short: "t", default: "7200" },
 		},
 		allowPositionals: true,
 		args: process.argv.slice(2),
