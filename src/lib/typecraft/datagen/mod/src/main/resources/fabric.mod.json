@@ -1,0 +1,14 @@
+{
+	"schemaVersion": 1,
+	"id": "typecraft-datagen",
+	"version": "1.0.0",
+	"name": "Typecraft Data Generator",
+	"description": "Extracts block, item, entity, and protocol data from Minecraft",
+	"entrypoints": {
+		"server": ["dev.typecraft.datagen.DataExtractor"]
+	},
+	"depends": {
+		"fabricloader": ">=0.16.0",
+		"minecraft": ">=1.21"
+	}
+}

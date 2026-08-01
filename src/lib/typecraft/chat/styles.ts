@@ -1,0 +1,140 @@
+/** MOTD color code → ANSI escape sequence. */
+export const ANSI_CODES: Readonly<Record<string, string>> = {
+	"§0": "\u001b[30m",
+	"§1": "\u001b[34m",
+	"§2": "\u001b[32m",
+	"§3": "\u001b[36m",
+	"§4": "\u001b[31m",
+	"§5": "\u001b[35m",
+	"§6": "\u001b[33m",
+	"§7": "\u001b[37m",
+	"§8": "\u001b[90m",
+	"§9": "\u001b[94m",
+	"§a": "\u001b[92m",
+	"§b": "\u001b[96m",
+	"§c": "\u001b[91m",
+	"§d": "\u001b[95m",
+	"§e": "\u001b[93m",
+	"§f": "\u001b[97m",
+	"§l": "\u001b[1m",
+	"§o": "\u001b[3m",
+	"§n": "\u001b[4m",
+	"§m": "\u001b[9m",
+	"§k": "\u001b[6m",
+	"§r": "\u001b[0m",
+};
+
+/** Named color → CSS style string. */
+export const CSS_STYLES: Readonly<Record<string, string>> = {
+	black: "color:#000000",
+	dark_blue: "color:#0000AA",
+	dark_green: "color:#00AA00",
+	dark_aqua: "color:#00AAAA",
+	dark_red: "color:#AA0000",
+	dark_purple: "color:#AA00AA",
+	gold: "color:#FFAA00",
+	gray: "color:#AAAAAA",
+	dark_gray: "color:#555555",
+	blue: "color:#5555FF",
+	green: "color:#55FF55",
+	aqua: "color:#55FFFF",
+	red: "color:#FF5555",
+	light_purple: "color:#FF55FF",
+	yellow: "color:#FFFF55",
+	white: "color:#FFFFFF",
+	bold: "font-weight:900",
+	strikethrough: "text-decoration:line-through",
+	underlined: "text-decoration:underline",
+	italic: "font-style:italic",
+};
+
+/** Named color → MOTD `§x` code. */
+export const MOTD_COLOR_CODES: Readonly<Record<string, string>> = {
+	black: "§0",
+	dark_blue: "§1",
+	dark_green: "§2",
+	dark_aqua: "§3",
+	dark_red: "§4",
+	dark_purple: "§5",
+	gold: "§6",
+	gray: "§7",
+	dark_gray: "§8",
+	blue: "§9",
+	green: "§a",
+	aqua: "§b",
+	red: "§c",
+	light_purple: "§d",
+	yellow: "§e",
+	white: "§f",
+	reset: "§r",
+};
+
+/** MOTD formatting codes. */
+export const MOTD_FORMAT_CODES: Readonly<Record<string, string>> = {
+	bold: "§l",
+	italic: "§o",
+	underlined: "§n",
+	strikethrough: "§m",
+	obfuscated: "§k",
+};
+
+/** Color code character → color name (for fromString parsing). */
+export const COLOR_CODE_TO_NAME: Readonly<Record<string, string>> = {
+	"0": "black",
+	"1": "dark_blue",
+	"2": "dark_green",
+	"3": "dark_aqua",
+	"4": "dark_red",
+	"5": "dark_purple",
+	"6": "gold",
+	"7": "gray",
+	"8": "dark_gray",
+	"9": "blue",
+	a: "green",
+	b: "aqua",
+	c: "red",
+	d: "light_purple",
+	e: "yellow",
+	f: "white",
+	k: "obfuscated",
+	l: "bold",
+	m: "strikethrough",
+	n: "underlined",
+	o: "italic",
+	r: "reset",
+};
+
+/** Format member names used for HTML style inheritance. */
+export const FORMAT_MEMBERS = [
+	"color",
+	"bold",
+	"strikethrough",
+	"underlined",
+	"italic",
+] as const;
+
+/** Valid named colors (including format names). */
+export const SUPPORTED_COLORS = new Set([
+	"black",
+	"dark_blue",
+	"dark_green",
+	"dark_aqua",
+	"dark_red",
+	"dark_purple",
+	"gold",
+	"gray",
+	"dark_gray",
+	"blue",
+	"green",
+	"aqua",
+	"red",
+	"light_purple",
+	"yellow",
+	"white",
+	"obfuscated",
+	"bold",
+	"strikethrough",
+	"underlined",
+	"italic",
+	"reset",
+]);

@@ -1,32 +1,42 @@
-# steve
+# sv
 
-The purpose of this project is to accomplish what is described in this
-[video](https://youtu.be/Wh4abvcUj8Q?si=UNdADJbpAgsPh2by&t=710)
+Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
 
-## Rules
+## Creating a project
 
-- No cuts
-- No teleporting
-- No prompting
-- No human input at all except at the very beginning
+If you're seeing this, you've probably already done this step. Congrats!
 
-In speedrunner terms, we want a **random seed any% glitchless speedrun**,
-although speed is not really the point. General reliability is the point.
+```sh
+# create a new project
+npx sv create my-app
+```
 
-## Goal
+To recreate this project with the same configuration:
 
-The bot could start in any world and reliably do the same things that human
-players need to do to beat the game. Minimizing play time is good, but
-optimizing too much for speed can lead to some very gimmicky tricks that aren't
-very general.
+```sh
+# recreate this project
+npx sv@0.16.1 create --template minimal --types ts --add vitest="usages:unit,component" playwright sveltekit-adapter="adapter:node" drizzle="database:sqlite+sqlite:better-sqlite3" mcp="ide:claude-code+setup:local" --install npm .
+```
 
-Our ultimate goal here is not just to beat the game as fast as possible, but to
-**build reliable, capable, clever bots that can do anything that humans can
-do**.
+## Developing
 
-## Implementation Flexibility
+Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
 
-You can make a pure mineflayer bot to do any of these chunks or beat the entire
-game. I think that would be **awesome. And ideally, it would still improve the
-fundamental systems of mineflayer and indirectly improve the Minecraft bots,
-too.**
+```sh
+npm run dev
+
+# or start the server and open the app in a new browser tab
+npm run dev -- --open
+```
+
+## Building
+
+To create a production version of your app:
+
+```sh
+npm run build
+```
+
+You can preview the production build with `npm run preview`.
+
+> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.

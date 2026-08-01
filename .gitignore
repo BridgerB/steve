@@ -1,11 +1,36 @@
 node_modules
-result
-test-results.xml
-/data/
-/debug/
+
+# Output
+.output
+.vercel
+.netlify
+.wrangler
+/.svelte-kit
+/build
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
 .env
-.mcp-eval.ts
-.repl-exec.ts
-.direnv/
-.pre-commit-config.yaml
-/server/
+.env.*
+!.env.example
+!.env.test
+
+# Vite
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+# Playwright
+test-results
+# SQLite
+*.db
+# Generated viewer bundle (regenerate with `npm run sync-viewer`)
+/static/web/
+# Generated Minecraft game data (regenerate with `nix run .#datagen`)
+/src/lib/typecraft/data/
+# Datagen build artifacts
+/src/lib/typecraft/datagen/mod/build/
+/src/lib/typecraft/datagen/mod/.gradle/
+/src/lib/typecraft/datagen/mod/.fabric/
+/src/lib/typecraft/datagen/mod/run/

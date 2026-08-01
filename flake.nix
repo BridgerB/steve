@@ -1,6 +1,8 @@
 {
-  description = "Steve - Minecraft Ender Dragon Speedrun Bot";
+  description = "eye-of-steve — Minecraft race dashboard + bots (all-in-one mono project)";
 
+  # Inputs kept identical to the original typecraft flake so the copied
+  # flake.lock resolves without regeneration; only nixpkgs is actually used.
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
     treefmt-nix.url = "github:numtide/treefmt-nix";
@@ -8,12 +10,7 @@
   };
 
   outputs =
-    {
-      self,
-      nixpkgs,
-      treefmt-nix,
-      git-hooks-nix,
-    }:
+    { self, nixpkgs, ... }:
     let
       systems = [
         "x86_64-linux"
@@ -27,392 +24,171 @@
           config.allowUnfree = true;
         };
 
-      # Dev tools only needed on x86_64 dev machine
       devSystem = "x86_64-linux";
-      devPkgs = pkgsFor devSystem;
 
-      version = "1.21.11";
-      rconPassword = "minecraft-test-rcon";
-      rconPort = "25575";
+      version = "26.1.2";
 
-      jvmOpts = builtins.concatStringsSep " " [
-        "-XX:+UseG1GC"
-        "-XX:+ParallelRefProcEnabled"
-        "-XX:MaxGCPauseMillis=200"
-        "-XX:+UnlockExperimentalVMOptions"
-        "-XX:+DisableExplicitGC"
-        "-XX:G1NewSizePercent=30"
-        "-XX:G1MaxNewSizePercent=40"
-        "-XX:G1HeapRegionSize=8M"
-        "-XX:G1ReservePercent=20"
-        "-XX:G1HeapWastePercent=5"
-        "-XX:G1MixedGCCountTarget=4"
-        "-XX:InitiatingHeapOccupancyPercent=15"
-        "-XX:G1MixedGCLiveThresholdPercent=90"
-        "-XX:SurvivorRatio=32"
-        "-XX:+PerfDisableSharedMem"
-        "-XX:MaxTenuringThreshold=1"
-      ];
-
-      # Build all packages for a given system
-      makePackages =
+      # Minecraft game-data generator. Builds the Fabric datagen mod, runs the
+      # modded + vanilla data generators, extracts client-JAR assets, and writes
+      # everything into src/lib/typecraft/data/ (gitignored; this regenerates it).
+      makeDatagen =
         pkgs:
         let
           serverJar = pkgs.fetchurl {
-            url = "https://piston-data.mojang.com/v1/objects/64bb6d763bed0a9f1d632ec347938594144943ed/server.jar";
-            sha256 = "09hpvmjnspf74k8ks9imcc3lqz8p3gjald3y3j9nz035704qwfzq";
+            url = "https://piston-data.mojang.com/v1/objects/97ccd4c0ed3f81bbb7bfacddd1090b0c56f9bc51/server.jar";
+            sha256 = "0hnbxnghbbki3vlgwkrxnr06nj92ig6qzbqpzml4gxi8hg1yfiyd";
           };
-          serverProperties = pkgs.writeText "server.properties" ''
-            max-players=100
-            online-mode=false
-            pvp=false
-            difficulty=peaceful
-            gamemode=survival
-            enable-command-block=true
-            spawn-protection=0
-            view-distance=10
-            simulation-distance=6
-            server-port=25565
-            level-seed=typecraft
-            motd=Steve Bot Testing Server
-            white-list=false
-            spawn-monsters=true
-            spawn-animals=true
-            spawn-npcs=true
-            allow-flight=false
-            rate-limit=0
-            enable-rcon=true
-            rcon.password=${rconPassword}
-            rcon.port=${rconPort}
-            broadcast-rcon-to-ops=true
-          '';
-          opsJson = pkgs.writeText "ops.json" (
-            builtins.toJSON [
-              {
-                uuid = "8cf67a27-46d2-366b-b426-26e174de7007";
-                name = "Bird47";
-                level = 4;
-                bypassesPlayerLimit = true;
-              }
-              {
-                uuid = "5627dd98-e6be-3c21-b8a8-e92344183641";
-                name = "Steve";
-                level = 4;
-                bypassesPlayerLimit = true;
-              }
-              {
-                uuid = "62ff0b01-b491-3228-9dff-e7512ac3df09";
-                name = "TestWood";
-                level = 4;
-                bypassesPlayerLimit = true;
-              }
-              {
-                uuid = "cfabfddb-9454-3464-89f6-4b9739b31378";
-                name = "TestMine";
-                level = 4;
-                bypassesPlayerLimit = true;
-              }
-              {
-                uuid = "bc62a0e8-28ba-3990-bb75-3243edbaaaae";
-                name = "TestCraft";
-                level = 4;
-                bypassesPlayerLimit = true;
-              }
-              {
-                uuid = "6cb83f7d-6083-337e-9f3b-fc432b78c868";
-                name = "TestSmelt";
-                level = 4;
-                bypassesPlayerLimit = true;
-              }
-              {
-                uuid = "6d9e2f2c-1a69-3188-a71c-1b083e2c913a";
-                name = "TestCombat";
-                level = 4;
-                bypassesPlayerLimit = true;
-              }
-              {
-                uuid = "8158f5a2-defc-329c-85bf-e0bf4cd705fd";
-                name = "TestFood";
-                level = 4;
-                bypassesPlayerLimit = true;
-              }
-              {
-                uuid = "90e75911-9640-3547-ab02-f3bf7935d34b";
-                name = "TestNether";
-                level = 4;
-                bypassesPlayerLimit = true;
-              }
-              {
-                uuid = "c24246ee-47cc-3053-bbec-cf068c18fa59";
-                name = "TestEnd";
-                level = 4;
-                bypassesPlayerLimit = true;
-              }
-            ]
-          );
+          clientJar = pkgs.fetchurl {
+            url = "https://piston-data.mojang.com/v1/objects/4e618f09a0c649dde3fdf829df443ce0b8831e65/client.jar";
+            sha256 = "1c6hb61pmmrh2wqlydbdvd9ljbnyqzcgm0hyy3plar36fa2ibcxi";
+          };
         in
-        rec {
-          startServer = pkgs.writeShellScriptBin "minecraft-server" ''
-            set -euo pipefail
+        pkgs.writeShellScriptBin "datagen" ''
+          set -euo pipefail
+          PROJ_DIR="''${PROJ_DIR:-$(pwd)}"
+          MOD_DIR="$PROJ_DIR/src/lib/typecraft/datagen/mod"
+          OUT_DIR="$PROJ_DIR/src/lib/typecraft/data"
 
-            # Load .env if it exists (for MC_MEMORY etc.)
-            if [ -f .env ]; then set -a; source .env; set +a; fi
+          echo "=== Typecraft Data Generator (eye-of-steve) ==="
+          echo "Minecraft ${version}"
+          echo ""
 
-            # Kill any running server
-            ${pkgs.procps}/bin/pkill -f 'server.jar nogui' 2>/dev/null && echo 'Stopped old MC server' && sleep 3 || true
+          # Step 1: Build the Fabric mod
+          echo "Building Fabric mod..."
+          cd "$MOD_DIR"
+          ${pkgs.gradle}/bin/gradle build --no-daemon --quiet 2>&1 | tail -5
+          MOD_JAR=$(find build/libs -name "*.jar" ! -name "*-sources.jar" | head -1)
+          if [ -z "$MOD_JAR" ]; then
+            echo "ERROR: Mod JAR not found after build"
+            exit 1
+          fi
+          echo "Built: $MOD_JAR"
+          cd "$PROJ_DIR"
 
-            # Create and enter server directory
-            mkdir -p data/server
-            cd data/server
+          # Step 2: Run Fabric server with our mod via Gradle runServer
+          echo ""
+          echo "Running Fabric server with datagen mod..."
+          cd "$MOD_DIR"
 
-            # Fresh world every time
-            rm -rf world
+          # Accept EULA for the server
+          mkdir -p run
+          echo "eula=true" > run/eula.txt
 
-            # Setup eula
-            echo "eula=true" > eula.txt
+          # Run the modded server — our mod extracts data then calls System.exit(0)
+          ${pkgs.gradle}/bin/gradle runServer --no-daemon 2>&1 | grep -E "typecraft-datagen|ERROR|Starting|Done" || true
 
-            # Copy server.properties and ops.json
-            cp -f ${serverProperties} server.properties
-            cp -f ${opsJson} ops.json
-            chmod +w server.properties ops.json
+          # Check output
+          if [ ! -d "run/typecraft-data" ]; then
+            echo "ERROR: No data output directory found"
+            echo "Check run/ for server logs"
+            ls -la run/
+            exit 1
+          fi
+          WORK_DIR="$MOD_DIR/run"
 
-            echo "Starting Minecraft Server ${version}..."
-            echo "Server will be available at: localhost:25565"
-            echo "RCON available at: localhost:${rconPort}"
-            echo ""
+          # Step 3: Also run vanilla --reports for recipes/tags/etc
+          echo ""
+          echo "Running vanilla data generator..."
+          REPORTS_DIR=$(mktemp -d)
+          cd "$REPORTS_DIR"
+          ${pkgs.jre}/bin/java \
+            -DbundlerMainClass=net.minecraft.data.Main \
+            -jar ${serverJar} \
+            --reports --server \
+            --output "$REPORTS_DIR/output" 2>&1 | tail -3
+          REPORTS_DIR="$REPORTS_DIR/output"
 
-            exec ${pkgs.jre}/bin/java -Xmx18G -Xms1G ${jvmOpts} -jar ${serverJar} nogui
-          '';
+          # Step 4: Transform into the data dir
+          echo ""
+          echo "Transforming data..."
+          mkdir -p "$OUT_DIR"
 
-          runReset = pkgs.writeShellScriptBin "run-reset" ''
-            set -euo pipefail
-            cd "$(pwd)"
+          # Copy mod output directly
+          cp "$WORK_DIR/typecraft-data/"*.json "$OUT_DIR/"
 
-            mkdir -p data/server
+          # Copy recipes from vanilla reports
+          if [ -d "$REPORTS_DIR/data/minecraft/recipe" ]; then
+            cp -r "$REPORTS_DIR/data/minecraft/recipe" "$OUT_DIR/recipes-raw"
+            echo "Copied recipes"
+          fi
 
-            # Generate world backup if missing
-            if [ ! -d data/world ]; then
-              echo "No world backup — generating..."
-              ${startServer}/bin/minecraft-server > data/server/server.log 2>&1 &
-              GEN_PID=$!
-              while ! ${pkgs.netcat}/bin/nc -z localhost ${rconPort} 2>/dev/null; do sleep 1; done
-              sleep 3
-              kill $GEN_PID 2>/dev/null; wait $GEN_PID 2>/dev/null || true
-              sleep 2
-              cp -r data/server/world data/world
-              echo "Backup saved to data/world"
-            fi
+          # Copy tags
+          if [ -d "$REPORTS_DIR/data/minecraft/tags" ]; then
+            cp -r "$REPORTS_DIR/data/minecraft/tags" "$OUT_DIR/tags"
+            echo "Copied tags"
+          fi
 
-            # Kill running server
-            ${pkgs.procps}/bin/pkill -9 -f "server.jar nogui" 2>/dev/null || true
-            sleep 2
+          # Copy biome data for tints
+          if [ -d "$REPORTS_DIR/data/minecraft/worldgen/biome" ]; then
+            cp -r "$REPORTS_DIR/data/minecraft/worldgen/biome" "$OUT_DIR/biomes-raw"
+            echo "Copied biome data"
+          fi
 
-            # Reset world
-            rm -rf data/server/world
-            cp -r data/world data/server/world
-            echo "World reset."
+          # Copy vanilla reports
+          if [ -d "$REPORTS_DIR/reports" ]; then
+            cp "$REPORTS_DIR/reports/items.json" "$OUT_DIR/items-raw.json" 2>/dev/null || true
+            cp "$REPORTS_DIR/reports/registries.json" "$OUT_DIR/registries-raw.json" 2>/dev/null || true
+            cp "$REPORTS_DIR/reports/packets.json" "$OUT_DIR/packets-raw.json" 2>/dev/null || true
+            echo "Copied vanilla reports"
+          fi
 
-            # Restart server
-            ${startServer}/bin/minecraft-server > data/server/server.log 2>&1 &
-            SERVER_PID=$!
+          # Step 5: Extract assets from client JAR
+          echo ""
+          echo "Extracting assets from client JAR..."
+          if [ -f "${clientJar}" ]; then
+            ASSETS_DIR="$OUT_DIR/assets"
+            mkdir -p "$ASSETS_DIR"
+            ${pkgs.unzip}/bin/unzip -qo "${clientJar}" \
+              "assets/minecraft/textures/block/*" \
+              "assets/minecraft/textures/entity/*" \
+              "assets/minecraft/textures/item/*" \
+              "assets/minecraft/models/block/*" \
+              "assets/minecraft/models/item/*" \
+              "assets/minecraft/blockstates/*" \
+              -d "$ASSETS_DIR"
+            # Flatten: move assets/minecraft/* up one level
+            cp -r "$ASSETS_DIR/assets/minecraft/"* "$ASSETS_DIR/"
+            rm -rf "$ASSETS_DIR/assets"
+            echo "Extracted textures, models, blockstates from client JAR"
+            echo "  blocks: $(ls "$ASSETS_DIR/textures/block/" | wc -l) block textures"
+            echo "  items: $(ls "$ASSETS_DIR/textures/item/" 2>/dev/null | wc -l) item textures"
+            echo "  entities: $(ls "$ASSETS_DIR/textures/entity/" 2>/dev/null | wc -l) entity textures"
+            echo "  models: $(ls "$ASSETS_DIR/models/block/" | wc -l) block models"
+            echo "  item models: $(ls "$ASSETS_DIR/models/item/" 2>/dev/null | wc -l) item models"
+            echo "  blockstates: $(ls "$ASSETS_DIR/blockstates/" | wc -l) blockstates"
+          else
+            echo "WARNING: Client JAR not found at ${clientJar}"
+          fi
 
-            while ! ${pkgs.netcat}/bin/nc -z localhost 25565 2>/dev/null; do sleep 1; done
-            while ! ${pkgs.netcat}/bin/nc -z localhost ${rconPort} 2>/dev/null; do sleep 1; done
-            while ! ${pkgs.mcrcon}/bin/mcrcon -H localhost -P ${rconPort} -p ${rconPassword} "list" 2>/dev/null | grep -q "players"; do sleep 1; done
-            echo "Server ready. (PID $SERVER_PID)"
-            wait $SERVER_PID
-          '';
-
-          startZellij = pkgs.writeShellScriptBin "steve-dev" ''
-            set -euo pipefail
-            STEVE_DIR="''${STEVE_DIR:-$(pwd)}"
-            TYPECRAFT_DIR="''${TYPECRAFT_DIR:-$(dirname "$STEVE_DIR")/typecraft}"
-            MC_SERVER="${startServer}/bin/minecraft-server"
-
-            export PATH="$HOME/.local/bin:$PATH:${
-              pkgs.lib.makeBinPath [
-                pkgs.zellij
-                pkgs.lazygit
-                pkgs.btop
-                pkgs.nodejs_25
-                pkgs.jre
-                pkgs.git
-                pkgs.procps
-                pkgs.gnused
-                pkgs.gawk
-                pkgs.gnugrep
-              ]
-            }"
-
-            layout=/tmp/steve-dev-layout.kdl
-            cat > "$layout" <<'LAYOUT'
-            layout {
-              default_tab_template {
-                pane size=1 borderless=true {
-                  plugin location="zellij:tab-bar"
-                }
-                children
-                pane size=2 borderless=true {
-                  plugin location="zellij:status-bar"
-                }
-              }
-              tab name="steve" cwd="__STEVE_DIR__" {
-                pane stacked=true {
-                  pane expanded=true command="lazygit"
-                  pane command="nvim" {
-                    args "."
-                  }
-                }
-              }
-              tab name="typecraft" cwd="__TYPECRAFT_DIR__" {
-                pane stacked=true {
-                  pane expanded=true command="lazygit"
-                  pane command="nvim" {
-                    args "."
-                  }
-                }
-              }
-              tab name="server" cwd="__STEVE_DIR__" focus=true {
-                pane command="__MC_SERVER__"
-              }
-              tab name="claude" cwd="__STEVE_DIR__" {
-                pane command="bash" {
-                  args "-lc" "npx @anthropic-ai/claude-code@latest --dangerously-skip-permissions"
-                }
-              }
-              tab name="remote" cwd="__STEVE_DIR__" {
-                pane command="bash" {
-                  args "-lc" "npx @anthropic-ai/claude-code@latest remote-control --spawn worktree"
-                }
-              }
-              tab name="shell" cwd="__STEVE_DIR__" {
-                pane
-              }
-              tab name="rcon" cwd="__STEVE_DIR__" {
-                pane command="bash" {
-                  args "-lc" "node src/rcon-cli.ts; exec bash -l"
-                }
-              }
-              tab name="race" cwd="__STEVE_DIR__" {
-                pane command="bash" {
-                  args "-lc" "echo '$ node src/main.ts --bots 10 --timeout 600'; read; node src/main.ts --bots 10 --timeout 600; exec bash -l"
-                }
-              }
-              tab name="results" cwd="__STEVE_DIR__" {
-                pane command="bash" {
-                  args "-lc" "while true; do out=$(node src/race-summary.ts 2>&1); printf '\\033[H\\033[J%s\\n' \"$out\"; sleep 2; done"
-                }
-              }
-              tab name="system" {
-                pane command="btop"
-              }
-            }
-            LAYOUT
-            ${pkgs.gnused}/bin/sed -i \
-              -e "s|__STEVE_DIR__|$STEVE_DIR|g" \
-              -e "s|__TYPECRAFT_DIR__|$TYPECRAFT_DIR|g" \
-              -e "s|__MC_SERVER__|$MC_SERVER|g" \
-              "$layout"
-
-            SESSION="steve-dev"
-            zellij delete-session "$SESSION" 2>/dev/null || true
-            exec zellij -s "$SESSION" -n "$layout"
-          '';
-        };
-
-      treefmtEval = treefmt-nix.lib.evalModule devPkgs {
-        projectRootFile = "flake.nix";
-        programs.biome.enable = true;
-        programs.nixfmt.enable = true;
-      };
-
-      pre-commit-check = git-hooks-nix.lib.${devSystem}.run {
-        src = ./.;
-        hooks = {
-          treefmt = {
-            enable = true;
-            package = treefmtEval.config.build.wrapper;
-          };
-          biome-lint = {
-            enable = true;
-            name = "biome lint";
-            entry = "${devPkgs.nodejs_25}/bin/npx biome lint .";
-            pass_filenames = false;
-            language = "system";
-          };
-          tsc = {
-            enable = true;
-            name = "tsc";
-            entry = "${devPkgs.nodejs_25}/bin/npx tsc --noEmit";
-            pass_filenames = false;
-            language = "system";
-            types = [ "ts" ];
-          };
-        };
-      };
+          echo ""
+          echo "=== Done ==="
+          echo "Output: $OUT_DIR/"
+          ls -la "$OUT_DIR/"
+        '';
     in
     {
-      formatter.${devSystem} = treefmtEval.config.build.wrapper;
+      packages = forAllSystems (system: {
+        default = makeDatagen (pkgsFor system);
+        datagen = makeDatagen (pkgsFor system);
+      });
 
-      checks.${devSystem} = {
-        formatting = treefmtEval.config.build.check self;
-        inherit pre-commit-check;
-      };
-
-      packages = forAllSystems (
-        system:
-        let
-          p = makePackages (pkgsFor system);
-        in
-        {
-          default = p.startZellij;
-          server = p.startServer;
-          reset = p.runReset;
-        }
-      );
-
-      apps = forAllSystems (
-        system:
-        let
-          p = makePackages (pkgsFor system);
-        in
-        {
-          default = {
-            type = "app";
-            program = "${p.startZellij}/bin/steve-dev";
-          };
-          reset = {
-            type = "app";
-            program = "${p.runReset}/bin/run-reset";
-          };
-        }
-      );
-
-      devShells.${devSystem}.default =
-        let
-          p = makePackages devPkgs;
-        in
-        devPkgs.mkShell {
-          shellHook = pre-commit-check.shellHook + ''
-
-            echo ""
-            echo "  steve — minecraft speedrun bot"
-            echo ""
-            echo "  nix run                 start MC server"
-            echo "  nix run .#reset         reset world + restart server"
-            echo "  node src/rcon-cli.ts    interactive RCON console"
-            echo "  node src/main.ts N T    race N bots for T seconds"
-            echo "  node --test src/test.ts run tests"
-            echo "  nix fmt                 format (biome + nixfmt)"
-            echo ""
-          '';
-          buildInputs = [
-            p.startServer
-            devPkgs.jre
-            devPkgs.nodejs_25
-            treefmtEval.config.build.wrapper
-          ]
-          ++ pre-commit-check.enabledPackages;
+      apps = forAllSystems (system: {
+        default = {
+          type = "app";
+          program = "${makeDatagen (pkgsFor system)}/bin/datagen";
         };
+        datagen = {
+          type = "app";
+          program = "${makeDatagen (pkgsFor system)}/bin/datagen";
+        };
+      });
+
+      devShells.${devSystem}.default = (pkgsFor devSystem).mkShell {
+        buildInputs = [
+          (pkgsFor devSystem).jre
+          (pkgsFor devSystem).gradle
+          (pkgsFor devSystem).nodejs
+        ];
+      };
     };
 }

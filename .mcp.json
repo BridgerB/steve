@@ -1,0 +1,33 @@
+{
+	"mcpServers": {
+		"steve": {
+			"type": "stdio",
+			"command": "node",
+			"args": [
+				"--env-file=.env",
+				"--import",
+				"./typecraft-resolve.mjs",
+				"src/lib/steve/mcp.ts"
+			]
+		},
+		"svelte": {
+			"type": "stdio",
+			"command": "npx",
+			"env": {
+
+			},
+			"args": [
+				"-y",
+				"@sveltejs/mcp"
+			]
+		},
+		"playwright": {
+			"type": "stdio",
+			"command": "npx",
+			"args": [
+				"-y",
+				"@playwright/mcp@latest"
+			]
+		}
+	}
+}
