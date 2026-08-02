@@ -4,7 +4,7 @@
  */
 
 import type { Bot } from "typecraft";
-import { getMemory, isInWaterTrap } from "./lib/bot-utils.ts";
+import { getMemory, needsWaterEscape } from "./lib/bot-utils.ts";
 import type {
 	ArmorTier,
 	Dimension,
@@ -329,6 +329,6 @@ export const syncFromBot = (bot: Bot): GameState => {
 				}
 			: { x: 0, y: 64, z: 0 },
 		alive: bot.health > 0,
-		inWaterTrap: isInWaterTrap(bot),
+		inWaterTrap: needsWaterEscape(bot),
 	};
 };

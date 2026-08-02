@@ -103,7 +103,20 @@ const pathfinderCache = new WeakMap<Bot, Pathfinder>();
 export const getPathfinder = (bot: Bot): Pathfinder => {
 	let pf = pathfinderCache.get(bot);
 	if (!pf) {
-		pf = createPathfinder(bot);
+		// BOUND the A* search. Defaults are searchRadius:-1 (UNBOUNDED) + thinkTimeout
+		// 10s — so an unreachable/far target (stone across a mountain) makes the
+		// synchronous A* churn the event loop, the bot misses server keep-alives, and
+		// gets KICKED (~60s cadence: reconnect→Mine Cobblestone→explore→kick). ruststeve
+		// hit the identical bug and bounded it. Cap the radius and the think budget so a
+		// hard path fails fast (→ explore/dig-down logic) instead of hanging the socket.
+		pf = createPathfinder(bot, {
+			searchRadius: 64,
+			thinkTimeout: 1500,
+			tickTimeout: 15, // cap per-tick A* CPU so it can't starve keep-alives → kicks
+		});
+		try {
+			logEvent("debug", "pf_config", "searchRadius=64 thinkTimeout=1500 tickTimeout=15");
+		} catch {}
 		// Blocks the bot pillars/scaffolds with to CLIMB — enabling getMoveUp so the
 		// pathfinder can plan place-a-block-and-jump routes upward (the follower equips
 		// + places one of these). Without this, the only "up" it can plan is digging
@@ -572,6 +585,14 @@ interface BotMemory {
 	resources: Map<string, { x: number; y: number; z: number }[]>;
 	// Surface top of the mine staircase — the way back up for resupply.
 	mineEntry: { x: number; y: number; z: number } | null;
+	// Progress tracker for the water-escape override — last spot we made horizontal
+	// progress from while in water, and when. Lets the override tell "wading/swimming
+	// ACROSS toward a goal" (keep moving) from "pinned/drowning" (force escape).
+	waterProgressPos: { x: number; y: number; z: number } | null;
+	waterProgressAt: number;
+	// When the bot first entered its current stretch of water — used to bound how far
+	// it may wade before we force an escape back, so it never strands mid-lake.
+	waterEnterAt: number;
 }
 const botMemory = new WeakMap<Bot, BotMemory>();
 
@@ -583,6 +604,9 @@ export const getMemory = (bot: Bot): BotMemory => {
 			furnacePos: null,
 			resources: new Map(),
 			mineEntry: null,
+			waterProgressPos: null,
+			waterProgressAt: 0,
+			waterEnterAt: 0,
 		};
 		botMemory.set(bot, mem);
 	}
@@ -1398,7 +1422,13 @@ export const reclaimCraftingGrid = async (bot: Bot): Promise<void> => {
 	// the output + grid (everything except the 4 armor slots right before the
 	// inventory) so we never accidentally unequip armor.
 	const gridEnd = Math.max(0, win.inventoryStart - 4);
-	for (let slot = 0; slot < gridEnd; slot++) {
+	// Sweep HIGH→LOW so the 2x2 grid ingredients (slots 1..gridEnd-1) are pulled out
+	// BEFORE the output slot (0). Order is load-bearing: shift-clicking the output
+	// *crafts* whatever recipe the grid currently forms, so if we hit slot 0 while a
+	// stray plank still sits in the grid we mint a junk oak_button (and consume the
+	// plank) instead of reclaiming it. Emptying the grid first breaks the recipe, so
+	// by the time we reach slot 0 it holds only a genuinely-stranded crafted result.
+	for (let slot = gridEnd - 1; slot >= 0; slot--) {
 		const s = win.slots[slot];
 		if (s && s.count > 0) {
 			try {
@@ -1509,11 +1539,19 @@ export const craftItem = async (
 	const attemptCraft = async () => {
 		if (craftingTable) {
 			try {
-				await moveCloser(bot, craftingTable.position, { maxDistance: 2.5 });
-				await bot.lookAt(
-					offset(craftingTable.position, 0.5, 0.5, 0.5),
-					true,
-				);
+				// Get in interact range BEFORE crafting. moveCloser is only a short nudge;
+				// when a preempting step (e.g. Mine Cobblestone, via failure-backoff) has
+				// dragged the bot ~6+ blocks off the table between attempts, the nudge
+				// can't close it and bot.craft dies "Too far to interact (dist=6.4,
+				// max=6)" — the pickaxe never gets made and the run churns craft↔mine
+				// forever. Pathfind in whenever we're beyond a nudge's reach.
+				const d = distance(bot.entity.position, craftingTable.position);
+				if (d > 3) {
+					await goTo(bot, craftingTable.position, { range: 2, timeout: 12000 });
+				} else {
+					await moveCloser(bot, craftingTable.position, { maxDistance: 2.5 });
+				}
+				await bot.lookAt(offset(craftingTable.position, 0.5, 0.5, 0.5), true);
 				await sleep(150);
 			} catch {}
 		}
@@ -1774,12 +1812,144 @@ export const isInWaterTrap = (bot: Bot): boolean => {
 	return false;
 };
 
+/** Progress-aware trigger for the escape_water OVERRIDE (priority-0 step). Pure
+ *  isInWaterTrap trips on ANY water-at-feet, so it drags the bot back to shore every
+ *  time it tries to WADE/SWIM ACROSS water toward a goal (e.g. the only trees are on
+ *  the far side of a lake) — an endless enter→escape→enter loop that never crosses.
+ *  So only demand an escape when the bot is genuinely drowning or pinned, NOT while
+ *  it's crossing:
+ *    - head underwater (isInWater) → escape now: typecraft has NO buoyancy, so it
+ *      sinks and drowns in deep water; the only water it can traverse is shallow
+ *      (head-up) anyway, so a submerged head means real trouble.
+ *    - in a water trap but head-up AND no horizontal progress for ~4s → pinned at a
+ *      bank → escape (the carve-a-stair logic takes over).
+ *  A genuine crossing keeps moving, so it never trips — the bot is free to reach the
+ *  far side, and only once it's actually stuck does the override kick in. */
+export const needsWaterEscape = (bot: Bot): boolean => {
+	const mem = getMemory(bot);
+	if (!isInWaterTrap(bot)) {
+		mem.waterProgressPos = null;
+		mem.waterEnterAt = 0;
+		return false;
+	}
+	if (bot.entity?.isInWater) return true; // submerged → drowning risk, escape now
+	const now = Date.now();
+	if (!mem.waterEnterAt) mem.waterEnterAt = now;
+	// BOUND the crossing. Wading across a stream/puddle is fine, but without a limit
+	// the bot swims deep into a lake/ocean chasing a goal on the far side and strands
+	// 100+ blocks from any shore, unable to escape (seen: 14 min, 7k swims mid-lake).
+	// After ~8s continuously in water it's no longer a quick wade — escape NOW, while
+	// the entry shore is still inside dryTargets' ~16-block scan, and go back.
+	if (now - mem.waterEnterAt > 8000) return true;
+	const p = bot.entity?.position;
+	if (!p) return true;
+	const prev = mem.waterProgressPos;
+	if (!prev || Math.hypot(p.x - prev.x, p.z - prev.z) > 1.5) {
+		mem.waterProgressPos = { x: p.x, y: p.y, z: p.z };
+		mem.waterProgressAt = Date.now();
+		return false; // still moving across — let it keep crossing
+	}
+	return Date.now() - mem.waterProgressAt > 4000; // stuck in water ~4s → escape
+};
+
+// LAND plants a bot can stand inside in open air — explicitly NOT seagrass/kelp/lily
+// (those grow only on/under water, so they never mark dry ground).
+const DRY_PLANTS = new Set([
+	"short_grass",
+	"tall_grass",
+	"fern",
+	"large_fern",
+	"sugar_cane",
+	"snow",
+	"snow_layer",
+	"vine",
+]);
+
+/**
+ * PRIMARY water escape — winner of the /debug/swim strategy bake-off
+ * ("pathfind-scaffold": 3/3 PASS, ~4.5s). Route to REAL shore with the general
+ * pathfinder. Two fixes over the old carve-a-stair-only escape:
+ *   1. A WIDE dry-target scan (R=40) whose targets need genuinely-DRY (non-water)
+ *      headroom. The old signal counted water as passable, so it aimed the bot at
+ *      submerged SEAFLOOR and it stood there underwater; requiring non-water air
+ *      above means the target is land above the waterline = real shore.
+ *   2. Temporarily drop liquidCost (production 100 → 1.5) so A* is WILLING to wade
+ *      the water it's already floating in and swim to the nearest shore, then walk /
+ *      step / scaffold up the bank. liquidCost is RESTORED afterward so normal nav
+ *      still avoids wading into lakes.
+ * Returns true only once STABLY on dry land; returns false (→ fall through to the
+ * committed stair-dig) when no real shore is reachable (a fully boxed pocket).
+ */
+const escapeViaPathfinder = async (bot: Bot): Promise<boolean> => {
+	const p = bot.entity?.position;
+	if (!p) return false;
+	const cx = Math.floor(p.x);
+	const cy = Math.floor(p.y);
+	const cz = Math.floor(p.z);
+	const dryAir = (b: ReturnType<typeof getBlock>): boolean =>
+		!b || b.name === "air" || b.name === "cave_air" || DRY_PLANTS.has(b.name);
+	const targets: { v: Vec3; d: number }[] = [];
+	const R = 40;
+	for (let dx = -R; dx <= R; dx++) {
+		for (let dz = -R; dz <= R; dz++) {
+			if (dx === 0 && dz === 0) continue;
+			const x = cx + dx;
+			const z = cz + dz;
+			for (let y = cy + 8; y >= cy - 6; y--) {
+				const g = getBlock(bot, vec3(x, y, z));
+				if (!isStandableGround(g) || g?.name.includes("water")) continue;
+				if (!dryAir(getBlock(bot, vec3(x, y + 1, z)))) break;
+				if (!dryAir(getBlock(bot, vec3(x, y + 2, z)))) break;
+				if (getBlock(bot, vec3(x, y - 1, z))?.name.includes("water")) break;
+				targets.push({
+					v: vec3(x, y + 1, z),
+					d: Math.abs(dx) + Math.abs(dz) + Math.abs(y + 1 - cy) * 2,
+				});
+				break;
+			}
+		}
+	}
+	if (targets.length === 0) return false;
+	targets.sort((a, b) => a.d - b.d);
+
+	const pf = getPathfinder(bot);
+	pf.setMovements({ liquidCost: 1.5 }); // willing to wade the water we're in
+	try {
+		// Keep this SHORT: on a reachable shore the walk-out finishes in a few
+		// seconds, so a small budget still wins the common case — while a boxed pocket
+		// (no walkable route) fails fast and falls through to the stair-dig instead of
+		// burning the whole escape budget here.
+		for (let i = 0; i < Math.min(2, targets.length); i++) {
+			if (isOnDryLand(bot)) break;
+			await goTo(bot, targets[i].v, { range: 0, timeout: 8000 });
+			bot.clearControlStates();
+			await sleep(300);
+			if (isOnDryLand(bot) && !isInWaterTrap(bot)) {
+				logEvent(
+					"nav",
+					"escaped_water_pf",
+					`to ${targets[i].v.x},${targets[i].v.z}`,
+				);
+				return true;
+			}
+		}
+		return isOnDryLand(bot) && !isInWaterTrap(bot);
+	} finally {
+		pf.setMovements({ liquidCost: 100 }); // restore wade-avoidance for normal nav
+	}
+};
+
 export const escapeWater = async (
 	bot: Bot,
 	lastSafe?: Vec3,
 	opts: { final?: boolean } = {},
 ): Promise<boolean> => {
 	if (isOnDryLand(bot)) return true;
+
+	// PRIMARY: route out to real shore with the pathfinder (fast + no bank-climbing
+	// flakiness). Only fall through to the manual carve-a-stair logic below when no
+	// reachable shore exists (a fully boxed pocket).
+	if (await escapeViaPathfinder(bot)) return true;
 
 	// The first solid, diggable block straight up within reach — for a SEALED
 	// flooded cave (buoyancy presses our head to the cap), where pathfinding can't
@@ -1864,7 +2034,7 @@ export const escapeWater = async (
 			await bot.lookAt(vec3(pos.x + 0.5, pos.y + 0.5, pos.z + 0.5), true);
 			await Promise.race([
 				(bot.dig(b as never, true) as Promise<void>).catch(() => {}),
-				sleep(3000),
+				sleep(5000), // grounded-underwater dirt is ~3.75s (5× penalty); give it room
 			]);
 			bot.stopDigging();
 		} catch {
@@ -1874,7 +2044,7 @@ export const escapeWater = async (
 
 	logEvent("nav", opts.final ? "water_escape_final" : "swimming_out");
 	const start = Date.now();
-	const timeout = opts.final ? 90000 : 20000;
+	const timeout = opts.final ? 90000 : 35000;
 	const DIRS: [number, number][] = [
 		[1, 0],
 		[0, 1],
@@ -1911,11 +2081,24 @@ export const escapeWater = async (
 		return best;
 	};
 
-	let bestY = bot.entity?.position?.y ?? 0;
 	let dirIdx = 0;
 	let locked: Vec3 | null = null;
 	let lockUntil = 0;
-	let stall = 0;
+	// "Stuck" is tracked on a WALL CLOCK against an ABSOLUTE anchor, NOT per-target.
+	// In a tight pocket the target re-locks every second or two; resetting the
+	// progress signal on each re-lock meant the stall never built and the carve-out
+	// never fired. Here we only count REAL progress — rising a whole block, or
+	// traveling >3.5 blocks (a genuine swim toward a far shore) — and if neither
+	// happens for a few seconds the bot is pinned and we dig the wall open.
+	const pStart = bot.entity?.position;
+	let anchorX = pStart?.x ?? 0;
+	let anchorY = pStart?.y ?? 0;
+	let anchorZ = pStart?.z ?? 0;
+	let stuckSince = Date.now();
+	// Once pinned in a boxed pit we COMMIT to one horizontal dig direction and carve
+	// a staircase up it — re-deriving the direction each dig (from the constantly
+	// re-locking target) made the bot chip one block here, one there, never an exit.
+	let escapeDir: [number, number] | null = null;
 
 	while (Date.now() - start < timeout) {
 		const p = bot.entity?.position;
@@ -1924,26 +2107,45 @@ export const escapeWater = async (
 		const fy = Math.floor(p.y);
 		const fz = Math.floor(p.z);
 		if (isOnDryLand(bot)) {
-			// Already out and stable → done. Check this FIRST, before any inland nudge:
-			// the nudge (forward+jump) was knocking us straight back off the dry block
-			// before the success check, so the escape never returned and ran to timeout.
 			if (!isInWaterTrap(bot)) {
+				// Don't declare victory on a momentary bob to the surface. In a 1-wide
+				// water pocket boxed by dirt the bot pops to a dry Y for a single tick,
+				// isOnDryLand+!trap flickers true, we return "escaped" — then the next
+				// step shoves it straight back in and it oscillates forever
+				// (escape→mine→preempt→escape). Worse, this false-complete fires BEFORE
+				// the stall counter below can reach 3 and dig the wall open. Settle a
+				// beat and re-confirm we're STILL out; if we sank back, fall through to
+				// the swimming/notch-dig so stall builds and actually carves the pocket.
 				bot.clearControlStates();
-				logEvent("nav", "escaped_water");
-				return true;
+				await sleep(300);
+				if (!isInWaterTrap(bot) && isOnDryLand(bot)) {
+					logEvent("nav", "escaped_water");
+					return true;
+				}
+			} else {
+				// On a shore lip but still bobbing over the water edge — step inland onto
+				// firmer ground (away from the water) to clear the flickering trap signal.
+				const inland = inlandDir() ?? [0, 0];
+				await bot.lookAt(vec3(fx + inland[0] + 0.5, fy, fz + inland[1] + 0.5), true);
+				bot.setControlState("forward", true);
+				// Jump ONLY while submerged. On land, holding jump bunny-hops the bot
+				// straight across the beach so onGround never latches and it sails past
+				// the shore into the next pond (found in the strategy bake-off).
+				bot.setControlState("jump", bot.entity?.isInWater ?? false);
+				await sleep(350);
+				continue;
 			}
-			// On a shore lip but still bobbing over the water edge — step inland onto
-			// firmer ground (away from the water) to clear the flickering trap signal.
-			const inland = inlandDir() ?? [0, 0];
-			await bot.lookAt(vec3(fx + inland[0] + 0.5, fy, fz + inland[1] + 0.5), true);
-			bot.setControlState("forward", true);
-			bot.setControlState("jump", true);
-			await sleep(350);
-			continue;
 		}
 
-		// Sealed flooded cap on our SUBMERGED head → dig straight up toward the surface.
-		if (B(fx, fy + 1, fz)?.name.includes("water")) {
+		// Sealed flooded cap on our SUBMERGED head → dig straight up toward the surface,
+		// but ONLY when there's no horizontal way out. A flooded tunnel/passage HAS a dry
+		// end; chewing through a thick stone ceiling instead burns the whole escape budget
+		// at ~5s/dig, so when a dry target or retreat exists we swim to it rather than up.
+		if (
+			B(fx, fy + 1, fz)?.name.includes("water") &&
+			!dryTargets()[0] &&
+			!lastSafe
+		) {
 			const ceil = reachableCeiling();
 			if (ceil) {
 				await digAt(ceil);
@@ -1968,7 +2170,6 @@ export const escapeWater = async (
 				locked = vec3(fx + dx * 3, fy, fz + dz * 3);
 			}
 			lockUntil = Date.now() + 3000;
-			bestY = p.y;
 		}
 
 		// Clear our OWN headroom (head + above) so the impulse has room to lift us — but
@@ -1983,40 +2184,90 @@ export const escapeWater = async (
 		// don't turn away mid-climb.
 		await bot.lookAt(vec3(locked.x + 0.5, locked.y + 1, locked.z + 0.5), true);
 		bot.setControlState("forward", true);
-		bot.setControlState("jump", true);
+		// Jump only while submerged (see inland step above) — avoids bunny-hopping
+		// past the shore the instant the head surfaces.
+		bot.setControlState("jump", bot.entity?.isInWater ?? false);
 		await sleep(350);
 
 		const np2 = bot.entity?.position;
 		const ny = np2?.y ?? fy;
-		// Progress = a WHOLE block higher, or real horizontal travel. Sub-block bobbing
-		// in place (y 62.0↔62.8, floor stays 62) is NOT progress — counting it reset the
-		// stall and pinned the bot against a too-tall bank at a lake surface forever.
-		const movedXZ =
-			!!np2 && (Math.abs(np2.x - p.x) > 0.15 || Math.abs(np2.z - p.z) > 0.15);
-		if (Math.floor(ny) > Math.floor(bestY) || movedXZ) {
-			bestY = Math.max(bestY, ny);
-			stall = 0;
-			lockUntil = Date.now() + 3000; // making progress — keep pressing this bank
-		} else if (++stall >= 3) {
-			// Pinned: the bank is too tall to hop on the 0.3 impulse alone. Carve a NOTCH
-			// toward the target — clear the head-level block(s) ahead + the one above,
-			// LEAVING the foot block as the step the impulse lifts us onto. This frees the
-			// surface-of-a-lake stall the impulse-only climb can't.
-			const tdx = Math.sign(locked.x - fx);
-			const tdz = Math.sign(locked.z - fz);
-			for (const [ddx, ddz] of [
-				[tdx, 0],
-				[0, tdz],
-				[tdx, tdz],
-			]) {
-				if (ddx === 0 && ddz === 0) continue;
-				await digAt(B(fx + ddx, fy + 1, fz + ddz));
-				await digAt(B(fx + ddx, fy + 2, fz + ddz));
+		const rose = Math.floor(ny) > Math.floor(anchorY);
+		const traveled =
+			!!np2 && Math.hypot(np2.x - anchorX, np2.z - anchorZ) > 3.5;
+		if (rose || traveled) {
+			// Real progress — re-anchor here and reset the stuck clock.
+			if (np2) {
+				anchorX = np2.x;
+				anchorZ = np2.z;
 			}
-			stall = 0;
-			lockUntil = 0; // re-pick (maybe a now-lower/closer target) next iteration
+			anchorY = Math.max(anchorY, ny);
+			stuckSince = Date.now();
+			if (traveled) escapeDir = null; // left the pit entirely → re-evaluate
+			lockUntil = Date.now() + 3000; // making progress — keep pressing this bank
+		} else if (Date.now() - stuckSince > 2500) {
+			// Not progressing. WHICH way is out — and is that way actually walled, or is
+			// it just slow open water? Commit toward the exit (nearest dry target, else
+			// the retreat); in a flooded tunnel that's the dead-end-free direction.
+			const exit = dryTargets()[0] ?? lastSafe;
+			const ux = exit ? Math.sign(exit.x - fx) : (escapeDir?.[0] ?? 0);
+			const uz = exit ? Math.sign(exit.z - fz) : (escapeDir?.[1] ?? 0);
+			const walled =
+				diggable(B(fx + ux, fy, fz + uz)) ||
+				diggable(B(fx + ux, fy + 1, fz + uz));
+			if (!walled && (ux !== 0 || uz !== 0)) {
+				// Open water ahead — we're not pinned, just swimming slowly toward the
+				// exit. Keep pressing that way and reset the clock; digging here would
+				// only chew a pointless hole (e.g. a flooded tunnel's stone ceiling).
+				locked = vec3(fx + ux * 3, fy, fz + uz * 3);
+				lockUntil = Date.now() + 3000;
+				stuckSince = Date.now();
+			} else {
+				// Genuinely walled (a boxed pit): carve a COMMITTED staircase up-and-out.
+				// Pick ONE direction the first time and keep carving it until we surface —
+				// prefer the exit direction, else the first diggable-wall cardinal.
+				if (!escapeDir) {
+					const cardinals: [number, number][] = [
+						[1, 0],
+						[-1, 0],
+						[0, 1],
+						[0, -1],
+					];
+					escapeDir =
+						ux !== 0 || uz !== 0
+							? [ux, uz]
+							: (cardinals.find(([dx, dz]) =>
+									diggable(B(fx + dx, fy + 1, fz + dz)),
+								) ?? [1, 0]);
+				}
+				const [ex, ez] = escapeDir;
+				// GROUND FIRST. You can't dig while floating — mining is 5×(underwater) ×
+				// 5×(off-ground) = 25× slower, so a dig never finishes and the bot bobs
+				// forever. Stop pressing and let the (buoyancy-free) bot sink onto the
+				// floor so on_ground=true; then dirt breaks in ~3.75s (5×) instead of never.
+				bot.clearControlStates();
+				await sleep(600);
+				const gy = Math.floor(bot.entity?.position?.y ?? fy);
+				// Carve ONE ascending staircase step: clear the wall ahead at head + above
+				// (leaving the block ahead-below as the stair to step onto) + our own head.
+				await digAt(B(fx, gy + 1, fz));
+				await digAt(B(fx + ex, gy + 1, fz + ez));
+				await digAt(B(fx + ex, gy + 2, fz + ez));
+				logEvent(
+					"nav",
+					"pocket_dig",
+					`at ${fx},${gy},${fz} dir ${ex},${ez} og=${bot.entity?.onGround}`,
+				);
+				// Step up-and-forward onto the freshly-cut stair.
+				locked = vec3(fx + ex * 2, gy + 2, fz + ez * 2);
+				lockUntil = Date.now() + 4000;
+				stuckSince = Date.now(); // give the climb a beat
+			}
 		}
-		logEvent("nav", "swimming_out", `toward ${locked.x},${locked.z} @y${Math.floor(ny)}`);
+		logEvent(
+			"nav",
+			"swimming_out",
+			`toward ${locked.x},${locked.z} @y${Math.floor(ny)}`,
+		);
 	}
 
 	bot.clearControlStates();

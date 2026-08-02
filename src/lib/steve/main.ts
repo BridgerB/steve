@@ -264,8 +264,9 @@ export const startBot = async (): Promise<Bot> => {
 	});
 
 	bot.on("kicked", (reason) => {
-		log(`Kicked: ${reason}`);
-		logEvent("lifecycle", "kicked", reason);
+		const r = typeof reason === "string" ? reason : JSON.stringify(reason);
+		log(`Kicked: ${r}`);
+		logEvent("lifecycle", "kicked", r);
 		onGone();
 	});
 

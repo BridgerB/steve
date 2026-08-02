@@ -13,11 +13,17 @@ import {
 	getCraftingTable,
 	goTo,
 	interactReliably,
+	reclaimCraftingGrid,
 	success,
 } from "../../lib/bot-utils.ts";
 import type { StepResult } from "../../types.ts";
 
 export const craftPlanks = async (bot: Bot): Promise<StepResult> => {
+	// Recover logs/planks stranded in the 2x2 craft grid before reading inventory:
+	// bot.craft can leave items there, invisible to windowItems (which reads only the
+	// inventory section), so the bot loops "No logs in inventory" while holding logs
+	// (and mis-crafts junk buttons from the grid leftovers).
+	await reclaimCraftingGrid(bot);
 	const logs = windowItems(bot.inventory).filter((i) =>
 		i.name.includes("_log"),
 	);

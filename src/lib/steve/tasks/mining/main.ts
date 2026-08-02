@@ -867,11 +867,16 @@ export const mineBlock = async (
 		// Mine the block at feet level in our direction, or below feet
 		const py = Math.floor(bot.entity.position.y);
 
-		// Check: ahead at feet, ahead below, directly below
+		// Prefer mining DOWNWARD (a descending staircase) over ahead-at-feet. On a
+		// mountain/slope, breaking the block ahead-at-feet drops cobble that rolls DOWN
+		// the slope out of pickup range — `mined` rises but 0 is collected and
+		// collectDrops freezes chasing an unreachable drop (the exact 0-cobble stall).
+		// Digging ahead-and-below descends into the hill so the drop lands at our feet
+		// where collectDrops reaches it; the loop then steps down into the stair.
 		const candidates = [
+			bot.blockAt(offset(bot.entity.position, dirX, -1, dirZ)), // ahead + below → staircase down
+			bot.blockAt(offset(bot.entity.position, 0, -1, 0)), // straight below
 			bot.blockAt(offset(bot.entity.position, dirX, 0, dirZ)), // ahead at feet
-			bot.blockAt(offset(bot.entity.position, dirX, -1, dirZ)), // ahead below
-			bot.blockAt(offset(bot.entity.position, 0, -1, 0)), // below feet
 			bot.blockAt(offset(bot.entity.position, -dirX, 0, -dirZ)), // behind (if stuck)
 		] as (Block | null)[];
 

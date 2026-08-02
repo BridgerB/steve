@@ -43,6 +43,7 @@
 	"dependencies": {
 		"@babylonjs/core": "^9.0.0",
 		"@modelcontextprotocol/sdk": "^1.27.1",
+		"echarts": "^6.1.0",
 		"postgres": "^3.4.9",
 		"ws": "^8.19.0",
 		"zod": "^4.3.6"
