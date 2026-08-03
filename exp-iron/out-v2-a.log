@@ -1,0 +1,50 @@
+(node:98491) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  [gym:mine-iron-exp-patched] tp 467,64,1461 — running
+[patched] descended 64->24 stopped=null have=0 t=49s
+[patched] branchMine y=24 level=24 mined=0 dug=14 have=0/5 lost=true
+  [gym:mine-iron-exp-patched] FAIL 150.0s @467,64,1461 — gym timeout
+TRIAL 1/5 FAIL 150.0s @467,1461 raw_iron=0 — gym timeout
+  [gym:mine-iron-exp-patched] tp 1423,75,6091 — running
+[patched] descended 75->24 stopped=null have=0 t=56s
+[patched] branchMine y=24 level=24 mined=0 dug=14 have=0/5 lost=true
+  [gym:mine-iron-exp-patched] FAIL 150.0s @1423,75,6091 — gym timeout
+TRIAL 2/5 FAIL 150.0s @1423,6091 raw_iron=0 — gym timeout
+ERR [set_entity_data] Cannot convert undefined to a BigInt | len=17 hex=63acf219090340800000121e02131f01ff
+ERR [set_entity_data] Cannot convert undefined to a BigInt | len=17 hex=63adf219090340800000121e02131f01ff
+ERR [set_entity_data] Cannot convert undefined to a BigInt | len=14 hex=63aef219090340800000121e02ff
+ERR [set_entity_data] Cannot convert undefined to a BigInt | len=17 hex=63aff219090340800000121e02131f01ff
+ERR [set_entity_data] Cannot convert undefined to a BigInt | len=17 hex=63aff219090340800000121e02131f01ff
+ERR [set_entity_data] Cannot convert undefined to a BigInt | len=17 hex=63adf219090340800000121e02131f01ff
+ERR [set_entity_data] Cannot convert undefined to a BigInt | len=14 hex=63aef219090340800000121e02ff
+ERR [set_entity_data] Cannot convert undefined to a BigInt | len=17 hex=63acf219090340800000121e02131f01ff
+  [gym:mine-iron-exp-patched] tp 9693,79,2039 — running
+[patched] descended 79->63 stopped=null have=0 t=110s
+[patched] branchMine y=63 level=24 mined=0 dug=0 have=0/5 lost=false
+  [gym:mine-iron-exp-patched] FAIL 150.0s @9693,79,2039 — gym timeout
+TRIAL 3/5 FAIL 150.0s @9693,2039 raw_iron=0 — gym timeout
+  [gym:mine-iron-exp-patched] tp 1430,70,4931 — running
+[patched] descended 70->41 stopped=null have=0 t=110s
+[patched] branchMine y=41 level=24 mined=0 dug=0 have=0/5 lost=false
+  [gym:mine-iron-exp-patched] FAIL 150.0s @1430,70,4931 — gym timeout
+TRIAL 4/5 FAIL 150.0s @1430,4931 raw_iron=0 — gym timeout
+ERR [set_entity_data] Cannot convert undefined to a BigInt | len=20 hex=63e4f9190903408000000f0002121e02131f01ff
+ERR [set_entity_data] Cannot convert undefined to a BigInt | len=14 hex=63e5f919090340800000121e02ff
+ERR [set_entity_data] Cannot convert undefined to a BigInt | len=14 hex=63e6f919090340800000121e02ff
+ERR [set_entity_data] Cannot convert undefined to a BigInt | len=14 hex=63e7f919090340800000121e02ff
+ERR [set_entity_data] Cannot convert undefined to a BigInt | len=14 hex=63e6f919090340800000121e02ff
+ERR [set_entity_data] Cannot convert undefined to a BigInt | len=14 hex=63e5f919090340800000121e02ff
+ERR [set_entity_data] Cannot convert undefined to a BigInt | len=20 hex=63e4f9190903408000000f0002121e02131f01ff
+ERR [set_entity_data] Cannot convert undefined to a BigInt | len=14 hex=63e7f919090340800000121e02ff
+  [gym:mine-iron-exp-patched] tp 7209,92,3736 — running
+[patched] descended 92->34 stopped=null have=0 t=111s
+[patched] branchMine y=34 level=24 mined=0 dug=0 have=0/5 lost=false
+  [gym:mine-iron-exp-patched] FAIL 150.0s @7209,92,3736 — gym timeout
+TRIAL 5/5 FAIL 150.0s @7209,3736 raw_iron=0 — gym timeout
+
+SUMMARY strat=patched trials=5 pass=0/5 (0%) medianMs=150000
+  FAIL 150.0s @467,1461 — gym timeout
+  FAIL 150.0s @1423,6091 — gym timeout
+  FAIL 150.0s @9693,2039 — gym timeout
+  FAIL 150.0s @1430,4931 — gym timeout
+  FAIL 150.0s @7209,3736 — gym timeout

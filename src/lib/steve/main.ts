@@ -16,7 +16,7 @@ import {
 	attachSafety,
 	equipBestTool,
 	isInWaterTrap,
-	rememberResource,
+	registerBlockMemory,
 } from "./lib/bot-utils.ts";
 import { type Channel, createChannel } from "./lib/channel.ts";
 import {
@@ -110,30 +110,9 @@ export const startBot = async (): Promise<Bot> => {
 		logEvent(category, "debug", JSON.stringify(detail), bot.entity?.position);
 	});
 
-	// Passive memory — remember blocks relevant to current goal (iron_ingot)
-	for (const name of [
-		"oak_log",
-		"birch_log",
-		"spruce_log",
-		"jungle_log",
-		"acacia_log",
-		"dark_oak_log",
-		"coal_ore",
-		"deepslate_coal_ore",
-		"iron_ore",
-		"deepslate_iron_ore",
-		// NOTE: do NOT watch "water" — it's so common (oceans/lakes/cave water) that
-		// the blockSeen firehose blocks the event loop and the bot keepalive-times-out
-		// and disconnects. fillWaterBucket finds water via findBlocks instead.
-	]) {
-		bot.watchBlocks.add(name);
-	}
-	bot.on(
-		"blockSeen",
-		(name: string, pos: { x: number; y: number; z: number }) => {
-			rememberResource(bot, name, pos);
-		},
-	);
+	// Passive ore/log memory (blockSeen) — shared with the gym harness so both see the
+	// same no-X-ray sightings. (Deliberately excludes "water"; see registerBlockMemory.)
+	registerBlockMemory(bot);
 
 	bot.once("spawn", async () => {
 		log("Spawned into the world");
@@ -458,15 +437,27 @@ const runRace = async (count: number, timeoutMs: number) => {
 		? parseInt(process.env.STEVE_NUM_VIEWERS, 10)
 		: count;
 
-	// Spawn in the DRY DENSE forest at (696,696). The near-spawn forest (-64,-128)
-	// is a wet river valley (constant drownings), and its dry strip is too small
-	// and sparse (bots strand at Gather Wood). (696,696) is a full forest on dry
-	// ground — fast wood AND no spawn drownings. Standard 20×22 grid.
-	const FX = 696;
-	const FZ = 704;
+	// Spawn in the DRY DENSE forest around (696,704). The near-spawn forest (-64,-128)
+	// is a wet river valley (constant drownings), and its dry strip is too small and
+	// sparse (bots strand at Gather Wood). (696,704) is a full forest on dry ground —
+	// fast wood AND no spawn drownings. Standard grid.
+	//
+	// Small per-race jitter (±60, bounded) so consecutive relaunches don't chop the
+	// EXACT same 20×22 grid and cumulatively bare the core — but stay well inside the
+	// known forest (marching far NE overshot into a treeless biome). Bots that still
+	// hit a locally-thin patch now explore out to reachable trees (gather-wood fix)
+	// instead of fixating on unreachable remembered logs across a ravine.
+	// Base moved to a PRISTINE forest at (-3936, 3968): the original (696,704) region
+	// was worked out after a full session of races (~30+ bots), starving fresh bots at
+	// Gather Wood. This spot is a dense forest biome (771 leaves in a probe) far from any
+	// area a bot has visited, so it's untouched. If it too gets chopped over many races,
+	// re-locate a fresh forest via RCON `locate biome minecraft:forest` from a far point.
+	const raceNum = Math.floor((serialStart - 1) / Math.max(1, count));
+	const FX = -3936 + ((raceNum % 3) - 1) * 60;
+	const FZ = 3968 + ((Math.floor(raceNum / 3) % 3) - 1) * 60;
 	const spawns: { x: number; z: number }[] = [];
 	for (let i = 0; i < count; i++) {
-		spawns.push({ x: FX + ((i % 5) - 2) * 20, z: FZ + Math.floor(i / 5) * 22 });
+		spawns.push({ x: FX + ((i % 5) - 2) * 24, z: FZ + Math.floor(i / 5) * 26 });
 	}
 
 	// Spawn all bot processes first, then teleport them
@@ -475,10 +466,21 @@ const runRace = async (count: number, timeoutMs: number) => {
 	for (let i = 0; i < count; i++) {
 		const username = names[i]!;
 		await sleep(2000);
-		const steveProc = spawn(process.execPath, [join(ROOT, "src/main.ts")], {
+		// Child = one bot. Must run the real entry (src/lib/steve/main.ts, not the old
+		// src/main.ts) WITH the typecraft loader so the bare `typecraft` import resolves,
+		// and with STEVE_CLI=1 so the CLI dispatch actually runs (STEVE_BOT_MODE branch).
+		const steveProc = spawn(
+			process.execPath,
+			[
+				"--import",
+				join(ROOT, "typecraft-resolve.mjs"),
+				join(ROOT, "src/lib/steve/main.ts"),
+			],
+			{
 			cwd: ROOT,
 			env: {
 				...process.env,
+				STEVE_CLI: "1",
 				MC_PORT: String(SERVER_PORT),
 				MC_USERNAME: username,
 				STEVE_RACE_ID: RACE_ID,

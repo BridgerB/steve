@@ -32,58 +32,71 @@ const isNearbyAnimal = (bot: Bot, blacklist: Set<number>) => (e: Entity) =>
 	!blacklist.has(e.id) &&
 	distance(bot.entity.position, e.position) < 128;
 
-/**
- * Chase and kill a single animal, returning true if it died
- */
-const killAnimal = async (bot: Bot, animal: Entity): Promise<boolean> => {
-	const start = Date.now();
-	const maxTime = 15000; // 15s max per animal
-
-	while (Date.now() - start < maxTime) {
-		if (!bot.entities[animal.id]) break;
-
-		const dist = distance(bot.entity.position, animal.position);
-
-		// Sprint toward animal if too far
-		if (dist > 2) {
-			await bot.lookAt(animal.position);
-			bot.setControlState("forward", true);
-			bot.setControlState("sprint", true);
-			const chaseStart = Date.now();
-			while (
-				bot.entities[animal.id] &&
-				distance(bot.entity.position, animal.position) > 1.5 &&
-				Date.now() - chaseStart < 5000
-			) {
-				await bot.lookAt(animal.position);
-				await sleep(50);
-			}
-			bot.setControlState("forward", false);
-			bot.setControlState("sprint", false);
-		}
-
-		if (!bot.entities[animal.id]) break;
-
-		// Attack with proper cooldown (625ms for sword)
-		await bot.lookAt(offset(animal.position, 0, animal.height * 0.5, 0));
-		bot.attack(animal);
-		await sleep(650);
+/** Actively collect nearby dropped meat (server auto-pickup within ~1 block). */
+const collectMeat = async (bot: Bot): Promise<void> => {
+	try {
+		await bot.collectDrops(12, 6000, async (p) => {
+			await goTo(bot, p, { range: 1.2, timeout: 4000 });
+		});
+	} catch {
+		/* best-effort */
 	}
-
-	const dead = !bot.entities[animal.id];
-
-	// Walk forward to collect drops
-	if (dead) {
-		bot.setControlState("forward", true);
-		await sleep(600);
-		bot.setControlState("forward", false);
-	}
-
-	return dead;
 };
 
 /**
- * Find and kill animals for food
+ * Chase and kill a single animal. Drives forward+sprint CONTINUOUSLY (no stop
+ * between swings, so a fleeing animal can't outrun us), jump-hops when horizontal
+ * progress stalls (2-block rises / fences / a lip the animal backs onto), and swings
+ * on the sword cooldown whenever within a GENEROUS reach — skittish animals hover at
+ * 3.4-4.0 centre-to-centre, so a tight 3.2 gate never fired. CRUCIAL: every look uses
+ * force:true — a non-forced bot.lookAt() never resolves while stationary and hangs
+ * the whole loop (the old task froze staring at the animal for the full 90s).
+ */
+const killAnimal = async (bot: Bot, animal: Entity): Promise<boolean> => {
+	const deadline = Date.now() + 18000;
+	let lastHit = 0;
+	let lastPos = { x: bot.entity.position.x, z: bot.entity.position.z };
+	let lastProgress = Date.now();
+	bot.setControlState("sprint", true);
+	try {
+		while (Date.now() < deadline) {
+			const live = bot.entities[animal.id];
+			if (!live) break; // gone → dead (or despawned)
+			const dist = distance(bot.entity.position, live.position);
+			await bot.lookAt(offset(live.position, 0, (live.height ?? 1) * 0.5, 0), true);
+			bot.setControlState("forward", dist > 0.9);
+
+			const now = Date.now();
+			const moved = Math.hypot(
+				bot.entity.position.x - lastPos.x,
+				bot.entity.position.z - lastPos.z,
+			);
+			if (moved > 0.35) {
+				lastPos = { x: bot.entity.position.x, z: bot.entity.position.z };
+				lastProgress = now;
+			}
+			if (dist > 1.1 && now - lastProgress > 550) {
+				bot.setControlState("jump", true);
+				await sleep(110);
+				bot.setControlState("jump", false);
+				lastProgress = now;
+			}
+			if (dist <= 4.5 && now - lastHit >= 625) {
+				bot.attack(live);
+				lastHit = now;
+			}
+			await sleep(50);
+		}
+	} finally {
+		bot.setControlState("forward", false);
+		bot.setControlState("sprint", false);
+		bot.setControlState("jump", false);
+	}
+	return !bot.entities[animal.id];
+};
+
+/**
+ * Find and kill animals for food.
  */
 export const gatherFood = async (
 	bot: Bot,
@@ -104,7 +117,6 @@ export const gatherFood = async (
 
 		if (!animal) {
 			searchAttempts++;
-			// Head toward any visible animal at any distance
 			const farAnimal = findNearestEntity(
 				bot,
 				(e) =>
@@ -116,10 +128,7 @@ export const gatherFood = async (
 					"searching",
 					`attempt ${searchAttempts}, heading to ${farAnimal.name} at ${distance(bot.entity.position, farAnimal.position).toFixed(0)}`,
 				);
-				await goTo(bot, farAnimal.position, {
-					range: 10,
-					timeout: 10000,
-				});
+				await goTo(bot, farAnimal.position, { range: 6, timeout: 8000 });
 			} else {
 				logEvent("food", "searching", `attempt ${searchAttempts}, exploring`);
 				const angle = searchAttempts * 1.5;
@@ -138,10 +147,14 @@ export const gatherFood = async (
 		}
 
 		searchAttempts = 0;
-		const dist = distance(bot.entity.position, animal.position);
 
-		if (dist > 4) {
-			await goTo(bot, animal.position, { range: 1, timeout: 10000 });
+		// Pathfinder approach toward the animal's CURRENT cell — SHORT timeout + a
+		// loose range so we re-target the moving animal each loop instead of chasing
+		// one stale far path (goTo range:1 to a wandering animal diverges and the old
+		// task never reached the melee code). The pathfinder climbs terrain the raw
+		// chase can't; the melee burst then finishes with jump-assist + wide reach.
+		if (distance(bot.entity.position, animal.position) > 7) {
+			await goTo(bot, animal.position, { range: 4, timeout: 5000 });
 		}
 
 		await equipItem(bot, "sword", "hand");
@@ -149,22 +162,25 @@ export const gatherFood = async (
 		const killed = await killAnimal(bot, animal);
 		if (killed) {
 			kills++;
-			await sleep(500);
+			await collectMeat(bot);
 			logEvent(
 				"food",
 				"kill",
 				`${animal.name} #${kills} (food: ${countFood(bot)})`,
 			);
-		} else {
+		} else if (distance(bot.entity.position, animal.position) <= 12) {
+			// Genuinely stuck (barrier between us) — skip it. If it merely outran us it
+			// stays selectable and we re-approach next loop.
 			blacklist.add(animal.id);
-			logEvent("food", "gave_up", `${animal.name} after 10 hits`);
+			logEvent("food", "gave_up", `${animal.name}`);
 		}
 	}
 
+	// Final sweep for any meat lying uncollected.
+	if (countFood(bot) < targetCount) await collectMeat(bot);
+
 	const totalFood = countFood(bot);
 	const gained = totalFood - startFood;
-	// Count as success if we gained food OR if we explored (loaded new chunks)
-	// This prevents the 8-consecutive-failure abort while still searching
 	const explored = searchAttempts > 0;
 	return {
 		success: totalFood >= targetCount || gained > 0 || explored,

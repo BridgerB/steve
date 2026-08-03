@@ -54,7 +54,7 @@ export const GYM_STEPS: GymStep[] = [
 	{ slug: "craft-furnace", label: "Craft Furnace", order: 9, prereq: ["cobblestone 16", "crafting_table 1"], run: (b) => craftFurnace(b), pass: (b) => has(b, "furnace", 1), timeoutMs: 40000 },
 	{ slug: "mine-coal", label: "Mine Coal", order: 10, prereq: ["stone_pickaxe 1"], run: (b) => mineBlock(b, "coal_ore", 6), pass: (b) => has(b, "coal", 3), timeoutMs: 120000 },
 	{ slug: "mine-iron", label: "Mine Iron Ore", order: 11, prereq: ["stone_pickaxe 1"], run: (b) => mineBlock(b, "iron_ore", 5), pass: (b) => has(b, "raw_iron", 3), timeoutMs: 150000 },
-	{ slug: "smelt-iron", label: "Smelt Iron", order: 12, prereq: ["raw_iron 8", "coal 8", "furnace 1"], run: (b) => smeltItems(b, 8), pass: (b) => has(b, "iron_ingot", 3), timeoutMs: 90000 },
+	{ slug: "smelt-iron", label: "Smelt Iron", order: 12, prereq: ["raw_iron 8", "coal 8", "furnace 1"], run: (b) => smeltItems(b, "raw_iron", 8), pass: (b) => has(b, "iron_ingot", 3), timeoutMs: 120000 },
 	{ slug: "craft-iron-pickaxe", label: "Craft Iron Pickaxe", order: 13, prereq: ["iron_ingot 3", "stick 2", "crafting_table 1"], run: (b) => craftIronPickaxe(b), pass: (b) => has(b, "iron_pickaxe", 1), timeoutMs: 40000 },
 	{ slug: "craft-buckets", label: "Craft Buckets", order: 14, prereq: ["iron_ingot 6", "crafting_table 1"], run: (b) => craftBucket(b), pass: (b) => has(b, "bucket", 1), timeoutMs: 40000 },
 	{ slug: "fill-water", label: "Fill Water Buckets", order: 15, prereq: ["bucket 2"], run: (b) => fillWaterBucket(b), pass: (b) => has(b, "water_bucket", 1), timeoutMs: 60000 },

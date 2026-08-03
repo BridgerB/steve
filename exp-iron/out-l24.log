@@ -1,0 +1,16 @@
+(node:60390) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  [gym:mine-iron-exp-patched] tp 5063,63,7980 — running
+[patched] descended 63->24 stopped=null t=44s
+[patched] branchMine y=24 level=24 mined=3 dug=0 have=4/5 lost=false
+  [gym:mine-iron-exp-patched] PASS 114.5s @5063,63,7980 — Collected 4/5 raw_iron (y=24, dug=0)
+TRIAL 1/2 PASS 114.5s @5063,7980 raw_iron=4 — Collected 4/5 raw_iron (y=24, dug=0)
+  [gym:mine-iron-exp-patched] tp 9955,74,6814 — running
+[patched] descended 74->23 stopped=null t=66s
+[patched] branchMine y=24 level=24 mined=2 dug=1 have=0/5 lost=false
+  [gym:mine-iron-exp-patched] FAIL 114.9s @9955,74,6814 — Collected 0/5 raw_iron (y=24, dug=1)
+TRIAL 2/2 FAIL 114.9s @9955,6814 raw_iron=0 — Collected 0/5 raw_iron (y=24, dug=1)
+
+SUMMARY strat=patched trials=2 pass=1/2 (50%) medianMs=114936
+  PASS 114.5s @5063,7980 — Collected 4/5 raw_iron (y=24, dug=0)
+  FAIL 114.9s @9955,6814 — Collected 0/5 raw_iron (y=24, dug=1)

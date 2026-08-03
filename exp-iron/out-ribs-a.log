@@ -1,0 +1,34 @@
+(node:60839) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  [gym:mine-iron-exp-patched] tp 4746,74,8855 — running
+[patched] descended 74->24 stopped=null have=3 t=59s
+[patched] branchMine y=24 level=24 mined=0 dug=15 have=3/5 lost=true
+  [gym:mine-iron-exp-patched] PASS 150.0s @4746,74,8855 — gym timeout
+TRIAL 1/5 PASS 150.0s @4746,8855 raw_iron=3 — gym timeout
+  [gym:mine-iron-exp-patched] tp 9821,70,8997 — running
+ERR [set_entity_data] The value of "offset" is out of range. It must be >= 0 and <= 6. Received 8 | len=10 hex=63839e191312020e01ff
+[patched] descended 70->24 stopped=null have=0 t=49s
+[patched] branchMine y=24 level=24 mined=4 dug=8 have=4/5 lost=false
+  [gym:mine-iron-exp-patched] PASS 124.2s @9821,70,8997 — Collected 4/5 raw_iron (y=24, dug=8)
+TRIAL 2/5 PASS 124.2s @9821,8997 raw_iron=4 — Collected 4/5 raw_iron (y=24, dug=8)
+  [gym:mine-iron-exp-patched] tp 7207,65,6622 — running
+[patched] descended 65->24 stopped=null have=0 t=68s
+[patched] branchMine y=24 level=24 mined=0 dug=12 have=0/5 lost=false
+  [gym:mine-iron-exp-patched] FAIL 113.7s @7207,65,6622 — Collected 0/5 raw_iron (y=24, dug=12)
+TRIAL 3/5 FAIL 113.7s @7207,6622 raw_iron=0 — Collected 0/5 raw_iron (y=24, dug=12)
+  [gym:mine-iron-exp-patched] tp 9587,66,864 — running
+[patched] descended 66->24 stopped=null have=0 t=44s
+[patched] branchMine y=24 level=24 mined=2 dug=13 have=0/5 lost=true
+  [gym:mine-iron-exp-patched] FAIL 150.0s @9587,66,864 — gym timeout
+TRIAL 4/5 FAIL 150.0s @9587,864 raw_iron=0 — gym timeout
+  [gym:mine-iron-exp-patched] tp 6615,114,8822 — running
+[patched] descended 114->112 stopped=blocked (liquid) have=0 t=32s
+  [gym:mine-iron-exp-patched] FAIL 31.8s @6615,114,8822 — Stuck descending at y=112 (blocked (liquid))
+TRIAL 5/5 FAIL 31.8s @6615,8822 raw_iron=0 — Stuck descending at y=112 (blocked (liquid))
+
+SUMMARY strat=patched trials=5 pass=2/5 (40%) medianMs=124232
+  PASS 150.0s @4746,8855 — gym timeout
+  PASS 124.2s @9821,8997 — Collected 4/5 raw_iron (y=24, dug=8)
+  FAIL 113.7s @7207,6622 — Collected 0/5 raw_iron (y=24, dug=12)
+  FAIL 150.0s @9587,864 — gym timeout
+  FAIL 31.8s @6615,8822 — Stuck descending at y=112 (blocked (liquid))

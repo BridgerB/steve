@@ -24,9 +24,9 @@ import {
 	returnToSurface,
 	sleep,
 	success,
-} from "../../lib/bot-utils.ts";
-import { logEvent } from "../../lib/logger.ts";
-import type { Block, StepResult } from "../../types.ts";
+} from "../src/lib/steve/lib/bot-utils.ts";
+import { logEvent } from "../src/lib/steve/lib/logger.ts";
+import type { Block, StepResult } from "../src/lib/steve/types.ts";
 
 /** Dig with timeout — bot.dig() can hang silently */
 const safeDig = async (
@@ -54,12 +54,8 @@ const DEEP_ORE_LEVEL: Record<string, number> = {
 	// good density but sits ABOVE the lava lakes (mostly y<16) — so the raw_iron drops
 	// land on solid stone and get collected instead of burning. y14 made the bot break
 	// 100 ore and collect ~0, timing out forever in the lava zone.
-	// Iron at y24: iron peaks ~y15 and is dense through y0–56 in 1.18+, so y24 has far
-	// better vein density than y40 while staying above the lava lakes (mostly y<16) so
-	// raw_iron drops land on stone and are collected, not burned. Head-to-head across
-	// random spawns, y24 mining out-yielded y40 and y16.
-	iron_ore: 24,
-	deepslate_iron_ore: 24,
+	iron_ore: 40,
+	deepslate_iron_ore: 40,
 	coal_ore: 50,
 	deepslate_coal_ore: 15,
 	copper_ore: 48,
@@ -516,16 +512,17 @@ const branchMineOre = async (
 			turns = 0;
 			continue;
 		}
-		// Advance the 1x2 main tunnel one cell (digStep stays level, returning non-"ok"
-		// at caves/lava/water), then every BRANCH_SPACING cells cut perpendicular ribs
-		// off BOTH sides of the spine. A lone 1-wide tunnel uncovers almost nothing, so
-		// with sparse ore it exposes no vein at all (mined=0 dug=18); the ribs multiply
-		// the exposed wall area — the no-X-ray way to actually surface a vein — and
-		// digBranch harvests + retreats each one. (digBranch was previously dead code.)
+		// Advance the 1x2 main tunnel one cell. digStep stays level (returns non-"ok" at
+		// caves/lava/water), so we turn rather than dropping or flooding.
 		const r = await digStep(dir[0], dir[1]);
 		if (r === "ok") {
 			turns = 0;
 			forward++;
+			// Every BRANCH_SPACING cells, cut perpendicular ribs off BOTH sides of the
+			// spine. A lone 1-wide tunnel only uncovers the handful of blocks it passes,
+			// so with sparse ore it exposes no vein at all (mined=0 dug=18). The ribs
+			// multiply the exposed wall area — the no-X-ray way to actually surface a
+			// vein — and digBranch harvests + retreats each one.
 			if (forward % BRANCH_SPACING === 0) {
 				const perp: [number, number] = [dir[1], -dir[0]];
 				await digBranch(perp);
@@ -566,6 +563,7 @@ const mineStuckState = new WeakMap<
 	Bot,
 	{ x: number; z: number; n: number; iron: number }
 >();
+
 // Relocate horizontally `cells` blocks onto fresh SOLID rock, digging the 1x2 opening
 // as it goes, to route the vertical dig-down around a hazard directly below (lava,
 // water/aquifer, deep drop). Picks the direction whose near cells are driest+solidest
@@ -688,14 +686,13 @@ const harvestShaftWalls = async (
 
 /**
  * Fast, safe VERTICAL descent to (or near) targetY — one dig per level (the block
- * under the bot's feet) instead of the 3-dig diagonal staircase, so reaching the ore
- * band costs ~40s instead of the whole budget. CRUCIAL: it lands (waits for onGround)
- * before each dig, because typecraft applies a 5× "not on ground" mining penalty
- * (bot/digging.ts) — mining mid-fall made a naive straight-down dig ~3s/block. Scans
- * the column below and refuses to open onto lava (within 4), a deep air shaft, or
- * water; on a hazard it sidesteps onto solid rock and keeps descending, or stops and
- * lets the caller strip-mine where it reached. Optionally harvests veins the shaft
- * exposes on the way down. Resumable.
+ * under the bot's feet) instead of the 3-dig diagonal staircase, so reaching the
+ * ore band costs ~20s instead of the whole 110s budget. Before each dig it scans
+ * the column below and refuses to open onto lava (within 4), a deep air shaft
+ * (fall damage / hidden lava/water), or water; on such a hazard it sidesteps one
+ * cell onto solid rock and keeps descending — or stops and lets the caller
+ * strip-mine wherever it reached (iron is plentiful anywhere in y16..y54, not
+ * only at `targetY`). Resumable: makes progress and returns.
  */
 export const digDownVertical = async (
 	bot: Bot,
@@ -709,11 +706,15 @@ export const digDownVertical = async (
 		if ((bot.health ?? 20) < 8) return { y: floorY(bot), stopped: "low health" };
 		if (bot.entity?.isInWater) return { y: floorY(bot), stopped: "in water" };
 		if (!bot.heldItem?.name.endsWith("_pickaxe")) await ensurePickaxe(bot);
-		// Harvest ore the shaft has EXPOSED in its walls as we pass through the band —
-		// the 1-wide shaft slices veins, and mining those faces (drops land at our feet)
-		// collects much of the target on the way down. No X-ray: only uncovered walls.
+		// Opportunistically harvest ore the shaft has EXPOSED in its walls as we pass
+		// through the band — the 1-wide shaft slices through veins, and mining those
+		// exposed faces (drops land at our feet) collects most of the target on the way
+		// down, before any branch-mining. No X-ray: only the walls the shaft uncovered.
 		if (harvest) await harvestShaftWalls(bot, harvest.isTarget, harvest.dropItem);
-		// Dig only while standing on solid ground (see 5× airborne penalty above).
+		// CRUCIAL: dig only while standing on solid ground. Mining airborne (mid-fall)
+		// takes 5x longer (typecraft digging.ts "not on ground penalty"), which made a
+		// naive straight-down dig ~3s/block. Landing first keeps each dig at full speed
+		// (~0.8s), so the whole descent costs ~20-30s instead of the entire budget.
 		for (let w = 0; w < 12 && !bot.entity.onGround; w++) await sleep(50);
 
 		const p = bot.entity.position;
@@ -761,7 +762,8 @@ export const digDownVertical = async (
 			}
 		}
 		sideTries = 0;
-		// Let gravity drop us onto the next floor before looping.
+		// Let gravity drop us onto the next floor before looping (loop-top waits for
+		// onGround too, but this shortens the poll when the fall is immediate).
 		for (let w = 0; w < 8 && Math.floor(bot.entity.position.y) >= fy; w++)
 			await sleep(50);
 	}
@@ -775,7 +777,7 @@ const mineDeepOre = async (
 	targetCount: number,
 	deadline: number,
 ): Promise<StepResult> => {
-	const level = DEEP_ORE_LEVEL[blockType] ?? 15;
+	const level = Number(process.env.EXP_LEVEL ?? DEEP_ORE_LEVEL[blockType] ?? 15);
 	const dropItem = DROP_ITEM[blockType] ?? blockType;
 	await ensurePickaxe(bot);
 
@@ -785,21 +787,25 @@ const mineDeepOre = async (
 
 	// While well above the ore band, descend FAST (vertical dig-down, ~one dig per
 	// level) and then FALL THROUGH to strip-mine in the SAME call. The old diagonal
-	// staircase ate the entire budget just getting down and early-returned before
-	// mining a single block — so one gym run (a single call) never collected any ore.
+	// staircase ate the entire 110s budget just getting down and then early-returned
+	// before mining a single block — so one gym run (a single call) never collected
+	// any ore. Vertical descent reaches the band in ~20s, leaving the rest of the
+	// call to actually mine.
 	if (floorY(bot) > level + 2) {
 		const startY = floorY(bot);
-		// Cap how far down one call digs: most spawns (y60-90) reach the band at `level`;
-		// only an extreme mountain (y100+) is capped so descent can't eat the whole call.
+		// Bound how far one call digs down. Most spawns (y60-90) reach the dense low iron
+		// band at `level` (y24) — harvestShaftWalls rakes any vein the shaft cuts on the
+		// way, and the branch ribs expose more at the bottom. Capped so an extreme mountain
+		// spawn (y100+) can't burn the whole budget just descending.
 		const target = Math.max(level, startY - 80);
-		// Cap the descent PHASE too, so hazard detours can't starve the mining phase —
-		// mining always gets >=~50s of the 110s budget.
+		// Cap the descent phase so it can never eat the whole call — mining always gets
+		// >=~50s even if aquifer/hazard detours slow the dig-down.
 		const descentDeadline = Math.min(deadline, Date.now() + 60000);
 		const res = await digDownVertical(bot, target, descentDeadline, { isTarget, dropItem });
 		logEvent(mineCat(blockType), "descended", `y=${res.y} from=${startY} stopped=${res.stopped}`);
-		// Only hard-fail if stranded high in the near-oreless zone with essentially no
-		// progress (instantly boxed by a surface aquifer). Otherwise branch-mine right
-		// where we are — the descent already swept iron's band (and harvested through it).
+		// Only hard-fail if we're stranded high in the near-oreless zone having made
+		// essentially no progress (e.g. instantly boxed by a surface aquifer). Otherwise
+		// branch-mine right where we are — the descent already swept iron's band.
 		if (res.y > 75 && startY - res.y < 3)
 			return {
 				success: false,
@@ -810,7 +816,7 @@ const mineDeepOre = async (
 
 	// At the band — branch-mine until enough of the DROP is actually in the pack.
 	const before = invCount(bot, dropItem);
-	const { dug, lostDrops } = await branchMineOre(
+	const { mined, dug, lostDrops } = await branchMineOre(
 		bot,
 		blockType,
 		isTarget,
@@ -833,7 +839,7 @@ const mineDeepOre = async (
 		if (entry && floorY(bot) < entry.y - 6) {
 			logEvent(mineCat(blockType),"climb_out", `boxed at y=${floorY(bot)} → entry y=${entry.y}`);
 			if (!(await returnToSurface(bot))) {
-				const { pillarUp } = await import("../portal/cast.ts");
+				const { pillarUp } = await import("../src/lib/steve/tasks/portal/cast.ts");
 				await pillarUp(bot, entry.y);
 				bot.setControlState("sneak", false); // pillarUp leaves it on
 			}
@@ -891,7 +897,7 @@ const mineDeepOre = async (
 		if (deep) {
 			const climbTo = Math.min(level + 14, 50); // stay underground, never the sky
 			if (climbTo > feetY) {
-				const { pillarUp } = await import("../portal/cast.ts");
+				const { pillarUp } = await import("../src/lib/steve/tasks/portal/cast.ts");
 				await pillarUp(bot, climbTo);
 				bot.setControlState("sneak", false); // pillarUp leaves it on
 			}

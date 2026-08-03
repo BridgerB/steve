@@ -1,0 +1,35 @@
+(node:65846) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+ERR [set_entity_data] Cannot convert undefined to a BigInt | len=14 hex=63aefe19090340800000121e02ff
+ERR [set_entity_data] Cannot convert undefined to a BigInt | len=17 hex=63adfe19090340800000121e02131f01ff
+  [gym:mine-iron-exp-patched] tp 1959,118,9581 — running
+[patched] descended 118->60 stopped=null have=0 t=61s
+[patched] branchMine y=60 level=24 mined=0 dug=14 have=0/5 lost=false
+  [gym:mine-iron-exp-patched] FAIL 110.1s @1959,118,9581 — Collected 0/5 raw_iron (y=60, dug=14)
+TRIAL 1/5 FAIL 110.1s @1959,9581 raw_iron=0 — Collected 0/5 raw_iron (y=60, dug=14)
+  [gym:mine-iron-exp-patched] tp 2979,65,8758 — running
+[patched] descended 65->31 stopped=null have=0 t=61s
+[patched] branchMine y=29 level=24 mined=7 dug=6 have=6/5 lost=false
+  [gym:mine-iron-exp-patched] PASS 106.2s @2979,65,8758 — Collected 6 raw_iron
+TRIAL 2/5 PASS 106.2s @2979,8758 raw_iron=6 — Collected 6 raw_iron
+  [gym:mine-iron-exp-patched] tp 9580,-4,9528 — running
+[patched] branchMine y=-1 level=24 mined=2 dug=13 have=2/5 lost=true
+  [gym:mine-iron-exp-patched] FAIL 86.7s @9580,-4,9528 — Relocated toward 9566,9512
+TRIAL 3/5 FAIL 86.7s @9580,9528 raw_iron=2 — Relocated toward 9566,9512
+  [gym:mine-iron-exp-patched] tp 1655,116,1070 — running
+[patched] descended 116->76 stopped=deep drop have=7 t=48s
+[patched] branchMine y=76 level=24 mined=0 dug=0 have=7/5 lost=false
+  [gym:mine-iron-exp-patched] PASS 47.7s @1655,116,1070 — Collected 7 raw_iron
+TRIAL 4/5 PASS 47.7s @1655,1070 raw_iron=7 — Collected 7 raw_iron
+  [gym:mine-iron-exp-patched] tp 7122,72,7709 — running
+[patched] descended 72->24 stopped=null have=1 t=52s
+[patched] branchMine y=22 level=24 mined=5 dug=13 have=4/5 lost=false
+  [gym:mine-iron-exp-patched] PASS 125.3s @7122,72,7709 — Collected 4/5 raw_iron (y=22, dug=13)
+TRIAL 5/5 PASS 125.3s @7122,7709 raw_iron=4 — Collected 4/5 raw_iron (y=22, dug=13)
+
+SUMMARY strat=patched trials=5 pass=3/5 (60%) medianMs=106228
+  FAIL 110.1s @1959,9581 — Collected 0/5 raw_iron (y=60, dug=14)
+  PASS 106.2s @2979,8758 — Collected 6 raw_iron
+  FAIL 86.7s @9580,9528 — Relocated toward 9566,9512
+  PASS 47.7s @1655,1070 — Collected 7 raw_iron
+  PASS 125.3s @7122,7709 — Collected 4/5 raw_iron (y=22, dug=13)

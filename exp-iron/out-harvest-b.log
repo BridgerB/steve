@@ -1,0 +1,33 @@
+(node:89797) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  [gym:mine-iron-exp-patched] tp 9156,120,9440 — running
+[patched] descended 120->83 stopped=deep drop have=0 t=34s
+[patched] branchMine y=83 level=24 mined=0 dug=0 have=0/5 lost=false
+  [gym:mine-iron-exp-patched] FAIL 95.3s @9156,120,9440 — Collected 0/5 raw_iron (y=112, dug=0)
+TRIAL 1/5 FAIL 95.3s @9156,9440 raw_iron=0 — Collected 0/5 raw_iron (y=112, dug=0)
+  [gym:mine-iron-exp-patched] tp 3013,67,7492 — running
+[patched] descended 67->61 stopped=blocked (liquid) have=0 t=11s
+[patched] branchMine y=61 level=24 mined=0 dug=0 have=0/5 lost=false
+  [gym:mine-iron-exp-patched] FAIL 26.3s @3013,67,7492 — Collected 0/5 raw_iron (y=61, dug=0)
+TRIAL 2/5 FAIL 26.3s @3013,7492 raw_iron=0 — Collected 0/5 raw_iron (y=61, dug=0)
+  [gym:mine-iron-exp-patched] tp 4372,163,4359 — running
+[patched] descended 163->54 stopped=null have=0 t=111s
+[patched] branchMine y=54 level=24 mined=0 dug=0 have=0/5 lost=false
+  [gym:mine-iron-exp-patched] FAIL 150.0s @4372,163,4359 — gym timeout
+TRIAL 3/5 FAIL 150.0s @4372,4359 raw_iron=0 — gym timeout
+  [gym:mine-iron-exp-patched] tp 6217,65,5712 — running
+[patched] descended 65->48 stopped=blocked (liquid) have=0 t=48s
+[patched] branchMine y=48 level=24 mined=0 dug=0 have=0/5 lost=false
+  [gym:mine-iron-exp-patched] FAIL 149.7s @6217,65,5712 — Collected 0/5 raw_iron (y=72, dug=0)
+TRIAL 4/5 FAIL 149.7s @6217,5712 raw_iron=0 — Collected 0/5 raw_iron (y=72, dug=0)
+  [gym:mine-iron-exp-patched] tp 8127,63,4421 — running
+[patched] descended 63->63 stopped=water below have=0 t=5s
+  [gym:mine-iron-exp-patched] FAIL 5.4s @8127,63,4421 — Stuck descending at y=63 (water below)
+TRIAL 5/5 FAIL 5.4s @8127,4421 raw_iron=0 — Stuck descending at y=63 (water below)
+
+SUMMARY strat=patched trials=5 pass=0/5 (0%) medianMs=95270
+  FAIL 95.3s @9156,9440 — Collected 0/5 raw_iron (y=112, dug=0)
+  FAIL 26.3s @3013,7492 — Collected 0/5 raw_iron (y=61, dug=0)
+  FAIL 150.0s @4372,4359 — gym timeout
+  FAIL 149.7s @6217,5712 — Collected 0/5 raw_iron (y=72, dug=0)
+  FAIL 5.4s @8127,4421 — Stuck descending at y=63 (water below)

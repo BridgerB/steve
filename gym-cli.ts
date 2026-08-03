@@ -7,6 +7,7 @@
 import { createBot } from "typecraft";
 import { GYM_BY_SLUG } from "./src/lib/steve/gym/registry.ts";
 import { runGymStep } from "./src/lib/steve/gym/run.ts";
+import { registerBlockMemory } from "./src/lib/steve/lib/bot-utils.ts";
 import { initLogger } from "./src/lib/steve/lib/logger.ts";
 import { connect } from "./src/lib/steve/lib/rcon.ts";
 
@@ -29,6 +30,7 @@ const bot = createBot({
 bot.on("error", (e) => {
 	if (!e.message.includes("waypoint")) console.log("ERR", e.message);
 });
+registerBlockMemory(bot); // same passive ore memory as production
 initLogger(`gymcli-${SLUG}-${Date.now()}`);
 
 bot.once("spawn", async () => {

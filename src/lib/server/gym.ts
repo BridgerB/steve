@@ -34,13 +34,18 @@ const makeBot = async (username: string): Promise<QBot> => {
 		}
 	}
 	const { createBot } = await import('$lib/typecraft');
-	return createBot({
+	const bot = createBot({
 		host: process.env.MC_HOST ?? 'localhost',
 		port: parseInt(process.env.MC_PORT ?? '25565', 10),
 		username,
 		version: process.env.MC_VERSION ?? '1.21.11',
 		auth: 'offline'
-	}) as unknown as QBot;
+	});
+	// Give gym bots the same passive ore memory the production bot has (blockSeen),
+	// otherwise ore-finding falls back to LOS-only findBlock and the gym is unfairly hard.
+	const { registerBlockMemory } = await import('$lib/steve/lib/bot-utils');
+	registerBlockMemory(bot as never);
+	return bot as unknown as QBot;
 };
 
 export interface WorkerStatus {

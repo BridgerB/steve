@@ -866,6 +866,35 @@ export const rememberResource = (
 	}
 };
 
+// Ore/log names the bot passively remembers as chunks stream in (blockSeen fires for
+// air-adjacent blocks — no X-ray, no scanning). NOT "water": it's so common that the
+// blockSeen firehose blocks the event loop and the bot keepalive-times-out.
+const WATCHED_BLOCKS = [
+	"oak_log",
+	"birch_log",
+	"spruce_log",
+	"jungle_log",
+	"acacia_log",
+	"dark_oak_log",
+	"coal_ore",
+	"deepslate_coal_ore",
+	"iron_ore",
+	"deepslate_iron_ore",
+];
+
+/**
+ * Wire up the bot's passive block memory: watch the ore/log blocks and remember each
+ * one the world exposes (blockSeen). Production (main.ts) AND the gym harness both need
+ * this — without it a bot has no ore memory and ore-finding falls back to line-of-sight
+ * findBlock only, which makes the gym strictly harder than a real run.
+ */
+export const registerBlockMemory = (bot: Bot): void => {
+	for (const name of WATCHED_BLOCKS) bot.watchBlocks.add(name);
+	bot.on("blockSeen", (name: string, pos: { x: number; y: number; z: number }) => {
+		rememberResource(bot, name, pos);
+	});
+};
+
 export const getRememberedResource = (
 	bot: Bot,
 	name: string,
@@ -1180,6 +1209,36 @@ export const placeStationBlock = async (
 		}
 	}
 
+	// 2b. Still no adjacent spot — commonly the bot is perched on tree LEAVES after
+	//     chopping wood (block_below=oak_leaves), where nothing around is valid station
+	//     ground, so it looped "Need crafting table" forever while HOLDING the table.
+	//     Walk to the nearest real solid ground within a few blocks and re-scan.
+	if (!ground) {
+		const bp = bot.entity.position;
+		let best: Vec3 | null = null;
+		let bestD = Infinity;
+		for (let dx = -4; dx <= 4; dx++) {
+			for (let dz = -4; dz <= 4; dz++) {
+				if (Math.abs(dx) + Math.abs(dz) < 2) continue;
+				const floor = getBlock(bot, offset(bp, dx, -1, dz));
+				if (!floor || !isStationGround(floor.name)) continue;
+				const air = getBlock(bot, offset(bp, dx, 0, dz));
+				if (!air || !isStationClear(air.name)) continue;
+				const d = dx * dx + dz * dz;
+				if (d < bestD) {
+					bestD = d;
+					best = offset(floor.position, 0, 1, 0);
+				}
+			}
+		}
+		if (best) {
+			try {
+				await goTo(bot, best, { range: 1, timeout: 6000 });
+			} catch {}
+			ground = scan();
+		}
+	}
+
 	if (!ground) {
 		logEvent("craft", "station_no_ground", JSON.stringify({ item: itemName }));
 		return null;
@@ -1281,7 +1340,11 @@ export const placeStationBlock = async (
 export const getCraftingTable = async (bot: Bot): Promise<Block | null> => {
 	const mem = getMemory(bot);
 
-	// Check remembered position — if <50 blocks away, walk back to it
+	// Check remembered position — walk back to it rather than abandoning it. The old
+	// 50-block gate stranded far-ranging bots: a bot that mined iron 50+ blocks from its
+	// table would FORGET the table, then (out of planks) deadlock re-gathering wood in a
+	// worked-out area — right at the portal's doorstep. Walking back even 150 blocks to a
+	// known-good table beats an impossible wood-gather.
 	if (mem.craftingTablePos) {
 		const d = distance(
 			bot.entity.position,
@@ -1291,7 +1354,7 @@ export const getCraftingTable = async (bot: Bot): Promise<Block | null> => {
 				mem.craftingTablePos.z,
 			),
 		);
-		if (d < 50) {
+		if (d < 150) {
 			const remembered = getBlock(
 				bot,
 				vec3(
@@ -1303,7 +1366,7 @@ export const getCraftingTable = async (bot: Bot): Promise<Block | null> => {
 			if (remembered && remembered.name === "crafting_table") {
 				try {
 					if (d > 4) {
-						await goTo(bot, remembered.position, { range: 2, timeout: 15000 });
+						await goTo(bot, remembered.position, { range: 2, timeout: 30000 });
 					} else {
 						await moveCloser(bot, remembered.position, { maxDistance: 3 });
 					}
@@ -1387,7 +1450,29 @@ export const getCraftingTable = async (bot: Bot): Promise<Block | null> => {
 		}
 	}
 
-	const placed = await placeStationBlock(bot, "crafting_table");
+	let placed = await placeStationBlock(bot, "crafting_table");
+	// Placement can fail on the FIRST spot — a cramped mined tunnel where bot.placeBlock
+	// never registers (destNow:air) or a transient interaction desync under load. The bot
+	// then loops "Need crafting table" while HOLDING the table forever (seen at y38). Step
+	// a couple blocks to a fresh spot and retry instead of hammering the same dead cell.
+	for (let tries = 0; !placed && tries < 3; tries++) {
+		const bp = bot.entity.position;
+		const dirs: [number, number][] = [
+			[2, 0],
+			[0, 2],
+			[-2, 0],
+			[0, -2],
+		];
+		const [dx, dz] = dirs[tries % dirs.length] ?? [2, 0];
+		try {
+			await goTo(
+				bot,
+				vec3(Math.floor(bp.x) + dx, Math.floor(bp.y), Math.floor(bp.z) + dz),
+				{ range: 0, timeout: 5000 },
+			);
+		} catch {}
+		placed = await placeStationBlock(bot, "crafting_table");
+	}
 	if (placed) {
 		mem.craftingTablePos = {
 			x: placed.position.x,
@@ -1558,6 +1643,12 @@ export const craftItem = async (
 		await bot.craft(fixedRecipe, count, craftingTable ?? undefined);
 	};
 
+	// Baseline so we can VERIFY the crafted item actually reached the inventory section
+	// (not left stranded in the 2x2 grid by a window desync under load). Returning a
+	// phantom success while the item is stranded leaves hasCraftingTable false, so
+	// craft_table + getCraftingTable churn forever ("Crafted 1x crafting_table" →
+	// "table_missing: not in inventory" → repeat), which stalled whole races.
+	const beforeCount = countItems(bot, itemName);
 	let lastErr: unknown;
 	for (let attempt = 0; attempt < 2; attempt++) {
 		try {
@@ -1572,7 +1663,18 @@ export const craftItem = async (
 			// Recover anything left in the craft grid so the crafted result isn't
 			// stranded there (invisible to windowItems → phantom "no furnace" loops).
 			await reclaimCraftingGrid(bot);
-			return { success: true, message: `Crafted ${count}x ${itemName}` };
+			if (countItems(bot, itemName) > beforeCount) {
+				return { success: true, message: `Crafted ${count}x ${itemName}` };
+			}
+			// Craft threw no error but the result isn't in the inventory — stranded in
+			// the grid (window desync). Let it resync, reclaim once more, then re-check;
+			// only re-craft (next loop) if it's genuinely still missing.
+			logEvent("craft", "craft_unverified", `${itemName} not in inv (before=${beforeCount})`);
+			await sleep(500);
+			await reclaimCraftingGrid(bot);
+			if (countItems(bot, itemName) > beforeCount) {
+				return { success: true, message: `Crafted ${count}x ${itemName}` };
+			}
 		} catch (err) {
 			lastErr = err;
 			logEvent(

@@ -109,40 +109,72 @@ export const smeltItems = async (
 		// Open the furnace
 		const furnaceWindow = await bot.openFurnace(furnace);
 		// Let the window's slot contents sync before we start clicking, otherwise
-		// picked-up items get lost (placed into an unsynced slot).
-		await sleep(500);
+		// picked-up items get lost (placed into an unsynced slot). Underground with a
+		// cluttered inventory this sync is slower, so wait longer than on the surface.
+		await sleep(1200);
 
-		// Move a stack from the inventory portion to a furnace slot via clickWindow.
-		// bot.transfer / putInput / putFuel are silent no-ops on 26.1.2, but raw
-		// clickWindow works.
+		const isFuelName = (n: string) =>
+			n === "coal" ||
+			n === "charcoal" ||
+			n.includes("planks") ||
+			n.includes("_log");
+
+		// Move a stack from the inventory portion to a furnace slot via clickWindow, then
+		// VERIFY the intended item actually landed. bot.transfer/putInput are silent
+		// no-ops on 26.1.2, and under load/clutter a single click can target a stale slot
+		// and deposit the WRONG item — observed underground: 1 diorite stranded in the
+		// input slot with no fuel, so the furnace sat idle until the 120s timeout, every
+		// retry. Re-scan + retry (a swap-click self-corrects a wrong item in dest).
 		const moveToSlot = async (
 			pred: (n: string) => boolean,
 			dest: number,
 		): Promise<boolean> => {
-			const src = furnaceWindow.slots.findIndex(
-				(s, i) => i >= furnaceWindow.inventoryStart && !!s && pred(s.name),
-			);
-			if (src < 0) return false;
-			await bot.clickWindow(src, 0, 0);
-			await sleep(350);
-			await bot.clickWindow(dest, 0, 0);
-			await sleep(350);
-			if (furnaceWindow.selectedItem) {
-				await bot.clickWindow(src, 0, 0); // dest full — put it back
-				await sleep(200);
+			for (let attempt = 0; attempt < 3; attempt++) {
+				const src = furnaceWindow.slots.findIndex(
+					(s, i) => i >= furnaceWindow.inventoryStart && !!s && pred(s.name),
+				);
+				if (src < 0) return false;
+				await bot.clickWindow(src, 0, 0);
+				await sleep(400);
+				await bot.clickWindow(dest, 0, 0);
+				await sleep(400);
+				if (furnaceWindow.selectedItem) {
+					// Still holding something (dest occupied / click misaligned) — park it
+					// in any empty inventory slot so it isn't dropped, then retry.
+					const back = furnaceWindow.slots.findIndex(
+						(s, i) => i >= furnaceWindow.inventoryStart && !s,
+					);
+					await bot.clickWindow(back >= 0 ? back : src, 0, 0);
+					await sleep(300);
+				}
+				const landed = furnaceWindow.slots[dest];
+				if (landed && pred(landed.name)) return true;
+				await sleep(400); // let the window resync, then try a fresh scan
 			}
-			return true;
+			return false;
 		};
+
+		// Evict anything wrong that a prior (desynced) attempt stranded in a slot, so the
+		// loads below place the real items instead of skipping a "non-empty" slot and
+		// waiting forever on an unsmeltable input (e.g. diorite) with no fuel.
+		const evict = async (slotIdx: number, keep: (n: string) => boolean) => {
+			const cur = furnaceWindow.slots[slotIdx];
+			if (!cur || keep(cur.name)) return;
+			const back = furnaceWindow.slots.findIndex(
+				(s, i) => i >= furnaceWindow.inventoryStart && !s,
+			);
+			if (back < 0) return;
+			await bot.clickWindow(slotIdx, 0, 0);
+			await sleep(350);
+			await bot.clickWindow(back, 0, 0);
+			await sleep(350);
+		};
+		await evict(0, (n) => n.includes(inputItem));
+		await evict(1, isFuelName);
 
 		// Load fuel if the fuel slot is empty.
 		if (!furnaceWindow.slots[1]) {
-			const hasFuel = await moveToSlot(
-				(n) => n === "coal" || n === "charcoal",
-				1,
-			);
-			if (!hasFuel) {
-				await moveToSlot((n) => n.includes("planks") || n.includes("_log"), 1);
-			}
+			await moveToSlot(isFuelName, 1);
 		}
 		// Load input if the input slot is empty.
 		if (!furnaceWindow.slots[0]) {

@@ -1,0 +1,44 @@
+(node:99861) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  [gym:mine-iron-exp-patched] tp 1635,78,9615 — running
+[patched] descended 78->24 stopped=null have=0 t=58s
+[patched] branchMine y=24 level=24 mined=0 dug=14 have=0/5 lost=true
+  [gym:mine-iron-exp-patched] FAIL 150.0s @1635,78,9615 — gym timeout
+TRIAL 1/5 FAIL 150.0s @1635,9615 raw_iron=0 — gym timeout
+  [gym:mine-iron-exp-patched] tp 9209,70,6416 — running
+[patched] descended 70->23 stopped=null have=1 t=60s
+[patched] branchMine y=23 level=24 mined=1 dug=6 have=1/5 lost=false
+  [gym:mine-iron-exp-patched] FAIL 124.0s @9209,70,6416 — Collected 1/5 raw_iron (y=23, dug=6)
+TRIAL 2/5 FAIL 124.0s @9209,6416 raw_iron=1 — Collected 1/5 raw_iron (y=23, dug=6)
+ERR [set_entity_data] Cannot convert undefined to a BigInt | len=14 hex=63bcf119090340800000121e02ff
+ERR [set_entity_data] Cannot convert undefined to a BigInt | len=17 hex=63bef119090340800000121e02131f01ff
+ERR [set_entity_data] Cannot convert undefined to a BigInt | len=14 hex=63bff119090340800000121e02ff
+ERR [set_entity_data] Cannot convert undefined to a BigInt | len=17 hex=63bdf119090340800000121e02131f01ff
+ERR [set_entity_data] Cannot convert undefined to a BigInt | len=14 hex=63dbf119090340800000121e02ff
+ERR [set_entity_data] Cannot convert undefined to a BigInt | len=14 hex=63dcf119090340800000121e02ff
+ERR [set_entity_data] Cannot convert undefined to a BigInt | len=14 hex=63dbf119090340800000121e02ff
+ERR [set_entity_data] Cannot convert undefined to a BigInt | len=14 hex=63dcf119090340800000121e02ff
+  [gym:mine-iron-exp-patched] tp 7032,77,3505 — running
+[patched] descended 77->69 stopped=deep drop have=0 t=4s
+[patched] branchMine y=69 level=24 mined=0 dug=0 have=0/5 lost=false
+  [gym:mine-iron-exp-patched] FAIL 18.0s @7032,77,3505 — Collected 0/5 raw_iron (y=64, dug=0)
+TRIAL 3/5 FAIL 18.0s @7032,3505 raw_iron=0 — Collected 0/5 raw_iron (y=64, dug=0)
+  [gym:mine-iron-exp-patched] tp 4831,94,67 — running
+[patched] descended 94->24 stopped=null have=0 t=75s
+[patched] branchMine y=23 level=24 mined=1 dug=11 have=2/5 lost=false
+  [gym:mine-iron-exp-patched] FAIL 114.4s @4831,94,67 — Collected 2/5 raw_iron (y=23, dug=11)
+TRIAL 4/5 FAIL 114.4s @4831,67 raw_iron=2 — Collected 2/5 raw_iron (y=23, dug=11)
+ERR [set_entity_data] Cannot convert undefined to a BigInt | len=17 hex=63f5f519090340800000121e02131f01ff
+ERR [set_entity_data] Cannot convert undefined to a BigInt | len=14 hex=63f6f519090340800000121e02ff
+  [gym:mine-iron-exp-patched] tp 7117,68,1250 — running
+[patched] descended 68->24 stopped=null have=0 t=47s
+[patched] branchMine y=23 level=24 mined=4 dug=2 have=3/5 lost=false
+  [gym:mine-iron-exp-patched] PASS 115.9s @7117,68,1250 — Collected 3/5 raw_iron (y=23, dug=2)
+TRIAL 5/5 PASS 115.9s @7117,1250 raw_iron=3 — Collected 3/5 raw_iron (y=23, dug=2)
+
+SUMMARY strat=patched trials=5 pass=1/5 (20%) medianMs=115914
+  FAIL 150.0s @1635,9615 — gym timeout
+  FAIL 124.0s @9209,6416 — Collected 1/5 raw_iron (y=23, dug=6)
+  FAIL 18.0s @7032,3505 — Collected 0/5 raw_iron (y=64, dug=0)
+  FAIL 114.4s @4831,67 — Collected 2/5 raw_iron (y=23, dug=11)
+  PASS 115.9s @7117,1250 — Collected 3/5 raw_iron (y=23, dug=2)

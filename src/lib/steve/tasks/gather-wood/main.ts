@@ -378,20 +378,20 @@ export const gatherWood = async (
 					`remembered ${memTarget.name} dist=${distance(botPos(), memTarget.pos).toFixed(0)}`,
 				);
 				const reached = await navigateTo(memTarget.pos);
-				if (!reached) {
-					unreachable.add(posKey(memTarget.pos));
-					forgetResource(bot, memTarget.name, memTarget.pos);
-				} else if (!findClosestLog()) {
-					// Navigated there but block is gone — stale memory
-					unreachable.add(posKey(memTarget.pos));
-					forgetResource(bot, memTarget.name, memTarget.pos);
+				if (reached && findClosestLog()) continue; // at a real log — mine it next loop
+				// Couldn't reach it (nav_stuck across a ravine/water barrier) or the memory
+				// was stale. Blacklist + forget, then FALL THROUGH to exploration so we
+				// physically relocate. Retrying MORE remembered logs at the same distance
+				// behind the SAME barrier just blacklists one tree column at a time forever
+				// (observed: 30 min stuck re-picking logs at dist 29 that never get closer).
+				unreachable.add(posKey(memTarget.pos));
+				forgetResource(bot, memTarget.name, memTarget.pos);
+				if (reached)
 					logEvent(
 						"wood",
 						"stale_memory",
 						`${memTarget.name} no longer at remembered position`,
 					);
-				}
-				continue;
 			}
 
 			// Head toward visible leaf canopy — trees are under it. This turns a

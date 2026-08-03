@@ -1,0 +1,17 @@
+(node:60848) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+ERR [set_entity_data] The value of "offset" is out of range. It must be >= 0 and <= 15. Received 18 | len=19 hex=6386dd17090341a000001312020e01140801ff
+  [gym:mine-iron-exp-patched] tp 3284,69,4513 — running
+[patched] descended 69->16 stopped=null t=58s
+[patched] branchMine y=13 level=16 mined=0 dug=14 have=2/5 lost=false
+  [gym:mine-iron-exp-patched] FAIL 120.7s @3284,69,4513 — Collected 2/5 raw_iron (y=13, dug=14)
+TRIAL 1/2 FAIL 120.7s @3284,4513 raw_iron=2 — Collected 2/5 raw_iron (y=13, dug=14)
+  [gym:mine-iron-exp-patched] tp 307,71,1216 — running
+[patched] descended 71->16 stopped=null t=59s
+[patched] branchMine y=16 level=16 mined=0 dug=18 have=0/5 lost=true
+  [gym:mine-iron-exp-patched] FAIL 150.0s @307,71,1216 — gym timeout
+TRIAL 2/2 FAIL 150.0s @307,1216 raw_iron=0 — gym timeout
+
+SUMMARY strat=patched trials=2 pass=0/2 (0%) medianMs=150022
+  FAIL 120.7s @3284,4513 — Collected 2/5 raw_iron (y=13, dug=14)
+  FAIL 150.0s @307,1216 — gym timeout

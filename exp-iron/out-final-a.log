@@ -1,0 +1,40 @@
+(node:33944) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  [gym:mine-iron-exp-patched] tp 2109,83,7038 — running
+[patched] descended 83->24 stopped=null have=0 t=52s
+[patched] branchMine y=24 level=24 mined=0 dug=14 have=0/5 lost=true
+  [gym:mine-iron-exp-patched] FAIL 150.0s @2109,83,7038 — gym timeout
+TRIAL 1/6 FAIL 150.0s @2109,7038 raw_iron=0 — gym timeout
+  [gym:mine-iron-exp-patched] tp 44,93,2848 — running
+[patched] descended 93->63 stopped=blocked (liquid) have=0 t=39s
+[patched] branchMine y=61 level=24 mined=0 dug=8 have=0/5 lost=false
+  [gym:mine-iron-exp-patched] FAIL 65.5s @44,93,2848 — Collected 0/5 raw_iron (y=61, dug=8)
+TRIAL 2/6 FAIL 65.5s @44,2848 raw_iron=0 — Collected 0/5 raw_iron (y=61, dug=8)
+  [gym:mine-iron-exp-patched] tp 2046,78,507 — running
+[patched] descended 78->24 stopped=null have=0 t=57s
+[patched] branchMine y=24 level=24 mined=5 dug=7 have=5/5 lost=false
+  [gym:mine-iron-exp-patched] PASS 101.7s @2046,78,507 — Collected 5 raw_iron
+TRIAL 3/6 PASS 101.7s @2046,507 raw_iron=5 — Collected 5 raw_iron
+  [gym:mine-iron-exp-patched] tp 3614,81,6964 — running
+[patched] descended 81->60 stopped=deep drop have=0 t=11s
+[patched] branchMine y=60 level=24 mined=0 dug=0 have=0/5 lost=false
+  [gym:mine-iron-exp-patched] FAIL 57.4s @3614,81,6964 — Collected 0/5 raw_iron (y=67, dug=0)
+TRIAL 4/6 FAIL 57.4s @3614,6964 raw_iron=0 — Collected 0/5 raw_iron (y=67, dug=0)
+  [gym:mine-iron-exp-patched] tp 5244,80,9093 — running
+[patched] descended 80->24 stopped=null have=0 t=55s
+[patched] branchMine y=24 level=24 mined=0 dug=14 have=0/5 lost=true
+  [gym:mine-iron-exp-patched] FAIL 150.0s @5244,80,9093 — gym timeout
+TRIAL 5/6 FAIL 150.0s @5244,9093 raw_iron=0 — gym timeout
+  [gym:mine-iron-exp-patched] tp 9076,61,5156 — running
+[patched] descended 61->61 stopped=in water have=0 t=0s
+[patched] branchMine y=61 level=24 mined=0 dug=0 have=0/5 lost=false
+  [gym:mine-iron-exp-patched] FAIL 24.8s @9076,61,5156 — Collected 0/5 raw_iron (y=59, dug=0)
+TRIAL 6/6 FAIL 24.8s @9076,5156 raw_iron=0 — Collected 0/5 raw_iron (y=59, dug=0)
+
+SUMMARY strat=patched trials=6 pass=1/6 (17%) medianMs=101745
+  FAIL 150.0s @2109,7038 — gym timeout
+  FAIL 65.5s @44,2848 — Collected 0/5 raw_iron (y=61, dug=8)
+  PASS 101.7s @2046,507 — Collected 5 raw_iron
+  FAIL 57.4s @3614,6964 — Collected 0/5 raw_iron (y=67, dug=0)
+  FAIL 150.0s @5244,9093 — gym timeout
+  FAIL 24.8s @9076,5156 — Collected 0/5 raw_iron (y=59, dug=0)

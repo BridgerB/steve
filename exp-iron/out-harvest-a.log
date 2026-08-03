@@ -1,0 +1,34 @@
+(node:89082) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  [gym:mine-iron-exp-patched] tp 6564,65,5293 — running
+[patched] descended 65->24 stopped=null have=0 t=45s
+[patched] branchMine y=24 level=24 mined=0 dug=18 have=0/5 lost=true
+  [gym:mine-iron-exp-patched] FAIL 150.0s @6564,65,5293 — gym timeout
+TRIAL 1/5 FAIL 150.0s @6564,5293 raw_iron=0 — gym timeout
+  [gym:mine-iron-exp-patched] tp 1388,64,6377 — running
+[patched] descended 64->24 stopped=null have=0 t=46s
+[patched] branchMine y=24 level=24 mined=0 dug=18 have=0/5 lost=true
+  [gym:mine-iron-exp-patched] FAIL 150.0s @1388,64,6377 — gym timeout
+TRIAL 2/5 FAIL 150.0s @1388,6377 raw_iron=0 — gym timeout
+  [gym:mine-iron-exp-patched] tp 2776,122,6098 — running
+[patched] descended 122->24 stopped=null have=0 t=105s
+[patched] branchMine y=24 level=24 mined=0 dug=2 have=0/5 lost=false
+  [gym:mine-iron-exp-patched] FAIL 110.7s @2776,122,6098 — Collected 0/5 raw_iron (y=24, dug=2)
+TRIAL 3/5 FAIL 110.7s @2776,6098 raw_iron=0 — Collected 0/5 raw_iron (y=24, dug=2)
+  [gym:mine-iron-exp-patched] tp 8840,66,6341 — running
+[patched] descended 66->24 stopped=null have=10 t=65s
+[patched] branchMine y=24 level=24 mined=0 dug=0 have=10/5 lost=false
+  [gym:mine-iron-exp-patched] PASS 65.5s @8840,66,6341 — Collected 10 raw_iron
+TRIAL 4/5 PASS 65.5s @8840,6341 raw_iron=10 — Collected 10 raw_iron
+  [gym:mine-iron-exp-patched] tp 8752,75,5423 — running
+[patched] descended 75->24 stopped=null have=0 t=68s
+[patched] branchMine y=24 level=24 mined=0 dug=15 have=0/5 lost=false
+  [gym:mine-iron-exp-patched] FAIL 110.4s @8752,75,5423 — Collected 0/5 raw_iron (y=24, dug=15)
+TRIAL 5/5 FAIL 110.4s @8752,5423 raw_iron=0 — Collected 0/5 raw_iron (y=24, dug=15)
+
+SUMMARY strat=patched trials=5 pass=1/5 (20%) medianMs=110666
+  FAIL 150.0s @6564,5293 — gym timeout
+  FAIL 150.0s @1388,6377 — gym timeout
+  FAIL 110.7s @2776,6098 — Collected 0/5 raw_iron (y=24, dug=2)
+  PASS 65.5s @8840,6341 — Collected 10 raw_iron
+  FAIL 110.4s @8752,5423 — Collected 0/5 raw_iron (y=24, dug=15)

@@ -1,0 +1,5 @@
+(node:71035) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  [gym:mine-iron-exp-digdown] tp 2966,65,5219 — running
+ERR [set_entity_data] The value of "offset" is out of range. It must be >= 0 and <= 6. Received 8 | len=10 hex=6386dd171312020e01ff
+[digDownTo] 65 -> 50 (target 42)

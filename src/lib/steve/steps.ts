@@ -61,14 +61,15 @@ export const steps: readonly Step[] = [
 			getPickaxeTier(s.equipment.pickaxe) >= 3 ||
 			// Past the wood phase (iron in hand / a furnace built) → stop re-gathering,
 			// BUT only while we can still actually craft: a reachable crafting table, or
-			// planks/logs on hand. If a tool broke and we're out of ALL wood with no
-			// table, we MUST gather wood again or we deadlock forever on
-			// "Craft Stone Pickaxe → Need crafting table" (the live deep-mine stall).
+			// ENOUGH wood to make one. A table costs 4 planks (= 1 log), so `planks > 0`
+			// was too lenient — a bot with 1-3 planks and no table would stop gathering
+			// yet couldn't craft a table, deadlocking forever on "Craft Stone Pickaxe →
+			// Need crafting table" (observed live). Require enough wood for a table.
 			((s.inventory.ironOre + s.inventory.ironIngots >= 1 ||
 				s.equipment.hasFurnace) &&
 				(s.equipment.hasCraftingTable ||
-					s.inventory.planks > 0 ||
-					s.inventory.logs > 0)),
+					s.inventory.planks >= 4 ||
+					s.inventory.logs >= 1)),
 		execute: async (bot, _state) => {
 			const { gatherWood } = await import("./tasks/gather-wood/main.ts");
 			return gatherWood(bot, 5);
@@ -211,7 +212,16 @@ export const steps: readonly Step[] = [
 		canExecute: (s) => getPickaxeTier(s.equipment.pickaxe) >= 2,
 		// 8 is enough for the cast kit: 2 buckets (6) + flint&steel (1). No iron
 		// pickaxe needed (obsidian is cast, not mined), so we don't need 11.
-		isComplete: (s) => s.inventory.ironOre + s.inventory.ironIngots >= 8,
+		// Count iron already INVESTED in the kit (each bucket = 3 iron, flint&steel = 1):
+		// otherwise, after crafting buckets the loose iron drops below 8 and the bot
+		// re-mines iron it already gathered — timing out forever (higher priority than
+		// fill-water/flint&steel) instead of finishing the kit it already has.
+		isComplete: (s) =>
+			s.inventory.ironOre +
+				s.inventory.ironIngots +
+				(s.inventory.buckets + s.inventory.waterBuckets) * 3 +
+				(s.inventory.flintAndSteel >= 1 ? 1 : 0) >=
+			8,
 		execute: async (bot, _state) => {
 			const { mineBlock } = await import("./tasks/mining/main.ts");
 			return mineBlock(bot, "iron_ore", 8);
@@ -226,7 +236,12 @@ export const steps: readonly Step[] = [
 			s.equipment.hasFurnace &&
 			s.inventory.ironOre >= 3 &&
 			(s.inventory.coal >= 2 || s.inventory.planks >= 4),
-		isComplete: (s) => s.inventory.ironIngots >= 7,
+		// Count iron already invested in buckets (3 each) so a bot that smelted, then
+		// spent ingots on buckets, doesn't loop back to re-smelt iron it no longer has.
+		isComplete: (s) =>
+			s.inventory.ironIngots +
+				(s.inventory.buckets + s.inventory.waterBuckets) * 3 >=
+			7,
 		execute: async (bot, _state) => {
 			const { smeltItems } = await import("./tasks/smelt/main.ts");
 			return smeltItems(bot, "raw_iron", 8);
@@ -237,7 +252,16 @@ export const steps: readonly Step[] = [
 		id: "craft_iron_pickaxe",
 		name: "Craft Iron Pickaxe",
 		priority: 13,
-		canExecute: (s) => s.inventory.ironIngots >= 3 && s.inventory.sticks >= 2,
+		// Defer the iron pickaxe until the portal kit is already in hand (2 buckets +
+		// flint&steel). It is NOT needed to reach the nether — obsidian is CAST, not
+		// mined — and crafting it early steals 3 of the ~7 iron the kit needs, stranding
+		// the bot at iron_ingot ~4-8 unable to finish the buckets (the recurring stall).
+		canExecute: (s) =>
+			s.inventory.ironIngots >= 3 &&
+			s.inventory.sticks >= 2 &&
+			s.inventory.waterBuckets >= 1 &&
+			s.inventory.buckets >= 1 &&
+			s.inventory.flintAndSteel >= 1,
 		isComplete: (s) => getPickaxeTier(s.equipment.pickaxe) >= 2,
 		execute: async (bot, _state) => {
 			const { craftIronPickaxe } = await import("./tasks/craft/main.ts");
