@@ -65,11 +65,15 @@ export const steps: readonly Step[] = [
 			// was too lenient — a bot with 1-3 planks and no table would stop gathering
 			// yet couldn't craft a table, deadlocking forever on "Craft Stone Pickaxe →
 			// Need crafting table" (observed live). Require enough wood for a table.
+			// Once smelting is on the table, WOOD is also fuel (smelt with planks), so a bot
+			// that has a table but few planks must KEEP gathering — else it deadlocks: won't
+			// gather wood, can't smelt with wood (needs ~6 planks), and coal-mining stalls
+			// (live race-11 leader: table + 2 planks + no coal, stuck). Done only when it has
+			// real fuel: coal, OR enough planks for a table + a wood-smelt (>=12), OR an iron
+			// pickaxe / 20 planks (handled above).
 			((s.inventory.ironOre + s.inventory.ironIngots >= 1 ||
 				s.equipment.hasFurnace) &&
-				(s.equipment.hasCraftingTable ||
-					s.inventory.planks >= 4 ||
-					s.inventory.logs >= 1)),
+				(s.inventory.coal >= 2 || s.inventory.planks >= 12)),
 		execute: async (bot, _state) => {
 			const { gatherWood } = await import("./tasks/gather-wood/main.ts");
 			return gatherWood(bot, 5);
