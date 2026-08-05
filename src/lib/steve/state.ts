@@ -237,11 +237,17 @@ export const syncFromBot = (bot: Bot): GameState => {
 	};
 
 	// A lit nether portal nearby means the Build step is done and we can enter.
+	// exposed:false — the DEFAULT findBlock applies a canSeeBlock() line-of-sight filter
+	// that fails to see a portal the bot just cast+lit (it stands right against/inside the
+	// frame), so portalBuilt never flipped and the race looped on Build forever. Tight
+	// radius so it detects the just-built portal the bot is adjacent to, not a leftover
+	// portal elsewhere in the shared world (which would false-flag portalBuilt mid-run).
 	const netherPortal =
 		bot.findBlock?.({
 			matching: (n: string) => n === "nether_portal",
-			maxDistance: 16,
-		}) ?? null;
+			maxDistance: 6,
+			exposed: false,
+		} as never) ?? null;
 
 	return {
 		inventory: {

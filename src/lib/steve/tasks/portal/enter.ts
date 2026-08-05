@@ -22,7 +22,10 @@ export const enterPortal = async (
 		const portal = bot.findBlock({
 			matching: (name) => name === "nether_portal" || name === "end_portal",
 			maxDistance: 64,
-		}) as Block | null;
+			// exposed:false — a just-cast portal often isn't in the bot's eye line-of-sight
+			// (it stands against the frame), which the default findBlock filter requires.
+			exposed: false,
+		} as never) as Block | null;
 		if (!portal) return { success: false, message: "No portal found nearby" };
 		target = portal.position;
 	}
