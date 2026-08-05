@@ -106,7 +106,12 @@ export const initCrafting = (bot: Bot, _options: BotOptions): void => {
 									true,
 								);
 								await bot.activateBlock(block.position);
-								const [win] = await once<[Window]>(bot, "windowOpen", 5000);
+								// 12s (was 5s): under server load / network latency the table
+								// window can take >5s to open, and the too-short wait threw
+								// "Promise timed out" — the #1 recurring craft-desync that stalled
+								// race bots (Craft Stone Pickaxe/Table/Bucket looping). A fast open
+								// still resolves immediately; this only extends the slow case.
+								const [win] = await once<[Window]>(bot, "windowOpen", 12000);
 								windowCraftingTable = win;
 								// Wait for window_items to sync player inventory into the crafting window
 								await new Promise((r) => setTimeout(r, 500));
