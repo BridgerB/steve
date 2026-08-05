@@ -67,6 +67,31 @@ export const runGymStep = async (
 	const gz = Math.floor(bot.entity?.position?.z ?? cz);
 	log(`[gym:${step.slug}] tp ${gx},${gy},${gz} — running`);
 
+	// Per-step scaffold (e.g. enter-nether builds a lit portal at the landing). Runs
+	// after the teleport so it can build relative to where the bot actually landed.
+	if (step.setup) {
+		try {
+			await step.setup(bot, rcon, { x: gx, y: gy, z: gz });
+			await sleep(800);
+		} catch (e) {
+			log(`[gym:${step.slug}] setup error: ${e instanceof Error ? e.message : String(e)}`);
+		}
+	}
+
+	// Match the race's priority-0 escape_water override: a random teleport into water
+	// shouldn't fail an unrelated step (mining/gathering bail "yielding to escape_water").
+	// In a real run escape_water always gets the bot to dry land BEFORE any other step,
+	// so do the same here — otherwise water spawns falsely tank every resource step.
+	if ((bot as { entity?: { isInWater?: boolean } }).entity?.isInWater) {
+		try {
+			const { escapeWater } = await import("../lib/bot-utils.ts");
+			await Promise.race([escapeWater(bot as never), sleep(30000)]);
+			log(`[gym:${step.slug}] escaped spawn water`);
+		} catch {
+			/* best-effort */
+		}
+	}
+
 	const t0 = Date.now();
 	let message = "";
 	try {

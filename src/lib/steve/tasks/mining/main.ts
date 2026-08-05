@@ -77,6 +77,8 @@ const DEEP_ORE_LEVEL: Record<string, number> = {
 // in the pack (which the step's isComplete checks), not by blocks dug — a block
 // dug whose drop fell in lava must not count toward the target.
 const DROP_ITEM: Record<string, string> = {
+	stone: "cobblestone",
+	deepslate: "cobbled_deepslate",
 	iron_ore: "raw_iron",
 	deepslate_iron_ore: "raw_iron",
 	coal_ore: "coal",
@@ -486,6 +488,29 @@ const branchMineOre = async (
 		}
 	};
 
+	// Drop one level (dig straight down), refusing to breach lava/water and never below
+	// the ore band's floor. Lets a BOXED strip keep mining DOWN through the whole band
+	// (many more wall-slices exposed → finds ore) instead of bailing to the costly
+	// climb-out+relocate after only ~4 blocks (the mine-iron dug=4, 0-iron stall).
+	const bandFloor = Math.max(8, level - 16);
+	const digDownOne = async (): Promise<boolean> => {
+		const p = bot.entity.position;
+		const fx = Math.floor(p.x);
+		const fy = Math.floor(p.y);
+		const fz = Math.floor(p.z);
+		if (fy <= bandFloor) return false;
+		const below = bot.blockAt(vec3(fx, fy - 1, fz));
+		if (!below || isAir(below) || isLava(below) || isWater(below)) return false;
+		for (let d = 1; d <= 3; d++)
+			if (isLava(bot.blockAt(vec3(fx, fy - d, fz)))) return false;
+		if (digExposesWater(bot, vec3(fx, fy - 1, fz))) return false;
+		if (!(await lookDig(bot, below))) return false;
+		for (let w = 0; w < 8 && Math.floor(bot.entity.position.y) >= fy; w++)
+			await sleep(50);
+		dug++;
+		return Math.floor(bot.entity.position.y) < fy;
+	};
+
 	let turns = 0;
 	let forward = 0;
 	// Detect ore whose drops we can't collect (broken over lava — the count rises but
@@ -534,9 +559,17 @@ const branchMineOre = async (
 			}
 		} else {
 			dir = rotate(dir);
-			// Boxed in on all four sides — stop so mineDeepOre's recovery (climb out /
-			// relocate) runs instead of spinning in place forever.
-			if (++turns >= 4) return { mined, dug, lostDrops: false };
+			// Boxed at this level (water/lava/caves in all 4 dirs — common at the ore
+			// band). Instead of bailing to the costly climb-out+relocate after ~4 blocks,
+			// drop ONE level and keep strip-mining down through the band. Only give up if
+			// we can't descend either.
+			if (++turns >= 4) {
+				if (await digDownOne()) {
+					turns = 0;
+				} else {
+					return { mined, dug, lostDrops: false };
+				}
+			}
 		}
 	}
 	return { mined, dug, lostDrops: false };
@@ -697,6 +730,46 @@ const harvestShaftWalls = async (
  * lets the caller strip-mine where it reached. Optionally harvests veins the shaft
  * exposes on the way down. Resumable.
  */
+// When the vertical dig is boxed by a WIDE water table (adjacent sidesteps all wet, so
+// sidestepToSolid can't escape), PATHFIND to the nearest genuinely-dry surface column
+// (solid ground + 2 air above + no water just below) within R and resume the descent
+// there. The pathfinder walks around/across the water that a 2-cell sidestep can't — this
+// is the fix for the "descended y=63 stopped=blocked (liquid)" stall that tanked mine-coal
+// and capped mine-iron on watery spawns.
+const relocateToDryGround = async (bot: Bot): Promise<boolean> => {
+	const p = bot.entity.position;
+	const cx = Math.floor(p.x);
+	const cy = Math.floor(p.y);
+	const cz = Math.floor(p.z);
+	let best: Vec3 | null = null;
+	let bestD = Infinity;
+	const R = 24;
+	for (let dx = -R; dx <= R; dx += 2) {
+		for (let dz = -R; dz <= R; dz += 2) {
+			if (Math.abs(dx) + Math.abs(dz) < 6) continue; // must move meaningfully away
+			for (let y = cy + 4; y >= cy - 4; y--) {
+				const g = bot.blockAt(vec3(cx + dx, y - 1, cz + dz)); // ground
+				const f = bot.blockAt(vec3(cx + dx, y, cz + dz)); // feet
+				const h = bot.blockAt(vec3(cx + dx, y + 1, cz + dz)); // head
+				if (!g || isAir(g) || isLava(g) || isWater(g)) continue;
+				if (!isAir(f) || !isAir(h)) continue;
+				if (isWater(bot.blockAt(vec3(cx + dx, y - 2, cz + dz)))) continue; // not a water table
+				const d = dx * dx + dz * dz;
+				if (d < bestD) {
+					bestD = d;
+					best = vec3(cx + dx, y, cz + dz);
+				}
+				break;
+			}
+		}
+	}
+	if (!best) return false;
+	try {
+		await goTo(bot, best, { range: 0, timeout: 8000 });
+	} catch {}
+	return distance(bot.entity.position, best) <= 2.5;
+};
+
 export const digDownVertical = async (
 	bot: Bot,
 	targetY: number,
@@ -737,7 +810,13 @@ export const digDownVertical = async (
 		}
 
 		if (lavaClose || waterBelow || deepDrop) {
-			if (!(await sidestepToSolid(bot, 2)) || ++sideTries > 7)
+			if (await sidestepToSolid(bot, 2)) continue;
+			// Sidestep couldn't escape (wide water table) — pathfind to dry ground.
+			if (await relocateToDryGround(bot)) {
+				sideTries = 0;
+				continue;
+			}
+			if (++sideTries > 7)
 				return {
 					y: floorY(bot),
 					stopped: lavaClose
@@ -755,7 +834,12 @@ export const digDownVertical = async (
 		if (below && !isAir(below)) {
 			const broke = await lookDig(bot, below);
 			if (!broke) {
-				if (!(await sidestepToSolid(bot, 2)) || ++sideTries > 7)
+				if (await sidestepToSolid(bot, 2)) continue;
+				if (await relocateToDryGround(bot)) {
+					sideTries = 0;
+					continue;
+				}
+				if (++sideTries > 7)
 					return { y: floorY(bot), stopped: "blocked (liquid)" };
 				continue;
 			}
@@ -1046,7 +1130,17 @@ export const mineBlock = async (
 	const [dirX, dirZ] = bestDir;
 	logEvent(mineCat(blockType),"direction", `dx=${dirX} dz=${dirZ} ahead=${bestCount}`);
 
-	while (mined < targetCount && Date.now() < deadline) {
+	// Track the DROP collected (stone→cobblestone), not blocks dug — the pass check
+	// is on the drop item. Digging 16 stone whose cobble rolled away uncollected used
+	// to falsely "succeed" (mine-cobblestone 0%: "Mined 16 stone" but 0 cobblestone).
+	// Cap total digs at 3x so an unreachable-drop spot can't spin forever.
+	const dropItem = DROP_ITEM[blockType] ?? blockType;
+	const collected = () => invCount(bot, dropItem);
+	while (
+		collected() < targetCount &&
+		mined < targetCount * 3 &&
+		Date.now() < deadline
+	) {
 		// In the water trap → bail so escape_water (priority 0) takes over cleanly.
 		if (isInWaterTrap(bot))
 			return { success: false, message: "in water — yielding to escape_water" };

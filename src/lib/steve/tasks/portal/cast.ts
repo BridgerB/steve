@@ -12,7 +12,13 @@
 
 import type { Bot } from "typecraft";
 import { distance, offset, vec3, type Vec3 } from "typecraft";
-import { getBlock, goTo, sleep, walkToXZ } from "../../lib/bot-utils.ts";
+import {
+	getBlock,
+	getRememberedResource,
+	goTo,
+	sleep,
+	walkToXZ,
+} from "../../lib/bot-utils.ts";
 import { logEvent } from "../../lib/logger.ts";
 import type { Block, StepResult } from "../../types.ts";
 
@@ -128,7 +134,15 @@ const digAt = async (bot: Bot, pos: Vec3): Promise<void> => {
 	if (!b || isAir(b.name)) return;
 	try {
 		await bot.lookAt(offset(b.position, 0.5, 0.5, 0.5));
-		await bot.dig(b as Block);
+		// Cap the dig: bot.dig can hang indefinitely if the server never acks the break
+		// (seen wedging the lava strip-miner for minutes on a single block). Time it out
+		// so the caller loop keeps moving/covering ground instead of freezing.
+		await Promise.race([
+			bot.dig(b as Block),
+			sleep(6000).then(() => {
+				bot.stopDigging?.();
+			}),
+		]);
 		await sleep(150);
 	} catch {
 		/* ignore */
@@ -308,13 +322,42 @@ const findFluidSource = (
 	const positions = bot.findBlocks({
 		matching: (n: string) => n === fluid,
 		maxDistance,
-		count: 64,
+		// exposed:false skips typecraft's DEFAULT exposed filter — which requires
+		// bot.canSeeBlock() line-of-sight from the bot's EYE. That raycast fails beyond
+		// ~a few dozen blocks (it grazes terrain), so surface lava the bot genuinely HAS in
+		// its world model was being dropped and the bot descended past it. We do our OWN
+		// air-neighbour exposed check below (no LOS), so far surface pools are found.
+		exposed: false,
+		// Large cap: findBlocks returns the N NEAREST matches, and our exposed-filter runs
+		// AFTER. A small cap lets nearer ENCASED lava (e.g. inside a mountain at a high
+		// spawn) crowd out the exposed surface pool we actually want, so grab plenty.
+		count: 1024,
 	});
 	if (positions.length === 0) return null;
-	const withAir = positions.filter((p) =>
-		isAir(getBlock(bot, vec3(p.x, p.y + 1, p.z))?.name),
+	// findBlocks (exposed:false) sees fluid THROUGH solid rock. Only EXPOSED sources (with
+	// an air neighbour) are reachable/scoopable — targeting encased lava was clearing a cast
+	// site next to lava the bot could never bucket ("pool unreachable"). Require an air
+	// neighbour for lava; water keeps the old lenient fallback (it's easy + renewable).
+	const air = (x: number, y: number, z: number) =>
+		isAir(getBlock(bot, vec3(x, y, z))?.name);
+	const exposed = positions.filter((p) =>
+		(
+			[
+				[1, 0, 0],
+				[-1, 0, 0],
+				[0, 0, 1],
+				[0, 0, -1],
+				[0, 1, 0],
+				[0, -1, 0],
+			] as const
+		).some(([a, b, c]) => air(p.x + a, p.y + b, p.z + c)),
 	);
-	const pick = withAir.length ? withAir : positions;
+	// EXPOSED-only: an air-neighbour source is the only kind the bot can actually bucket.
+	// (No encased fallback — targeting rock-walled lava the bot can't reach caused the
+	// "pool unreachable" stalls and the bot walking off toward deep lava it couldn't scoop.
+	// When nothing exposed is in range, return null so the caller descends/explores instead.)
+	const pick = exposed;
+	if (!pick.length) return null;
 	const o = bot.entity.position;
 	let best: Vec3 | null = null;
 	let bestD = Infinity;
@@ -329,62 +372,255 @@ const findFluidSource = (
 };
 
 /** Find a nearby fluid source and fill an empty bucket from it. */
+// Any block whose neighbour is lava is unsafe to dig (would flood the bot). Used
+// to keep footing prep from breaching an adjacent lava cell.
+const touchesLava = (bot: Bot, c: Vec3): boolean =>
+	(
+		[
+			[1, 0, 0],
+			[-1, 0, 0],
+			[0, 1, 0],
+			[0, -1, 0],
+			[0, 0, 1],
+			[0, 0, -1],
+		] as const
+	).some(([ax, ay, az]) =>
+		isLava(getBlock(bot, vec3(c.x + ax, c.y + ay, c.z + az))?.name),
+	);
+
+// Find (or BUILD) safe footing beside a fluid source and return the stand cell.
+// Natural footing = solid floor at src.y with 2 air above. If none exists (the
+// pool sits in a wall/at a cliff edge / mid-lake), place a dirt block on a solid
+// ledge beside it so the bot never has to stand on lava. Returns null only if no
+// neighbour can be made safe.
+const standBesideSource = async (
+	bot: Bot,
+	src: Vec3,
+	fluid: "water" | "lava",
+): Promise<Vec3 | null> => {
+	const dirs = [
+		[1, 0],
+		[-1, 0],
+		[0, 1],
+		[0, -1],
+	] as const;
+	// Pass 1: a ready-made ledge (solid, non-lava floor with a clear 1x2 above it).
+	for (const [dx, dz] of dirs) {
+		const floorC = vec3(src.x + dx, src.y, src.z + dz);
+		const floor = getBlock(bot, floorC);
+		const feet = getBlock(bot, vec3(src.x + dx, src.y + 1, src.z + dz));
+		const head = getBlock(bot, vec3(src.x + dx, src.y + 2, src.z + dz));
+		if (
+			isSolid(floor?.name) &&
+			!isLava(floor?.name) &&
+			isAir(feet?.name) &&
+			isAir(head?.name)
+		)
+			return vec3(src.x + dx + 0.5, src.y + 1, src.z + dz + 0.5);
+	}
+	// Pass 2: BUILD a ledge — a neighbour whose floor cell is air/replaceable but
+	// which has a solid, non-lava block under it to place against, and a clear 1x2
+	// above. Place dirt in the floor cell, then stand on it. Never touch a cell
+	// adjacent to lava with a dig; only place.
+	for (const [dx, dz] of dirs) {
+		const floorC = vec3(src.x + dx, src.y, src.z + dz);
+		const belowC = vec3(src.x + dx, src.y - 1, src.z + dz);
+		const floor = getBlock(bot, floorC);
+		const below = getBlock(bot, belowC);
+		const feet = getBlock(bot, vec3(src.x + dx, src.y + 1, src.z + dz));
+		const head = getBlock(bot, vec3(src.x + dx, src.y + 2, src.z + dz));
+		const floorFillable =
+			(isAir(floor?.name) || floor?.name === "water") && !touchesLava(bot, floorC);
+		const canStandAbove = isAir(feet?.name) && isAir(head?.name);
+		const anchor = isSolid(below?.name) && !isLava(below?.name);
+		if (floorFillable && canStandAbove && anchor) {
+			await ensureSolid(bot, floorC);
+			if (isSolid(getBlock(bot, floorC)?.name))
+				return vec3(src.x + dx + 0.5, src.y + 1, src.z + dz + 0.5);
+		}
+	}
+	// Water doesn't burn — standing on the source itself is an acceptable last resort.
+	if (fluid === "water") return vec3(src.x + 0.5, src.y + 1, src.z + 0.5);
+	// Pass 3 (lava): CARVE a ledge beside ENCASED lava. The abundant deep lava is
+	// rock-walled, so no natural/buildable rim exists. A neighbour with a solid,
+	// non-lava floor at src.y is a ledge level with the pool; dig out the 1x2 body
+	// space above it and stand there looking down-across at the source. Removing
+	// blocks ABOVE the lava's own level never breaches the source (it is a cell over
+	// and a level down, staying put on flat ground), so this is safe.
+	for (const [dx, dz] of dirs) {
+		const floorC = vec3(src.x + dx, src.y, src.z + dz);
+		const feetC = vec3(src.x + dx, src.y + 1, src.z + dz);
+		const headC = vec3(src.x + dx, src.y + 2, src.z + dz);
+		const floor = getBlock(bot, floorC);
+		if (!isSolid(floor?.name) || isLava(floor?.name)) continue;
+		if (isLava(getBlock(bot, vec3(src.x + dx, src.y - 1, src.z + dz))?.name))
+			continue;
+		if (isSolid(getBlock(bot, feetC)?.name)) await digAt(bot, feetC);
+		if (isSolid(getBlock(bot, headC)?.name)) await digAt(bot, headC);
+		if (isAir(getBlock(bot, feetC)?.name) && isAir(getBlock(bot, headC)?.name))
+			return vec3(src.x + dx + 0.5, src.y + 1, src.z + dz + 0.5);
+	}
+	return null;
+};
+
 const fillBucket = async (
 	bot: Bot,
 	fluid: "water" | "lava",
 ): Promise<boolean> => {
 	if (count(bot, "bucket") < 1) return false;
-	const src = findFluidSource(bot, fluid, 24);
-	if (!src) return false;
-	// Stand on solid footing BESIDE the source (never on top — lava would burn).
-	let stand: Vec3 | null = null;
-	for (const [dx, dz] of [
+	// 5-agent consensus scoop. The universal, MC-legal fill position is: stand on a block
+	// LEVEL with the source one cell to the side, feet one ABOVE, and look DOWN at the
+	// source's TOP FACE. Exposed sources always have a clear air column above, so that ray
+	// hits the source with nothing to occlude (lava has no collision box, so it never
+	// blocks LOS). The old code only ever stood BESIDE at the source's own level — which
+	// structurally can't reach mid-pool / flush / depression pools ("pool unreachable").
+	// So: enumerate candidate stances (above-look-down PRIMARY, beside-at-level SECONDARY),
+	// BUILD a dirt dock where footing is missing (placing beside lava is safe — only DIGGING
+	// floods), and let the actual lava_bucket count be the sole success oracle (aim-sweep the
+	// top face first, then lower). Prefer sources with air directly above (scoopable surfaces).
+	const scan = (dist: number) =>
+		bot.findBlocks({
+			matching: (n: string) => n === fluid,
+			maxDistance: dist,
+			// exposed:false — same canSeeBlock LOS trap as surface spotting: near the portal
+			// FRAME, the obsidian occludes line-of-sight to the pool, so the default (LOS)
+			// scan returns 0 and the refill fails SILENTLY (the "stuck at 7/10" cause). We do
+			// our own source + air-neighbour filtering below, so LOS is neither needed nor wanted.
+			exposed: false,
+			count: 60,
+		});
+	let raw = scan(20);
+	if (!raw.length) {
+		// The pool's near sources get scooped/flowed over successive casts, so the source
+		// frontier recedes past 20. Re-find the pool WIDE (spotting works now) and walk back.
+		const far = findFluidSource(bot, fluid, 80);
+		if (far) {
+			await goTo(bot, vec3(far.x, far.y, far.z), { range: 4, timeout: 15000 }).catch(
+				() => {},
+			);
+			raw = scan(20);
+		}
+	}
+	if (!raw.length) {
+		logEvent("cast", "fill_none", `${fluid} no source within reach`);
+		return false;
+	}
+	const here = bot.entity.position;
+	const d2 = (p: { x: number; y: number; z: number }) =>
+		(p.x - here.x) ** 2 + (p.y - here.y) ** 2 + (p.z - here.z) ** 2;
+	// Only TRUE SOURCE blocks (fluid level 0) fill a bucket. typecraft names FLOWING lava
+	// "lava" too, and aiming at a flowing tongue silently fails every attempt — a major cause
+	// of "pool unreachable" (agent finding, verified against block.ts: source/flow live in
+	// properties.level; the default state has no level and IS the source, so missing == 0).
+	const isSource = (p: { x: number; y: number; z: number }) => {
+		const lv = (
+			getBlock(bot, vec3(p.x, p.y, p.z)) as {
+				properties?: { level?: unknown };
+			} | null
+		)?.properties?.level;
+		return lv == null || String(lv) === "0";
+	};
+	const src0 = raw.filter(isSource);
+	const pool = src0.length ? src0 : raw;
+	const surf = pool.filter((p) => isAir(getBlock(bot, vec3(p.x, p.y + 1, p.z))?.name));
+	// Rank EDGE sources (a solid, non-lava horizontal neighbour = a rim to stand on/over)
+	// before interior ones. The nearest sources from the cast site are the pool's INNER
+	// edge — all-lava neighbours, unscoopable — while the reachable rim sources sit a bit
+	// farther out (measured: "8 srcs no scoop" because all 8 nearest were interior).
+	const hasRim = (p: { x: number; y: number; z: number }) =>
+		([[1, 0], [-1, 0], [0, 1], [0, -1]] as const).some(([dx, dz]) => {
+			const n = getBlock(bot, vec3(p.x + dx, p.y, p.z + dz))?.name;
+			return isSolid(n) && !isLava(n);
+		});
+	const srcs = (surf.length ? surf : pool)
+		.slice()
+		.sort((a, b) => {
+			const ra = hasRim(a) ? 0 : 1;
+			const rb = hasRim(b) ? 0 : 1;
+			return ra !== rb ? ra - rb : d2(a) - d2(b);
+		})
+		.slice(0, 14)
+		.map((p) => vec3(p.x, p.y, p.z));
+	console.error(
+		`[SCOOP] ${fluid} bot=${Math.floor(here.x)},${Math.floor(here.y)},${Math.floor(here.z)} raw=${raw.length} src0=${src0.length} srcs=${srcs.length} nearest=${srcs[0] ? `${srcs[0].x},${srcs[0].y},${srcs[0].z}@${Math.round(Math.sqrt(d2(srcs[0])))} rim=${hasRim(srcs[0])}` : "none"}`,
+	);
+
+	const NB8: [number, number][] = [
 		[1, 0],
 		[-1, 0],
 		[0, 1],
 		[0, -1],
-	] as const) {
-		const floor = getBlock(bot, vec3(src.x + dx, src.y, src.z + dz));
-		const feet = getBlock(bot, vec3(src.x + dx, src.y + 1, src.z + dz));
-		const head = getBlock(bot, vec3(src.x + dx, src.y + 2, src.z + dz));
-		if (isSolid(floor?.name) && isAir(feet?.name) && isAir(head?.name)) {
-			stand = vec3(src.x + dx + 0.5, src.y + 1, src.z + dz + 0.5);
-			break;
+		[1, 1],
+		[1, -1],
+		[-1, 1],
+		[-1, -1],
+	];
+	const reach = async (feet: Vec3): Promise<boolean> => {
+		const c = vec3(feet.x + 0.5, feet.y, feet.z + 0.5);
+		if (
+			Math.hypot(
+				bot.entity.position.x - c.x,
+				bot.entity.position.y - c.y,
+				bot.entity.position.z - c.z,
+			) > 1.4
+		)
+			await goTo(bot, c, { range: 0, timeout: 12000 }).catch(() => {});
+		await walkToXZ(bot, c.x, c.z, { targetDist: 0.4, maxTime: 2500 });
+		return (
+			Math.hypot(bot.entity.position.x - c.x, bot.entity.position.z - c.z) <= 1.8
+		);
+	};
+	const scoop = async (src: Vec3): Promise<boolean> => {
+		if (!(await equip(bot, "bucket"))) return false;
+		// Aim the source TOP FACE first (the reliable down-look), then centre, then low.
+		for (const dy of [0.95, 0.5, 0.15]) {
+			await reliableUse(bot, vec3(src.x + 0.5, src.y + dy, src.z + 0.5));
+			if (count(bot, `${fluid}_bucket`) > 0) return true;
+		}
+		return false;
+	};
+
+	for (const src of srcs) {
+		// PRIMARY: stand ABOVE, look DOWN. Feet at src.y+1 in a neighbour column, standing
+		// ON a solid non-lava block at src.y (build a dirt dock if the column is open but has
+		// an anchor below). Covers flush, depression, and mid-pool sources.
+		for (const [dx, dz] of NB8) {
+			const foot = vec3(src.x + dx, src.y, src.z + dz);
+			const feet = vec3(src.x + dx, src.y + 1, src.z + dz);
+			const head = vec3(src.x + dx, src.y + 2, src.z + dz);
+			if (!isAir(getBlock(bot, feet)?.name) || !isAir(getBlock(bot, head)?.name))
+				continue;
+			const footN = getBlock(bot, foot)?.name;
+			if (isLava(footN)) continue;
+			if (!isSolid(footN)) {
+				const anchor = getBlock(bot, vec3(src.x + dx, src.y - 1, src.z + dz))?.name;
+				if (!isSolid(anchor) || isLava(anchor)) continue; // nothing to build a dock on
+				await ensureSolid(bot, foot); // dirt dock — placing beside lava is safe
+				if (!isSolid(getBlock(bot, foot)?.name)) continue;
+			}
+			if (!(await reach(feet))) continue;
+			if (await scoop(src)) {
+				logEvent("cast", "filled", `${fluid}_bucket above`);
+				return true;
+			}
+		}
+		// SECONDARY: beside at the source's own level (feet at src.y on solid src.y-1).
+		for (const [dx, dz] of NB8.slice(0, 4)) {
+			const foot = vec3(src.x + dx, src.y - 1, src.z + dz);
+			const feet = vec3(src.x + dx, src.y, src.z + dz);
+			const head = vec3(src.x + dx, src.y + 1, src.z + dz);
+			const footN = getBlock(bot, foot)?.name;
+			if (!isAir(getBlock(bot, feet)?.name) || !isAir(getBlock(bot, head)?.name))
+				continue;
+			if (!isSolid(footN) || isLava(footN)) continue;
+			if (!(await reach(feet))) continue;
+			if (await scoop(src)) {
+				logEvent("cast", "filled", `${fluid}_bucket level`);
+				return true;
+			}
 		}
 	}
-	// The old fallback stood ON the source — fine for water, but for lava it drops
-	// the bot in to burn while the safety guard yanks it back out and we walk in
-	// again: a hang. With no safe footing beside lava, give up rather than stand on
-	// it. (Water doesn't burn, so the above-spot fallback is still fine there.)
-	if (!stand) {
-		if (fluid === "lava") {
-			logEvent("cast", "fill_no_safe_spot", `lava ${src.x},${src.y},${src.z}`);
-			return false;
-		}
-		stand = vec3(src.x + 0.5, src.y + 1, src.z + 0.5);
-	}
-	if (
-		Math.hypot(
-			bot.entity.position.x - stand.x,
-			bot.entity.position.y - stand.y,
-			bot.entity.position.z - stand.z,
-		) > 1.4
-	) {
-		await goTo(bot, stand, { range: 0, timeout: 15000 }).catch(() => {});
-	}
-	// Center precisely on the stand cell so the look hits the source, not a rim.
-	await walkToXZ(bot, stand.x, stand.z, { targetDist: 0.4, maxTime: 2500 });
-	if (!(await equip(bot, "bucket"))) return false;
-	for (let i = 0; i < 6; i++) {
-		// Aim at the source centre, alternating with a touch lower.
-		const dy = i % 2 === 0 ? 0.5 : 0.1;
-		await reliableUse(bot, vec3(src.x + 0.5, src.y + dy, src.z + 0.5));
-		if (count(bot, `${fluid}_bucket`) > 0) {
-			logEvent("cast", "filled", `${fluid}_bucket`);
-			return true;
-		}
-	}
-	logEvent("cast", "fill_fail", `${fluid} src ${src.x},${src.y},${src.z}`);
+	logEvent("cast", "fill_fail", `${fluid} ${srcs.length} srcs no scoop`);
 	return false;
 };
 
@@ -407,7 +643,14 @@ export const castObsidianAt = async (
 
 	for (let attempt = 0; attempt < 3; attempt++) {
 		// 1. Top up both buckets FIRST — fillBucket walks to the source (several
-		//    blocks away), so do it before we position at the cup.
+		//    blocks away), so do it before we position at the cup. DESCEND to the
+		//    ground first: after the previous block the bot is on a high cast pillar
+		//    and fillBucket can't reach the pool from up there (measured: block 1 cast
+		//    fine from the ground, block 2 failed "8 candidates unreachable" on the pillar).
+		if (count(bot, "lava_bucket") < 1 || count(bot, "water_bucket") < 1) {
+			bot.setControlState("sneak", false);
+			if (feetY(bot) > baseY) await descendToY(bot, baseY);
+		}
 		if (count(bot, "lava_bucket") < 1 && !(await fillBucket(bot, "lava")))
 			return false;
 		if (count(bot, "water_bucket") < 1 && !(await fillBucket(bot, "water")))
@@ -743,29 +986,350 @@ const isLava = (n?: string): boolean => n === "lava" || n === "flowing_lava";
  * Water is renewable and the sealed-bowl cast reuses its single bucket, so the
  * bot only carries 1 water bucket; the pool is what matters here.
  */
+const HDIRS: [number, number][] = [
+	[1, 0],
+	[0, 1],
+	[-1, 0],
+	[0, -1],
+];
+
+/**
+ * Find lava by MINING to it — the crux of a cold-start portal, and the reason it
+ * measured ~0%. The earlier approach (reuse the ore branch-miner) froze in a single
+ * cell at depth and burned the whole budget without covering ground; probes showed a
+ * random column has NO lava within scan range at ANY depth (y35, y-22, y-48 all dry),
+ * so only horizontal COVERAGE finds a lake. This bores continuous straight 1x2
+ * corridors at lava-rich depth, scanning as it goes, turning 90° at any liquid it must
+ * not breach, and pillaring out of a full box-in — guaranteeing the bot keeps MOVING.
+ */
+const stripMineForLava = async (
+	bot: Bot,
+	digDownVertical: (
+		b: Bot,
+		y: number,
+		d: number,
+	) => Promise<{ y: number; stopped: string | null }>,
+	deadline: number,
+): Promise<Vec3 | null> => {
+	const scan = () => findFluidSource(bot, "lava", 48);
+	let lava = scan();
+	if (lava) return lava;
+
+	// Punch straight DOWN, breaching water (survivable — only lava is deadly), to reach
+	// the dry, lava-rich deepslate below y-10. Stops on lava below — that IS the find.
+	// Wet surfaces + the 1.18 aquifer band (~y0..y20) otherwise make the relocating
+	// dig-down wander the SURFACE hunting a dry column, and the horizontal strip only
+	// ever bores at that surface depth — so the bot never reaches lava at all (measured:
+	// a whole run stuck at y63). Returns the y it managed to reach.
+	const punchDown = async (): Promise<number> => {
+		for (let k = 0; k < 80 && Date.now() < deadline; k++) {
+			// Drowning/lava guard: if we're taking damage (sinking through a deep water
+			// aquifer with no air, or beside lava), BAIL before dying. Death respawns us at
+			// the surface and then hangs the run (measured: died at y11, jumped to y88).
+			// If underwater, climb to air first so we stop drowning.
+			if ((bot.health ?? 20) < 9) {
+				if ((bot as { entity?: { isInWater?: boolean } }).entity?.isInWater) {
+					const { escapeWater } = await import("../../lib/bot-utils.ts");
+					await Promise.race([escapeWater(bot as never), sleep(6000)]).catch(() => {});
+				}
+				return Math.floor(bot.entity.position.y);
+			}
+			const p = bot.entity.position;
+			const by = Math.floor(p.y);
+			// A PICKAXE must be held or digAt hand-mines deepslate (~15s) into the 6s dig
+			// timeout, the block never breaks, and the bot WEDGES (measured: stuck at y-41).
+			if (!bot.heldItem?.name.endsWith("_pickaxe"))
+				await equip(bot, "iron_pickaxe");
+			await walkToXZ(bot, Math.floor(p.x) + 0.5, Math.floor(p.z) + 0.5, {
+				targetDist: 0.25,
+				maxTime: 500,
+			});
+			const below = vec3(Math.floor(p.x), by - 1, Math.floor(p.z));
+			const bn = getBlock(bot, below)?.name;
+			if (isLava(bn)) return by; // lava directly below — scan() grabs it next loop
+			// Only DIG solids. Water/air can't be mined — just sink through them (typecraft
+			// has no buoyancy, so gravity pulls the bot straight down). Digging water wasted
+			// the 6s dig-timeout every block and never dropped us.
+			if (isSolid(bn)) await digAt(bot, below);
+			// Wait to fall/sink onto the next level (exits as soon as we drop).
+			for (let w = 0; w < 16 && Math.floor(bot.entity.position.y) >= by; w++)
+				await sleep(80);
+			if (Math.floor(bot.entity.position.y) >= by) {
+				// Didn't drop — re-center hard and retry the dig once before giving up.
+				const px = Math.floor(bot.entity.position.x);
+				const pz = Math.floor(bot.entity.position.z);
+				await walkToXZ(bot, px + 0.5, pz + 0.5, { targetDist: 0.15, maxTime: 700 });
+				if (isSolid(getBlock(bot, vec3(px, by - 1, pz))?.name))
+					await digAt(bot, vec3(px, by - 1, pz));
+				for (let w = 0; w < 14 && Math.floor(bot.entity.position.y) >= by; w++)
+					await sleep(80);
+				if (Math.floor(bot.entity.position.y) >= by) break; // still stuck -> caller relocates
+			}
+		}
+		// Deliberately do NOT escapeWater here — that climbs back UP and undoes the descent.
+		// If we end in a flooded shaft the caller keeps punching until dry rock or lava.
+		return Math.floor(bot.entity.position.y);
+	};
+
+	// Phase 1 — reach lava-rich depth. Try the fast dry dig-down first; whenever it
+	// stalls above depth (wet surface / aquifer it won't breach), PUNCH through instead
+	// of wandering the surface.
+	const descendUntil = Math.min(deadline, Date.now() + 200_000);
+	while (Math.floor(bot.entity.position.y) > -50 && Date.now() < descendUntil) {
+		const y0 = Math.floor(bot.entity.position.y);
+		await digDownVertical(bot, -50, Math.min(descendUntil, Date.now() + 18_000));
+		lava = scan();
+		if (lava) return lava;
+		if (Math.floor(bot.entity.position.y) >= y0 - 2) {
+			await punchDown();
+			lava = scan();
+			if (lava) return lava;
+			if (Math.floor(bot.entity.position.y) >= y0 - 2) break; // truly stuck (bedrock)
+		}
+	}
+
+	// Phase 2 — cover ground at depth by PATHFINDING to distant waypoints. goTo digs
+	// through rock (digCost) and pillars/routes via caves with its OWN timeout+stop, so it
+	// won't hang the way hand-rolled tunnelling did (a run once blocked ~460s). Caves are
+	// exactly where lava is exposed, so following them is a bonus. Scan between hops; any
+	// lava within 48 ends the search. Bias waypoints slightly downward to trend toward the
+	// dense deep lava, and punch down if the pathfinder leaves us shallow.
+	let bearing = Math.floor(Math.random() * 4);
+	while (Date.now() < deadline) {
+		lava = scan();
+		if (lava) return lava;
+		if (!bot.heldItem?.name.endsWith("_pickaxe")) await equip(bot, "iron_pickaxe");
+		// Pursue any lava the bot has SEEN so far, at ANY depth, before descending further.
+		// findFluidSource is EXPOSED-only (anti-X-ray, currently-loaded chunks); memory
+		// accumulates every exposed lava passed as chunks streamed in (the sightings
+		// production uses). If we spotted cave lava on the way down, home in now instead of
+		// punching past it.
+		const seen =
+			findFluidSource(bot, "lava", 96) ?? getRememberedResource(bot, "lava", true);
+		if (seen) {
+			console.error(`[PROBE] homing lava ${seen.x},${seen.y},${seen.z}`);
+			await goTo(bot, vec3(seen.x, seen.y, seen.z), { range: 4, timeout: 45000 }).catch(
+				() => {},
+			);
+			const near = findFluidSource(bot, "lava", 48);
+			if (near) return near;
+			continue;
+		}
+		const p = bot.entity.position;
+		const fy = Math.floor(p.y);
+		// DESCENT via punchDown (not the pathfinder): goTo/digDownVertical refuse to dig
+		// through water and stall at the ~y40 aquifer then resurface (measured). punchDown
+		// breaches water (survivable) and is the only thing that gets past the aquifer band.
+		if (fy > -54) {
+			console.error(`[PROBE] descend from y=${fy}`);
+			const reached = await punchDown();
+			if (reached >= fy - 1) {
+				// punchDown couldn't drop here — nudge ONE block sideways MANUALLY (fast: goTo
+				// can't dig deepslate and burned ~15s a stall) to a fresh column, then retry.
+				const [rdx, rdz] = HDIRS[Math.floor(Math.random() * 4)]!;
+				const cx = Math.floor(bot.entity.position.x);
+				const cy = Math.floor(bot.entity.position.y);
+				const cz = Math.floor(bot.entity.position.z);
+				const f = vec3(cx + rdx, cy, cz + rdz);
+				const h = vec3(cx + rdx, cy + 1, cz + rdz);
+				if (isSolid(getBlock(bot, f)?.name)) await digAt(bot, f);
+				if (isSolid(getBlock(bot, h)?.name)) await digAt(bot, h);
+				await bot.lookAt(vec3(cx + rdx + 0.5, cy + 0.5, cz + rdz + 0.5));
+				bot.setControlState("forward", true);
+				bot.setControlState("sprint", true);
+				await sleep(400);
+				bot.setControlState("forward", false);
+				bot.setControlState("sprint", false);
+			}
+			continue;
+		}
+		// MINE toward the lava and EXPOSE it. Diagnostics proved lava at this depth is dense
+		// (~70 sources within 32 blocks, nearest ~23 away) but 100% ENCASED — 0 exposed. Since
+		// findBlocks is exposed-only (anti-X-ray), the only way to detect it is to UNCOVER a
+		// face by mining. The old code did the opposite: it turned AWAY from any dig that would
+		// expose lava (safety guard) and used the pathfinder (which also avoids lava), so it
+		// never uncovered the lava it was standing next to. Here we bore a committed straight
+		// 1x2 tunnel, digging THROUGH toward lava; the dig that opens a lava face makes it
+		// exposed, and the scan then returns it to scoop. Lava this dense is hit within ~20 blocks.
+		// DIAG (temporary, measurement only): X-ray lava density vs legal exposed count at
+		// this depth — tells us if a "found nothing" spawn is genuinely lava-sparse or has
+		// lava we're just not reaching/uncovering.
+		{
+			const xr = (r: number) =>
+				(
+					bot.findBlocks({
+						matching: (n: string) => n === "lava",
+						maxDistance: r,
+						count: 300,
+						exposed: false,
+					} as never) as unknown[]
+				).length;
+			const ex = bot.findBlocks({
+				matching: (n: string) => n === "lava",
+				maxDistance: 48,
+				count: 300,
+			}).length;
+			console.error(
+				`[DIAG] y=${Math.floor(bot.entity.position.y)} xray32=${xr(32)} xray64=${xr(64)} xray96=${xr(96)} exp48=${ex}`,
+			);
+		}
+		const [dx, dz] = HDIRS[bearing]!;
+		let advanced = 0;
+		for (let r = 0; r < 40 && Date.now() < deadline; r++) {
+			// Wide scan: the sweep exposes lava up to ~32 away (in tunnels opened on earlier
+			// runs), which the narrow 14-scan missed (measured: exp48 hit 48 but was never
+			// captured). On a hit, NAVIGATE adjacent so scoop-on-expose can reach it.
+			const uncovered = findFluidSource(bot, "lava", 32);
+			if (uncovered) {
+				const up = bot.entity.position;
+				if (Math.hypot(up.x - uncovered.x, up.y - uncovered.y, up.z - uncovered.z) > 4)
+					await goTo(bot, vec3(uncovered.x, uncovered.y, uncovered.z), {
+						range: 2,
+						timeout: 25000,
+					}).catch(() => {});
+				return findFluidSource(bot, "lava", 8) ?? uncovered;
+			}
+			const cp = bot.entity.position;
+			const cx = Math.floor(cp.x);
+			const cy = Math.floor(cp.y);
+			const cz = Math.floor(cp.z);
+			const feetC = vec3(cx + dx, cy, cz + dz);
+			const headC = vec3(cx + dx, cy + 1, cz + dz);
+			const floorC = vec3(cx + dx, cy - 1, cz + dz);
+			// Lava ahead OR just below the tunnel — found; return to scoop. We mine at the
+			// lake's depth now (~y-54, deep in the dense band per the X-ray diagnostic), so
+			// flat mining hits lava at the tunnel level instead of skimming over it.
+			if (
+				isLava(getBlock(bot, feetC)?.name) ||
+				isLava(getBlock(bot, headC)?.name) ||
+				isLava(getBlock(bot, floorC)?.name) ||
+				isLava(getBlock(bot, vec3(cx, cy - 1, cz))?.name)
+			) {
+				const hit = findFluidSource(bot, "lava", 8);
+				if (hit) return hit;
+			}
+			// Advance ONE block, retrying up to 3x — a single push often under-shoots (the bot
+			// stalls at ~1 block/run and spirals). Commit to the bearing for the whole 40-block
+			// run so we travel the ~15-25 blocks to the lake (flat travels far; the staircase
+			// variant stalled at ~1 block/run).
+			let moved = false;
+			for (let t = 0; t < 3 && !moved; t++) {
+				if (isSolid(getBlock(bot, feetC)?.name)) await digAt(bot, feetC);
+				if (isSolid(getBlock(bot, headC)?.name)) await digAt(bot, headC);
+				const justHit = findFluidSource(bot, "lava", 24);
+				if (justHit) {
+					const jp = bot.entity.position;
+					if (Math.hypot(jp.x - justHit.x, jp.y - justHit.y, jp.z - justHit.z) > 4)
+						await goTo(bot, vec3(justHit.x, justHit.y, justHit.z), {
+							range: 2,
+							timeout: 25000,
+						}).catch(() => {});
+					return findFluidSource(bot, "lava", 8) ?? justHit;
+				}
+				const fl = getBlock(bot, floorC)?.name;
+				if (!isSolid(fl) && !isLava(fl)) await ensureSolid(bot, floorC);
+				await bot.lookAt(vec3(cx + dx + 0.5, cy + 0.5, cz + dz + 0.5));
+				bot.setControlState("forward", true);
+				bot.setControlState("sprint", true);
+				await sleep(500);
+				bot.setControlState("forward", false);
+				bot.setControlState("sprint", false);
+				await sleep(120);
+				moved =
+					Math.floor(bot.entity.position.x) !== cx ||
+					Math.floor(bot.entity.position.z) !== cz;
+			}
+			if (!moved) break; // real wall after 3 tries — end run, turn
+			advanced++;
+			if (r % 5 === 0)
+				console.error(
+					`[PROBE] mine y=${Math.floor(bot.entity.position.y)} x=${cx} z=${cz} bearing=${dx},${dz} adv=${advanced}`,
+				);
+		}
+		// Always turn after a run so successive runs sweep DIFFERENT directions (the dense
+		// lava can be to any side; a single committed bearing missed it). Stay WITHIN the
+		// dense band y-52..-56 (X-ray diagnostic): if above it, descend a few (checking lava
+		// below); if we've bottomed out near bedrock (where flat mining wedges — solo3b spun
+		// 167x at adv=1) or a run stalled, pillar back UP into the band.
+		bearing = (bearing + 1) % 4;
+		const yy = Math.floor(bot.entity.position.y);
+		if (yy > -52) {
+			for (let k = 0; k < 4 && Math.floor(bot.entity.position.y) > -52; k++) {
+				const bp = bot.entity.position;
+				const by = Math.floor(bp.y);
+				const bel = vec3(Math.floor(bp.x), by - 1, Math.floor(bp.z));
+				if (isLava(getBlock(bot, bel)?.name)) {
+					const h = findFluidSource(bot, "lava", 6);
+					if (h) return h;
+					break;
+				}
+				if (isSolid(getBlock(bot, bel)?.name)) await digAt(bot, bel);
+				for (let w = 0; w < 12 && Math.floor(bot.entity.position.y) >= by; w++)
+					await sleep(80);
+				if (Math.floor(bot.entity.position.y) >= by) break;
+			}
+		} else if (yy < -55 || advanced < 3) {
+			await pillarUp(bot, Math.min(-52, yy + 4));
+			bot.setControlState("sneak", false);
+		}
+	}
+	return scan();
+};
+
 export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
-	const deadline = Date.now() + 6 * 60_000;
-	const findLava = (): Vec3 | null => findFluidSource(bot, "lava", 30);
+	const deadline = Date.now() + 20 * 60_000;
+	// SPOT exposed lava WIDE — surface/cave lava is air-adjacent, so findFluidSource sees it
+	// across loaded chunks. A big radius lets the bot spot surface lava from far, then WALK to
+	// it (below), instead of only reacting to lava within 40 and otherwise digging blindly.
+	const findLava = (): Vec3 | null => findFluidSource(bot, "lava", 128);
 
 	// 1. Locate a lava pool the bot can actually see. If none, descend toward
 	//    cave-lava depth and branch-mine to open walls until lava comes into
 	//    line-of-sight — never peeking through rock.
+	// Chunks a few dozen blocks out are still STREAMING right after a (re)spawn/teleport, so
+	// findBlocks sees nothing for a second or two — retry briefly before giving up to the
+	// dig-down grind, or the bot descends past surface lava it just couldn't see yet.
 	let lava = findLava();
+	for (let i = 0; i < 8 && !lava; i++) {
+		await new Promise((r) => setTimeout(r, 1000));
+		lava = findLava();
+	}
+	console.error(
+		`[SPOT] boty=${Math.floor(bot.entity.position.y)} lava=${lava ? `${lava.x},${lava.y},${lava.z} d=${Math.round(distance(bot.entity.position, lava))}` : "null"}`,
+	);
 	if (!lava) {
-		const { descendStaircase, branchMineExplore } = await import(
-			"../mining/main.ts"
-		);
-		for (let pass = 0; pass < 8 && !lava && Date.now() < deadline; pass++) {
-			const budget = Math.min(deadline, Date.now() + 60_000);
-			if (Math.floor(bot.entity.position.y) > 13) {
-				await descendStaircase(bot, 12, budget);
-			} else {
-				await branchMineExplore(bot, budget);
-			}
-			lava = findLava();
-		}
+		const { digDownVertical } = await import("../mining/main.ts");
+		lava = await stripMineForLava(bot, digDownVertical, deadline);
 	}
 	if (!lava) return { success: false, message: "No lava pool found to cast at" };
+
+	// WALK to the spotted lava (near/medium/far) so the scoop + site prep are adjacent. Hop
+	// toward it, re-spotting closer each time; the pathfinder routes across the surface fast.
+	for (let hop = 0; hop < 10 && Date.now() < deadline; hop++) {
+		const bp = bot.entity.position;
+		if (Math.hypot(bp.x - (lava.x + 0.5), bp.z - (lava.z + 0.5)) <= 6) break;
+		await goTo(bot, vec3(lava.x, lava.y, lava.z), { range: 4, timeout: 20000 }).catch(
+			() => {},
+		);
+		const re = findLava();
+		if (re) lava = re;
+	}
+
+	// 1b. Scoop the lava bucket NOW, while we're standing adjacent on solid tunnel floor —
+	// we just mined THROUGH to this pool, so it's within reach. The reposition + chamber
+	// clear below moves us out of range, and open-pool geometry (measured: source ~5 away,
+	// no solid footing on any adjacent cell) then makes the beside-stand scoop fail
+	// ("pool unreachable"). Filling here, adjacent, is the reliable moment.
+	if (count(bot, "lava_bucket") < 1 && count(bot, "bucket") >= 1) {
+		const near = findFluidSource(bot, "lava", 5);
+		if (near) {
+			await equip(bot, "bucket");
+			for (let i = 0; i < 6 && count(bot, "lava_bucket") < 1; i++)
+				await reliableUse(bot, vec3(near.x + 0.5, near.y + 0.3, near.z + 0.5));
+			if (count(bot, "lava_bucket") > 0)
+				logEvent("cast", "filled", "lava_bucket on-expose");
+		}
+	}
 
 	// 2. Stand a safe ~5 blocks back from the lava on the dominant axis so the
 	//    cleared chamber sits between us and the pool (well within fill range).
@@ -878,6 +1442,22 @@ export const buildPortalByCasting = async (bot: Bot): Promise<StepResult> => {
 		return { success: false, message: "Need a water bucket to cast obsidian" };
 	}
 
+	// Build in a CLEAR spot away from lava. After scooping (esp. D>=16), the bot ends AT the
+	// pool; casting the frame there floods every cup and sticks at 0/10 (measured). Step back
+	// (away from the nearest lava) until no lava is within the frame footprint — the pool
+	// stays close enough that fillBucket walks back to refill each block.
+	for (let tries = 0; tries < 8 && findFluidSource(bot, "lava", 6); tries++) {
+		const p = bot.entity.position;
+		const near = findFluidSource(bot, "lava", 12);
+		const dx = near ? Math.sign(p.x - near.x) || 1 : 1;
+		const dz = near ? Math.sign(p.z - near.z) || 1 : 1;
+		await goTo(
+			bot,
+			vec3(Math.floor(p.x) + dx * 4, Math.floor(p.y), Math.floor(p.z) + dz * 4),
+			{ range: 1, timeout: 8000 },
+		).catch(() => {});
+	}
+
 	// Frame anchored at the bot's feet level, in the X-Y plane (1 thick in Z), so
 	// the bottom row sits one block ABOVE the floor — free-standing air, not
 	// recessed in the floor (which would occlude the dig). Columns x:0..3, rows
@@ -933,17 +1513,33 @@ export const buildPortalByCasting = async (bot: Bot): Promise<StepResult> => {
 		if (fail) return fail;
 	}
 
-	// Open the inner 2x3 gap (removes cup walls that face the interior) and clear
-	// the +Z approach so we can walk into the portal mouth. NEVER dig obsidian —
-	// an iron pickaxe can't break it and digAt would hang (the post-cast stall).
+	// Open the inner 2x3 gap and the +Z approach. NEVER dig obsidian — an iron pickaxe
+	// can't break it and digAt would hang. The interior MUST end pure AIR or ignition
+	// fails (measured: cast inner-fill/cup dirt left 3 of 6 interior cells solid).
 	await descendToY(bot, by);
 	const digIfNotObsidian = async (p: Vec3) => {
 		if (getBlock(bot, p)?.name !== "obsidian") await digAt(bot, p);
 	};
-	for (const g of innerGap) await digIfNotObsidian(g);
-	for (let dy = 1; dy <= 3; dy++) {
+	// Clear the +Z approach FIRST so we can stand in front and reach the whole interior.
+	for (let dy = 0; dy <= 4; dy++)
 		for (let dx = 1; dx <= 2; dx++)
 			await digIfNotObsidian(vec3(bx + dx, by + dy, bz + 1));
+	// Clear the interior — position in FRONT of each still-solid cell (from +Z, one below it
+	// for reach) and dig; retry so the higher by+3 cells aren't left behind.
+	for (let attempt = 0; attempt < 3; attempt++) {
+		let allClear = true;
+		for (const g of innerGap) {
+			const n = getBlock(bot, g)?.name;
+			if (n === "obsidian" || isAir(n)) continue;
+			await goTo(bot, vec3(g.x, Math.max(by, g.y - 1), bz + 2), {
+				range: 1,
+				timeout: 8000,
+			}).catch(() => {});
+			await digIfNotObsidian(g);
+			const after = getBlock(bot, g)?.name;
+			if (!isAir(after) && after !== "obsidian") allClear = false;
+		}
+		if (allClear) break;
 	}
 
 	// Verify the 10 known frame cells directly (getBlock is reliable; findBlocks
@@ -956,6 +1552,11 @@ export const buildPortalByCasting = async (bot: Bot): Promise<StepResult> => {
 	// Light it: flint & steel on a bottom frame block's top face puts fire inside
 	// the frame and ignites the portal.
 	let portalPos: { x: number; y: number; z: number } | null = null;
+	// Interior 2x3 must be clear AIR to ignite — log it (residual water/dirt from the cast
+	// cups/bowls blocks portal formation).
+	console.error(
+		`[LIGHT] fas=${count(bot, "flint_and_steel")} interior=${innerGap.map((g) => getBlock(bot, g)?.name ?? "?").join(",")}`,
+	);
 	if (count(bot, "flint_and_steel") >= 1) {
 		for (const lit of [at(1, 0), at(2, 0)]) {
 			await goTo(bot, vec3(lit.x, by, bz + 2), {
@@ -969,7 +1570,11 @@ export const buildPortalByCasting = async (bot: Bot): Promise<StepResult> => {
 				/* ignore */
 			}
 			await sleep(1200);
+			const fireCell = getBlock(bot, vec3(lit.x, lit.y + 1, lit.z))?.name ?? "?";
 			const inner = at(1, 1);
+			console.error(
+				`[LIGHT] lit@${lit.x},${lit.y},${lit.z} fireCell=${fireCell} inner11=${getBlock(bot, inner)?.name ?? "?"}`,
+			);
 			if (getBlock(bot, inner)?.name === "nether_portal") {
 				portalPos = { x: inner.x, y: inner.y, z: inner.z };
 				break;

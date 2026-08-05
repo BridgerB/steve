@@ -1,76 +1,171 @@
-# LOOP.md — get a raw steve bot to the Nether, autonomously
+# LOOP.md — perfect the gym, then chain to the Nether
 
-This is the **persistent state + procedure** for a self-driving debug loop. The model forgets between firings; this file doesn't. Read it top-to-bottom at the start of every loop iteration, do the work, then **update the "Fixes log" and "Current blocker" sections** before ending the iteration.
+Persistent state + procedure for a self-driving loop. The model forgets between
+firings; this file doesn't. Read it top-to-bottom each iteration, do the work, then
+**update the Reliability table + Fixes log + Current focus** before ending.
 
-## Goal & success criterion
+## Why this loop (the reframe)
 
-Run a **raw-spawn** bot and, whenever it stalls, diagnose → fix the code → restart, until a bot **enters the Nether on its own** — no manual TP, no cheats, no world wipe.
+Full raw-spawn races don't converge — a ~16-link chain stalls at a different random
+hazard every time and each stall wastes ~60 min on reset. Instead: **perfect each
+speedrun step in ISOLATION via the gym** (each gym run grants the step's prereqs,
+random-teleports, runs just that task — seconds-to-minutes per trial), until every
+critical-path piece clears the bar. Then chain them in a full race: if each link works
+independently, the chain reaches the Nether.
 
-**DONE when**: `ticks.dimension` contains `nether` for the live autonomous bot.
+## Goal & done criterion
+
+Every **critical-path** gym step passes **≥50% on WINNABLE terrain** (exclude
+biome-unwinnable spawns — ocean/desert with no trees, etc. — via the stored x,z), THEN
+a full chain race reaches `ticks.dimension = the_nether`.
 ```bash
-docker exec steve-db-1 psql -U root -d local -t -A -c "SELECT dimension FROM ticks WHERE race_id='<RID>' ORDER BY ts DESC LIMIT 1"
+# per-step reliability (winnable rate = judgment on the failure spots' x,z):
+sqlite3 data/gym.db "SELECT slug,count(*) n,sum(pass) p,round(100.0*sum(pass)/count(*)) pct FROM gym_runs WHERE ts>$START GROUP BY slug;"
+# chain done:
+docker exec steve-db-1 psql -U root -d local -t -A -c "SELECT DISTINCT dimension FROM ticks WHERE race_id='<RID>'"  # → the_nether
 ```
 
-## Iteration procedure (plan → act → verify → critique → replan)
+## Critical path = 16 links (skip food/sword/iron-pickaxe — not needed for the Nether)
 
-1. **Env up** (idempotent):
-   - `cd upstream/steve && docker compose up -d` (Postgres → 4623, container `steve-db-1`).
-   - Schema via migrations: `npm run db:migrate` (NOT `db:push` — it needs a TTY). If schema drifts, `npm run db:generate` then `db:migrate`.
-   - Start fresh: `pkill -f "vite dev"; MC_USERNAME=SteveRun<N> STEVE_RACE_ID="race-$(date +%s)" nohup npm run dev > <log> 2>&1 &` — a **fresh username each run = a raw player at world spawn** (empty inventory). Bump `<N>` every restart.
-   - Open the dashboard in Playwright (`browser_navigate http://127.0.0.1:4558/`) — this also triggers the in-process bot to start (via `+page.server.ts load → getBotStreamer`).
-2. **Run + monitor** — the current race id is `SELECT race_id FROM events WHERE race_id NOT LIKE 'mcp%' ORDER BY ts DESC LIMIT 1`. Track: latest `step` start, `count(DISTINCT detail)` of step successes, position, dimension, deaths.
-3. **On a stall** (same step > ~5 min) / death / error → **verify BOTH ways**:
-   - **DB**: current step, full inventory (`inventory_snapshots` latest ts), recent non-tick events (`category NOT IN ('step')` last ~90s).
-   - **Visual (required for placement/portal steps)**: `browser_take_screenshot` → `/Users/bridger/Developer/mc/<name>.png` (repo root — /tmp is blocked), `cp` to `/tmp`, then `Read` the image. A frame can read complete in block data yet fail because scaffolding sits inside the interior.
-4. **Diagnose → fix the code → restart fresh** (new `MC_USERNAME`, new `STEVE_RACE_ID`). Server-side edits (`src/lib/steve/**`, `serve.ts`, `race.ts`, `bot.ts`) need a vite restart; `+page.svelte` hot-reloads.
-5. **Log it** below, then repeat until Nether. If a bug resists ~3 fix attempts, mark it in "Current blocker" and **surface to the user** — don't spin.
+gather-wood → craft-planks → craft-table → craft-sticks → craft-wooden-pickaxe →
+mine-cobblestone → craft-stone-pickaxe → craft-furnace → mine-coal → mine-iron →
+smelt-iron → craft-buckets → fill-water → flint-and-steel → **build-nether-portal** →
+**enter-nether**. `escape_water` (priority-0 override) is not a link but silently breaks
+the mining/water links whenever the bot falls in water.
+
+## Iteration procedure
+
+1. **Ensure env**: MC server on `144.24.32.76:25565` (`.env` has MC_HOST/PORT). RCON
+   tunnel `127.0.0.1:25575` (`ssh -fN -L 25575:127.0.0.1:25575 bridger@144.24.32.76`,
+   pass `minecraft-test-rcon`). Postgres `steve-db-1` (4623) for chain races only.
+   **Check box load** first: RCON `list` — if many `rust-*` bots are on, contention
+   makes craft/place flaky; prefer running trials when the box is light, keep concurrent
+   bots low.
+2. **Pick the target**: the lowest-reliability critical-path step below 50% (see
+   Reliability table). Ties → hardest-first order: build-nether-portal, mine-iron,
+   mine-coal, mine-cobblestone, fill-water, smelt-iron, flint-and-steel, enter-nether.
+3. **Run N fresh trials** (fresh process per trial — robust vs the disconnects a single
+   long-lived bot hits):
+   ```bash
+   for i in $(seq 1 12); do STEP=<slug> BOT=g<slug><i> node --env-file=.env --import ./typecraft-resolve.mjs gym-cli.ts 2>&1 | grep GYMRESULT; done
+   ```
+   (or loop `subset-test.ts`-style). Records to `data/gym.db` automatically.
+4. **Diagnose**: pull the dominant failure + repro coords —
+   `sqlite3 data/gym.db "SELECT message,count(*) c,group_concat(x||','||y||','||z) FROM gym_runs WHERE slug='<slug>' AND ts>$START AND pass=0 GROUP BY message ORDER BY c DESC LIMIT 8;"`
+   Separate **winnable** failures (a real bug) from **biome-unwinnable** spawns (ocean/
+   desert — don't count against the bar). For placement/portal, also watch a live view
+   at `http://localhost:4558/gym/<slug>` (needs `npm run dev`).
+5. **Fix the real blocker** in the task code (`tasks/*/main.ts`, `bot-utils.ts`,
+   `steps.ts`, `tasks/portal/cast.ts`), **re-run the same N trials**, confirm winnable
+   pass% crossed 50%. Server-side edits need a fresh gym-cli process (each trial is one),
+   so no restart dance — just re-run.
+6. **Log** in Fixes log + bump the Reliability table. If a step resists ~3 distinct
+   fixes, surface it — don't spin.
+7. When **all 16 links ≥50%**, run a **chain race** (`STEVE_CLI=1 node … src/lib/steve/main.ts --bots 4 --timeout 7200`) and check `ticks.dimension`. If it stalls despite reliable links, the residual is the **gym→race gap** (inter-step state, resource accounting, cumulative contention, deforestation) — diagnose from the race DB and fix.
 
 ## Tools
 
-- **DB is the primary debugger**: `docker exec steve-db-1 psql -U root -d local -c "…"`. Tables `events` / `ticks` / `inventory_snapshots`.
-- **steve MCP** (`src/lib/steve/mcp.ts`): `state` / `inventory` / `look` / `eval` / `craft` / `navigate` / `mine` / `chat` / **`sniff`** (live nearby blocks/entities — what the bot "sees"). Configured but may be **pending approval**; ask the user to approve if interactive control/sniffing is needed.
-- **RCON harnesses** to reproduce deterministically without a full race: `water-harness.ts`, `craft-harness.ts` (`node --env-file=.env --import ./typecraft-resolve.mjs <harness>.ts`; RCON tunnel `ssh -fN -L 25575:127.0.0.1:25575 bridger@144.24.32.76`, pass `minecraft-test-rcon`).
-- Dashboard per-step timer + top monologue = the human-readable stall signal.
+- **`gym-cli.ts`** — one gym trial per process: `STEP=<slug> BOT=<uniq> node --env-file=.env --import ./typecraft-resolve.mjs gym-cli.ts`. Prints `GYMRESULT {json}`; records to `data/gym.db`.
+- **`data/gym.db`** (node:sqlite, table `gym_runs`: ts,slug,pass,duration_ms,x,y,z,prereq,message) — the reliability + failure-mode + reproduction store.
+- **`/gym` dashboard** (`npm run dev` → `http://localhost:4558/gym`) — pass-rate/spread/difficulty/location charts, per-step history at `/gym/<slug>`, live 3D at `/gym/all`.
+- **`water-harness.ts`** — deterministic `escapeWater` repro (modes tunnel/deep/pocket/lakeedge) for the aquifer/enclosed-pocket case.
+- **RCON** for ad-hoc probes (`locate biome`, `data get block`, `fill … replace …` to count blocks) — read the box before assuming terrain.
 
-## Nether-portal pre-checks (when a run reaches it) — from research + `tasks/portal/cast.ts`
+## The gym now covers the whole path (Phase 0 — done)
 
-Obsidian is **cast** (water-on-lava, no diamond). When debugging the portal step, verify:
-- Frame is **4×5 OUTER**, **corners optional** (only the **10 edge blocks** are validated) — don't stall waiting on a corner.
-- **Clear ALL scaffolding/mould from the 2×3 interior before lighting** — the #1 bot bug; query `blockAt` on each interior cell, don't trust "I didn't place there."
-- Log the **10 obsidian coords, diff vs expected** (`buildPortalByCasting` frame math) — off-by-one in the up/over loop is the classic failure.
-- Ignition must land on an **interior** block, bot within ~4-block reach; **retry only after re-verifying geometry**, then check for the lit/purple state.
-- **26.1.2 gotcha**: `activateItem()` leaves `usingHeldItem` stuck true → next bucket use silently no-ops. All bucket use goes through `reliableUse()`.
+`GymStep` has an optional `setup?(bot, rcon, at)` hook (`gym/registry.ts`), invoked by
+`runGymStep` after teleport, before `run` (`gym/run.ts`). Two new exercises:
+- **build-nether-portal** (order 18) — FULL autonomous: prereq `water_bucket 1 + bucket 1 + flint_and_steel 1 + dirt 32`; `run` = `prepareCastSite` then `buildPortalByCasting`; `pass` = a `nether_portal` block within 16; `timeoutMs 420000` (lava-find-dominated).
+- **enter-nether** (order 19) — `setup` RCON-builds+lights a portal 4 blocks ahead; `run` = `enterPortal`; `pass` = `game.dimension` includes `nether`.
 
-## Fixes log (append-only — the "skill library"; never re-fix)
+## Portal cast — where the risk is (from the deep-dive)
 
-Fixed earlier this session (all in the vendored code now): water escape (press into bank / notch-dig), `digExposesWater`, crafting `resolveId` (most-held plank), `leaf_litter` table placement, wood-deadlock `isComplete`, gather-wood no-entry surface climb, events-schema `yaw/pitch` migration (`0001`), bot-start deadlock (`getBotStreamer` in `+page.server.ts`).
+The cast splits in two:
+- **`prepareCastSite` (find/reach lava) = the fragile crux, likely never fully
+  succeeded.** No X-ray, so it needs natural lava line-of-sight within 30 OR mines down
+  to cave lava within 8 passes / 6 min, AND `fillBucket` needs solid air-topped footing
+  beside the source. Same capability class as mine-iron descend-and-find. Improve this
+  first for build-nether-portal.
+- **`castObsidianAt` + frame = deterministic given a lava source**, but physics-timing
+  fragile: pillar-stalls, float-off, cup/bowl mis-placement; each gate bail (`cup_leak`,
+  `bowl_leak`, `pos_fail`) burns 1 of 3 attempts; a block that drifts twice fails the
+  whole frame.
+- Pre-checks: frame is 4×5 OUTER, **corners optional (10 edge blocks)**; **clear all
+  scaffold from the 2×3 interior before lighting**; **never dig obsidian** (iron pick
+  can't, `digAt` hangs); do NOT y-sort the frame build order.
+- **26.1.2 gotcha**: `activateItem()` leaves `usingHeldItem` stuck true → next bucket use
+  silently no-ops. All bucket use goes through `reliableUse()` (`cast.ts`).
 
-- **Iter 1 — Craft Planks grid-strand** (`tasks/craft/main.ts`): held 9 logs but looped "No logs in inventory" (logs stranded in the 2×2 craft grid, invisible to `windowItems`; also mis-crafted `oak_button`s). Fix: `reclaimCraftingGrid(bot)` at the top of `craftPlanks`. **VERIFIED** — SteveRun2 advanced to 5/30 (wood→planks→table→sticks→wooden pickaxe).
-- **Iter 2 — water escape: floating OFF the bank** (`escapeWater` in `bot-utils.ts`): SteveRun2 froze on Get Out Of Water at a lake (106,62,-86, done 5/30) doing 670 pure `swimming_out`s, 0 digs — the notch-dig only carves cells adjacent to the *target*, which are open water when the bot floats a few blocks off the bank. Fix: in the stall branch also dig `bot.blockAtCursor(5)` (the real bank the bot is looking at) + its up/down neighbors. STATUS: applied, **not yet reached** (SteveRun3 hung on crafting before the lake — see Iter 3). Still untested. NOTE: water escape has taken many attempts; if it stalls on water again, harness-reproduce (`water-harness.ts`) or escalate — don't tweak blind.
-- **Iter 3 — `reclaimCraftingGrid` mis-crafts junk & strands planks** (`bot-utils.ts`): SteveRun3 fully **hung** (ticks stopped, frozen at 75,72,-127 on grass with 31 planks + a table) after a preempt storm — Gather Wood ↔ Craft Planks ↔ Craft Sticks oscillated (`Missing ingredient`, `oak_button` mis-crafts), piling overlapping stale executions (epochs 2–5 all landing at 6) until the event loop wedged. Root: `reclaimCraftingGrid` swept slot 0 (the crafting **output**) FIRST, which *crafts* whatever recipe the grid currently forms — so a stray plank in the grid became a junk `oak_button` (consuming the plank) instead of being reclaimed → `windowItems`/state under-counted planks → the step thresholds oscillated. Fix: sweep HIGH→LOW (grid slots 1..N before output slot 0) so emptying the grid breaks the recipe before we ever touch the output. **VERIFIED** — SteveRun4 broke cleanly to 5 successes (wood→planks→table→sticks→wooden pickaxe), no hang, no `oak_button`, 10 preempts total (calm). **Bonus: also hit water and escaped it** (`success: out of water — back to dry land`) — the Iter 2 water fix held on its first real test.
+## Reliability table (target ≥50% winnable — UPDATE each iteration)
 
-- **Iter 4 — water escape false-completes on a surface bob → boxed pocket** (`escapeWater` in `bot-utils.ts`): SteveRun4 reached **6/30** (Mine Cobblestone — best of session) then oscillated forever in a **1-wide water pocket boxed by dirt** at (90,62,-83): escape bobbed to a dry Y for one tick → `isOnDryLand && !inWaterTrap` → returned "escaped" → Mine Cobblestone started → fell back in → preempt (epoch churned to 58). Screenshot-confirmed (dirt walls all around, green water floor, `swimming_out` looping adjacent targets). Root: the false-complete fired BEFORE the internal `stall` counter could reach 3 and trigger the dig-out-the-wall branch, so it never carved an exit. Fix: after `!inWaterTrap`, **settle 300ms and re-confirm still-out** before returning true; on sink-back, fall through to swimming/notch-dig so `stall` builds and digs the pocket open. STATUS: applied (SteveRun5), verifying. **WATER IS AT/PAST THE 3-ATTEMPT THRESHOLD** — if SteveRun5 stalls on water again, escalate (harness or user), do NOT tweak a 5th time blind.
+Rates below are STALE (pre/post-fix mixed in gym.db) — **re-baseline in Phase 1** with
+fresh trials before trusting them.
 
-- **Iter 5 — Craft Wooden Pickaxe "Too far to interact" churn** (`craftItem` in `bot-utils.ts`): SteveRun5 reached **7/30** (past the water fix — Iter 4 held, cleared water again) then churned **Mine Cobblestone ↔ Craft Wooden Pickaxe**: no pickaxe yet → Craft Wooden Pickaxe (prio 5) is incomplete, but each craft attempt fails `Too far to interact (dist=6.4, max=6)` because after a failure-backoff the lower-priority Mine Cobblestone runs and drags the bot ~6 blocks off the table, and `attemptCraft`'s `moveCloser` is only a short nudge that can't re-close a 6-block gap → `bot.craft` dies "too far" → backoff → mine → repeat forever. (Also spewed 31 `oak_button`s as earlier collateral, but 65 planks remained — not the blocker.) Fix: in `attemptCraft`, when `dist(bot, table) > 3` **pathfind in with `goTo(range:2)`** instead of the nudge, so the craft lands. STATUS: applied (SteveRun6), verifying.
+| step | last winnable pass% | status |
+|---|---|---|
+| gather-wood | ~65% (stale) | re-baseline |
+| craft-planks / table / sticks / w-pickaxe | ~40-68% (stale) | re-baseline |
+| mine-cobblestone | ~19% (stale) | WEAK — flat-terrain stone dig-down |
+| craft-stone-pickaxe / furnace | ~47-49% (stale) | re-baseline |
+| mine-coal | ~5% (stale) | WEAK — ore-finding |
+| mine-iron | ~2% (stale) | WEAK — over-descend into lava/aquifer |
+| smelt-iron | ~27%→73% post-fix | re-baseline |
+| craft-buckets | ~52% (stale) | re-baseline |
+| fill-water | ~26% (stale) | WEAK |
+| flint-and-steel | ~11%→50% post-fix | re-baseline |
+| build-nether-portal | UNTESTED (new) | perfect (lava-find first) |
+| enter-nether | UNTESTED (new) | perfect (should be easy) |
 
-- **Iter 6 — water escape, fixed properly via the RCON harness** (`escapeWater` in `bot-utils.ts`; harness `water-harness.ts`). Bridger chose the deterministic-harness route over more blind tweaks. Built `water-harness.ts` (RCON-driven — `bot.chat("/…")` no longer runs commands on 26.1.2, so setup goes through RCON; op InlineBot via `op-inline.ts`; modes tunnel/capped/deep/**pocket**). The **pocket** mode reproduced the exact boxed-water stall deterministically. Root causes, in order found: (a) the stall counter reset on every target re-lock (tight pockets re-lock constantly) → notch-dig never fired → switched to a **wall-clock absolute-anchor** stuck detector (rise a whole block OR travel >3.5 blocks, else pinned); (b) the notch direction was re-derived from the re-locking target → scattered → **commit ONE `escapeDir`** toward the exit and staircase it; (c) **THE big one — you cannot dig while floating**: mining is 5×(underwater)×5×(off-ground)=**25× slower**, so digs never completed (`dirt→dirt` at the 2s cap). Fix: **ground first** (clearControlStates + let the buoyancy-free bot sink → on_ground) then dig (~3.75s/dirt); (d) don't dig when the exit direction is **open water** (swim), only when walled; (e) gate `drown_dig_up` to when there's no horizontal exit. Escape budget 20s→35s, dig cap 3s→5s. **RESULT: pocket + deep PASS** (the realistic spawn-water traps — pocket is exactly what stalled Run4/6). Known limitation: a fully-submerged, capped, long horizontal **tunnel** still fails (bot drowns) — but that's a flooded-cave scenario, not spawn water; deferred. Typecheck clean (pre-existing errors only).
+## Fixes log (append-only; never re-fix)
 
-- **Iter 7 — lake-edge tall-bank freeze: UNSOLVED, do not retry completion-tightening** (`escapeWater`). SteveRun8 reached **8/30** (best) then froze 7 min on Get Out Of Water at a lake meeting a ~3-block dirt bank: it bobs onto a 1-block waterline nub, `isOnDryLand` flickers true → `escaped_water` (logged 21×) → the step completes → the bot falls back → the committed staircase RESETS → never tops the bank (172 digs, no net climb). Added a `lakeedge` harness mode (lake + tall dirt bank). Tried FOUR ways to make the escape not false-complete on the nub — (1) no adjacent water at feet±below, (2) `inlandDir()!=null`, (3) no water at/above feet, (4) sustained-dry ~1.2s watch. **Every one broke a WORKING case** (small pocket has adjacent water after climbing; deep pool escapes adjacent to water mid-wall; nothing stays perfectly dry 1.2s) — the "escaped" geometry genuinely varies, so a stricter completion can't tell a nub from a real bank without failing pockets/pools. **All four reverted; back to known-good** (300ms settle, `!inWaterTrap && isOnDryLand`), budget 35s. **pocket + deep still PASS.** The lakeedge freeze needs a DIFFERENT angle next time — NOT the completion check. Candidates: (a) detect the escape→fall-back→escape OSCILLATION at the step/run-loop level and, once seen N times at ~one spot, run a single long committed climb (opts.final) that ignores nub false-completes; (b) persist the staircase/anchor in bot memory so physical progress isn't thrown away; (c) water-avoidance in pathfinding so the bot doesn't wade into lakes with tall banks. Harness ready: `node --env-file=.env --import ./typecraft-resolve.mjs water-harness.ts lakeedge`.
+Session 1 (raw-race loop, all committed in c21109f): fixed the race orchestrator
+`--bots` spawn, smelt window-desync, gather-wood nav loop, iron-economy (defer iron
+pickaxe), craft-timeout contention, table walk-back, deforestation (pristine-forest
+spawn), plank-threshold deadlock, table-on-leaves placement, bucket-iron counting,
+craft output-strand verification, place-relocate-retry. Plus the 5-step lab winners
+(smelt, mining, gather-flint, food). Learned: contention on the shared 4-core box makes
+craft/place packets flaky (place fails 41→0 when the box is light); the hazard tail is
+deep (water/aquifer/slow-iron); parallelism helps only at low load.
 
-- **Iter 8 — escape_water was fighting the GOAL, not failing to escape** (Bridger's insight: "through the water might be the only way"). SteveRun9 wasn't stuck *escaping* — it was stuck being **dragged back** every time it tried to WADE ACROSS shallow water toward the only trees (47 blocks across a lake): `escape_water` (priority 0) trips on ANY water-at-feet, so every step into the water preempted Gather Wood and yanked it to shore → endless enter→escape→enter (`escaped_water` 48× in one run). Fix: new **`needsWaterEscape(bot)`** (bot-utils) replaces pure `isInWaterTrap` as the escape_water trigger (`state.ts` `inWaterTrap`) — it's **progress-aware**: escape only when SUBMERGED (head underwater = drowning; typecraft has no buoyancy so deep water is impassable anyway) OR in a trap with **no horizontal progress for ~4s** (pinned at a bank). A genuine crossing keeps moving → never trips → the bot is free to reach the far side; only once actually stuck does the carve-a-stair override kick in. Escape LOGIC is untouched (harness still validates pocket/deep). **RESULT: SteveRun10 `escaped_water` 48→1, roams a 44×64 area freely.** This also means the unsolved lakeedge freeze (Iter 7) now only fires after 4s of being genuinely pinned, not mid-crossing.
+- **Phase 0 — extended the gym to the full path** (`gym/registry.ts`, `gym/run.ts`):
+  added `setup?` hook + `build-nether-portal` (autonomous) + `enter-nether` (scaffolded,
+  RCON builds obsidian frame + `setblock fire` to form a real portal). 19 steps load.
+- **DIMENSION DETECTION FIX** (`typecraft/bot/game.ts`) — surfaced by the enter-nether
+  smoke test: on this protocol-774 build the nether's dimension arrives as the integer
+  REGISTRY INDEX `3`, and typecraft stored it as `String(3)="3"`, so `getPhase` /
+  `enter.ts` / the **`enter_nether` goal** never recognized the nether even after
+  walking through a portal. Fix: keep the registry `entry.key` in `dimensionTypes[]` and
+  resolve a numeric dimension → name via that registry. **VERIFIED: enter-nether now
+  PASSES — "Entered portal - now in the_nether".** (A race never reached the portal, so
+  this bug was invisible until the gym isolated the step.)
+- **build-nether-portal smoke test**: ran the full autonomous cast; `FAIL 362s — No lava
+  pool found to cast at`. Confirms lava-finding (`prepareCastSite`) is the dominant
+  blocker (Phase 2 #1) — as predicted; the deterministic cast mechanic is downstream.
 
-- **Iter 9 — server KICKS from an unbounded/greedy pathfinder** (`getPathfinder` in `bot-utils.ts`). After Iter 8 (crossing fix) the bot lingered near water and gather-wood targeted trees ACROSS it, so the **dynamic pathfinder recomputed toward unreachable cross-water goals every physics tick**, plus `bot.findBlocks` does synchronous raycast-heavy world scans — together freezing the event loop **30-41s**, tripping the server keep-alive → **kick every ~60s** (`write EPIPE`, reconnect, repeat). Proven NEW (disconnects/race: Run4-9 = 0, Run10 = 22, Run11 = 4+) and NOT the water logic — it's a latent perf bug the far-roaming exposed. Diagnosis: tick-gap analysis (`lag(ts)` over ticks) + the last non-tick event before each gap (nav/explore/swimming_out). **The fix was the per-tick CPU cap `tickTimeout: 40→15`, NOT the search radius** (an earlier `searchRadius:96`-only bound did nothing — the pathfinder was burning ~800ms/s recomputing; 15ms/tick ≈ 300ms/s leaves room for keep-alives). Set `createPathfinder(bot, {searchRadius:64, thinkTimeout:1500, tickTimeout:15})` + a `pf_config` startup log to prove it applies. Also stringified the kick-reason log (`main.ts`). **RESULT: SteveRun12 = 0 disconnects, max tick-freeze 41s→15s (<keep-alive), crossing fix intact.**
+- **Phase 1 re-baseline (ZERO contention) — verdict**: the CRAFT/water/smelt steps are
+  already solid (craft-buckets 100%, fill-water 75%, smelt 75%); their old low rates
+  were pure contention. The weak links are ALL resource-finding: mine-iron 0%, mine-coal
+  25%, mine-cobblestone 11%, flint 25%, build-portal 0% (lava). So Phase 2 = perfect the
+  underground-find capability.
+- **Gym-fidelity fix** (`gym/run.ts`): run `escapeWater` before the step (mimics the
+  race's priority-0 override), so a spawn-in-water no longer falsely tanks resource
+  steps. (Doesn't cover MID-mining aquifer hits, which still show "yielding to
+  escape_water" — those are ~gym artifacts; a race's escape_water handles them.)
+- **mine-cobblestone collection fix** (`tasks/mining/main.ts`): the SURFACE path counted
+  blocks DUG, not the drop COLLECTED, so it "succeeded" at 16 dug while cobble rolled
+  away (0%). Now loops until `invCount(dropItem) >= target` (added `stone→cobblestone`
+  to DROP_ITEM), 3x dig cap. **Result: ~2/3 on winnable (non-water) terrain.**
+- **mine-iron coverage fix** (`branchMineOre`): at the y24 band the branch-mine bailed
+  after ~4 blocks (`dug=4/0`) when boxed by the band's water/lava/caves, then paid a
+  costly climb-out+relocate → never exposed ore. Now `digDownOne()` drops a level and
+  keeps strip-mining down through the band (floor `max(8, level-16)`). **Result: 0% →
+  50% (3/6).** Shared with mine-coal (same `branchMineOre`) — verifying.
 
-- **Iter 10 — crossing fix stranded the bot mid-lake; BOUND it** (`needsWaterEscape` in `bot-utils.ts`). With disconnects fixed (Iter 9), SteveRun12 reached 4/30 then thrashed **14 min / 7,153 swims** stuck in the middle of a big lake, escape targeting dry land **130 blocks away** (`swimming_out toward -26,-3`) — unreachable. Cause: Iter 8's crossing fix suppressed escape while *moving*, with NO limit, so the bot swam deep into open water chasing an across-water goal and stranded past any shore. Different-angle fix (per the rule — not another escape-completion tweak): bound the wade. `needsWaterEscape` now forces escape after **~8s continuously in water** (tracked via `mem.waterEnterAt`), i.e. while the entry shore is still inside dryTargets' ~16-block scan, so it retreats instead of stranding. Short shallow crossings (the Iter 8 win) still pass; wide open water triggers escape-back → gather-wood then blacklists the across-water target and picks a reachable one. STATUS: applied (SteveRun13), verifying.
+## Current focus
 
-- **Iter 11 — Mine Cobblestone can't get stone on a flat/watery spawn** (`mineBlock` in `tasks/mining/main.ts`). SteveRun13 reached 7/30 (0 disconnects, crossing bound working) then stalled ~10 min at 0 cobblestone in a 4×4 watery area at y63: for `stone` (not a `DEEP_ORE`) `mineBlock` only `findBlock`s **exposed** stone + `exploreRandom`s — it never **digs down** to the buried stone that's a few blocks below almost anywhere. On a hill spawn stone is exposed (earlier runs reached 8/30); on this flat coast there's none, so it loops `exploring stone attempt 3/3` while escape_water preempts. STATUS: rerolled to SteveRun14 (spawn-specific bad luck). **NEXT-FIX if it recurs (robustness, not reroll):** when stone-explore fails N times, dig a short staircase DOWN (like `descendStaircase` but to ~y55 / a few blocks) to expose stone, from dry ground — the general capability gap for flat/watery/stone-poor spawns.
-
-- **Iter 12 — WATER ESCAPE IS THE PERSISTENT CORE BLOCKER (surfaced to user).** SteveRun14 spawned in **ocean** (block_below `tall_seagrass`) and stuck 18 min unable to climb out onto a real shore (thrashing nearby false targets). This is the **5th run** stuck on real water (Run 2 lake, 8 lake-tall-bank, 12 mid-lake strand, 13 watery-mine, 14 ocean). The escape works for controlled harness cases (pocket/deep PASS) but NOT real ocean/coast/lake shores — typecraft's no-buoyancy makes climbing out of open/deep water fundamentally hard, and this world's spawns are frequently coastal. Resisted ~5 distinct attempts + the whole harness effort → **stopped tweaking the escape; surfaced to Bridger.** The engine otherwise is solid (crafting, water-crossing+bound, 0 disconnects). Real fixes are big: a robust swim-to-shore (commit a direction, pillar/stair up on contact) OR sidestep via an **inland world reset** (Bridger controls resets). Rerolled to SteveRun15 meanwhile (Run 4-8 got land-ish spawns and reached 8/30, so some spawns dodge water).
-
-- **Iter 13 — WATER ESCAPE OVERHAULED via a 5-agent strategy bake-off (Bridger's idea).** Instead of tweaking `escapeWater` a 6th time, spawned 5 agents that each dropped a bot into the REAL ocean hole (-154,62,125) and tried a different escape idea; a `/debug/swim` grid shows all their views live (`src/routes/debug/swim/` + `src/lib/server/swim.ts` — multi-bot BotStreamers; needs the process-level rejection guard or a stray `bot.craft` reject crashes vite). Lab harness: `water-lab.ts` + `water-strategies/*.ts`. Results (all reliable): **pathfind-scaffold 3/3 ~4.5s (WINNER)**, spiral-brute 5/5 4.8-50s, stair-shore 5/5 ~10-20s, commit-swim 6/6 13-29s, dig-pillar (needs blocks). Shared discovery: **every bank within ~15 blocks of the hole is 2+ high** (impulse can't climb), so the reachable low shore is 11-52 blocks out — the old escape thrashed locally forever. **Integrated into production `escapeWater` (bot-utils.ts):** (1) NEW `escapeViaPathfinder` runs FIRST — a wide (R=40) dry-target scan that requires genuinely-DRY (non-water) headroom (so it aims at real shore, not submerged seafloor) + temporarily drops `liquidCost` 100→1.5 so A* wades the water it's in, then walks/steps/scaffolds up the shore; `liquidCost` restored after. (2) Falls through to the committed stair-dig for fully-boxed pockets. (3) stair-shore's fix: `jump` gated on `isInWater` (holding it on land bunny-hops the bot past the shore). **VERIFIED: production escapeWater PASSES the real ocean hole in ~4.2s, full HP.** Confirming pocket/deep fallback still pass.
-
-- **Iter 14 — Mine Cobblestone: drops lost on a slope → 0 cobble** (`mineBlock` in `tasks/mining/main.ts`). SteveRun16 reached **14/30** (session best, 0 disconnects — water/pathfinder fixes holding) then stuck on Mine Cobblestone at (96,85) on a mountain: `mined 9/16` kept rising but inventory held **0 cobblestone** — the horizontal strip-mine broke cliff stone whose cobble rolled DOWN the slope out of pickup range, and collectDrops froze the bot chasing an unreachable drop (`goTo` to a drop that fell away). Fix: reorder the mine candidates to prefer **ahead-and-below** (descend a staircase) then straight-below, over ahead-at-feet — so the drop lands at the bot's feet where collectDrops reaches it, and the loop steps down into the stair. This is the Iter 11 dig-down idea generalized (helps mountains AND flat/stone-poor spawns). Hot-reloads into SteveRun16 on its next attempt (no restart — keeps 14/30). Verifying cobble now collects.
-
-## Current blocker
-
-SteveRun16 (race in scratchpad/current-race.txt) — running the OVERHAULED water escape (Iter 13: pathfinder-first to real shore, ~3-4s on the ocean hole that used to stall 14-18 min; staircase fallback for boxed pockets, pathfinder bounded to fail-fast; jump gated on isInWater). Verified: ocean 3/3 ~3-4s, deep ~10s, pocket ~26s — all PASS. 0 disconnects. This should end the water-stall class of failures. **Monitor `byeuzp97w`** primary. Remaining known gaps (spawn-terrain long tail): tree-reach on sparse spawns, Mine Cobblestone dig-down for buried stone on flat spawns (Iter 11 — implement if it stalls there), then stone tools → Furnace → Coal → Iron → bucket → the **portal cast** (target). Tooling left in place: `/debug/swim` grid + `water-lab.ts` + `water-strategies/*` for future water repro. Core engine (crafting, water, crossing/bound, disconnects) is solid.
+mine-iron ✅50% and mine-cobblestone ✅~50%(winnable). Verifying mine-coal (should ride
+the same coverage fix). Remaining weak: **mine-coal**, **flint (25%, gravel-find)**,
+**build-portal (0%, lava-find)**, and the shared **descent-reliability** issue —
+mine-iron's remaining fails are `dug=0` at y62-63 (digDownVertical stuck at the water
+table, never reaching the band); fixing that lifts iron higher AND coal AND portal-lava.
+Then re-confirm the ≥50% set and run a Phase 3 chain race → the_nether.

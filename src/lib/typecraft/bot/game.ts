@@ -47,7 +47,7 @@ export const initGame = (bot: Bot, options: BotOptions): void => {
 	};
 
 	// Dimension type registry — populated during configuration state
-	type DimensionInfo = { height: number; minY: number };
+	type DimensionInfo = { name: string; height: number; minY: number };
 	const dimensionTypes: DimensionInfo[] = [];
 
 	bot.client.on("registry_data", (packet: Record<string, unknown>) => {
@@ -61,8 +61,11 @@ export const initGame = (bot: Bot, options: BotOptions): void => {
 
 		dimensionTypes.length = 0;
 		for (const entry of entries) {
+			// Keep the registry KEY (e.g. minecraft:the_nether) so a NUMERIC dimension
+			// index in the login/respawn packet can be mapped back to a name.
+			const name = String(entry.key ?? "").replace("minecraft:", "");
 			if (!entry.value) {
-				dimensionTypes.push({ height: 256, minY: 0 });
+				dimensionTypes.push({ name, height: 256, minY: 0 });
 				continue;
 			}
 			const simplified = simplifyNbt(entry.value as NbtTag) as Record<
@@ -70,6 +73,7 @@ export const initGame = (bot: Bot, options: BotOptions): void => {
 				unknown
 			>;
 			dimensionTypes.push({
+				name,
 				height: (simplified.height as number) ?? 256,
 				minY: (simplified.min_y as number) ?? 0,
 			});
@@ -109,10 +113,20 @@ export const initGame = (bot: Bot, options: BotOptions): void => {
 			bot.supportFeature("segmentedRegistryCodecData")
 		) {
 			const dim = packet.dimension ?? packet.worldName;
-			bot.game.dimension =
-				typeof dim === "string"
-					? dim.replace("minecraft:", "")
-					: String(dim ?? "overworld");
+			if (typeof dim === "string") {
+				bot.game.dimension = dim.replace("minecraft:", "");
+			} else if (typeof dim === "number") {
+				// 26.x sends the dimension as a REGISTRY INDEX (e.g. 3 = the_nether), not
+				// a name — resolve it via the dimension_type registry so the nether reads
+				// "the_nether", not "3". Without this, getPhase + the enter_nether goal
+				// never recognize the nether even after a bot walks through the portal.
+				bot.game.dimension =
+					dimensionTypes[dim]?.name ??
+					DIMENSION_NAMES[String(dim)] ??
+					String(dim);
+			} else {
+				bot.game.dimension = "overworld";
+			}
 		} else if (bot.supportFeature("dimensionIsAWorld")) {
 			const wn = packet.worldName;
 			bot.game.dimension =
