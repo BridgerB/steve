@@ -453,8 +453,16 @@ const runRace = async (count: number, timeoutMs: number) => {
 	// area a bot has visited, so it's untouched. If it too gets chopped over many races,
 	// re-locate a fresh forest via RCON `locate biome minecraft:forest` from a far point.
 	const raceNum = Math.floor((serialStart - 1) / Math.max(1, count));
-	const FX = -3936 + ((raceNum % 3) - 1) * 60;
-	const FZ = 3968 + ((Math.floor(raceNum / 3) % 3) - 1) * 60;
+	// Spread successive races across a LARGE fresh area. The old ±60 jitter kept every race
+	// in the same ~120x120 zone around (-3936,3968), which 90+ cumulative bot runs have
+	// DEFORESTED — so recent races start tree-starved and loop Gather Wood on far trees. Step
+	// 512 blocks per race in a 7x7 grid (~3500x3500 spread) so each race lands in essentially
+	// virgin forest with its own trees/ore, escaping the clear-cut core.
+	const GRID = 7;
+	const STEP = 512;
+	const FX = -3936 + ((raceNum % GRID) - Math.floor(GRID / 2)) * STEP;
+	const FZ =
+		3968 + ((Math.floor(raceNum / GRID) % GRID) - Math.floor(GRID / 2)) * STEP;
 	const spawns: { x: number; z: number }[] = [];
 	for (let i = 0; i < count; i++) {
 		spawns.push({ x: FX + ((i % 5) - 2) * 24, z: FZ + Math.floor(i / 5) * 26 });
