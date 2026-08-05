@@ -209,7 +209,15 @@ export const steps: readonly Step[] = [
 		isComplete: (s) =>
 			s.inventory.coal >= 6 ||
 			s.inventory.ironIngots >= 7 ||
-			s.inventory.planks >= 16,
+			s.inventory.planks >= 16 ||
+			// READY TO SMELT → stop mining coal and go smelt with wood. Without this, a bot
+			// whose plank count dips below 16 (after crafting a table/tools) re-triggers
+			// Mine Coal, which relocate-LOOPS on sparse ore ("Relocated toward X,Y" forever)
+			// — the live race-8 leader froze at 6 raw_iron for 20 min thrashing coal despite
+			// having furnace+iron+21 planks. If it can smelt now, it should.
+			(s.equipment.hasFurnace &&
+				s.inventory.ironOre >= 3 &&
+				s.inventory.planks >= 6),
 		execute: async (bot, _state) => {
 			const { mineBlock } = await import("./tasks/mining/main.ts");
 			return mineBlock(bot, "coal_ore", 10);
