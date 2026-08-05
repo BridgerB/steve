@@ -198,15 +198,18 @@ export const steps: readonly Step[] = [
 		// smelted, more coal is dead weight — short-circuit, or the bot grinds
 		// sparse no-x-ray coal forever (coal drops <10 after smelting → refires)
 		// and never advances to buckets/water/cast.
-		// planks>=8: WOOD is also valid furnace fuel (smeltItems + smelt_iron already
-		// accept planks), so a bot that can't find coal (sparse ore / relocate-loop)
-		// but holds ample planks must NOT be trapped mining coal forever — let it fall
-		// through to smelt iron with wood fuel (the live race-4 leader stall: 0 coal,
-		// 12 planks, 6 raw_iron, furnace — churned Mine Coal 25 min, never smelted).
+		// planks>=16: WOOD is also valid furnace fuel (smeltItems + smelt_iron accept
+		// planks), so a bot that can't find coal (sparse ore / relocate-loop) but holds
+		// AMPLE planks must NOT be trapped mining coal forever — fall through to smelt
+		// with wood (race-4 leader stall: 0 coal, 12 planks, churned Mine Coal 25 min).
+		// Threshold is 16 (not 8): smelting 8 iron burns ~6 planks, and buckets need a
+		// crafting TABLE (4 planks) — at 8 the bot smelted away every plank and then
+		// couldn't build the table, deadlocking at Craft Buckets with 9 ingots (race-5).
+		// 16 keeps a ~10-plank reserve for the table + tools after wood-smelting.
 		isComplete: (s) =>
 			s.inventory.coal >= 6 ||
 			s.inventory.ironIngots >= 7 ||
-			s.inventory.planks >= 8,
+			s.inventory.planks >= 16,
 		execute: async (bot, _state) => {
 			const { mineBlock } = await import("./tasks/mining/main.ts");
 			return mineBlock(bot, "coal_ore", 10);
