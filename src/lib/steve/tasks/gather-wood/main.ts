@@ -130,8 +130,15 @@ export const gatherWood = async (
 			const positions = bot.findBlocks({
 				matching: (name: string) => isLogName(name),
 				maxDistance: radius,
+				// exposed:false — the DEFAULT findBlocks applies a canSeeBlock() eye
+				// line-of-sight filter that hills/canopy block, so a bot in a treeless
+				// POCKET reports "no trees nearby" when trees are reachable just out of
+				// LOS (the live cause of the treeless Gather-Wood timeout loop). Trees are
+				// surface features (not X-ray-sensitive ore); reachability is still checked
+				// by navigateTo + the unreachable blacklist below.
+				exposed: false,
 				count: 50,
-			});
+			} as never);
 			if (positions.length === 0) continue;
 
 			const reachable = positions
