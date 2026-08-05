@@ -94,8 +94,16 @@ const DEADLOCK_IDS = [
 ];
 
 // The obsidian cast genuinely needs minutes; everything else fits in 120s.
+// gather_wood is walk-heavy: in tree-sparse terrain the nearest tree can be 40-60
+// blocks off, and the walk alone eats the 120s budget → the step times out having
+// gathered nothing, looping forever (live race stalls: bots 074/084). 210s lets the
+// far-tree walk + chop finish so wood actually accumulates.
 const stepTimeoutMs = (stepId: string): number =>
-	stepId === "build_nether_portal" ? 480000 : 120000;
+	stepId === "build_nether_portal"
+		? 480000
+		: stepId === "gather_wood"
+			? 210000
+			: 120000;
 
 const completedFrom = (state: GameState): Set<string> =>
 	new Set(steps.filter((s) => s.isComplete(state)).map((s) => s.id));
