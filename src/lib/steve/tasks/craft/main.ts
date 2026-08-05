@@ -12,6 +12,7 @@ import {
 	getCraftingTable,
 	goTo,
 	reclaimCraftingGrid,
+	sleep,
 	success,
 } from "../../lib/bot-utils.ts";
 import type { StepResult } from "../../types.ts";
@@ -46,9 +47,38 @@ export const craftPlanks = async (bot: Bot): Promise<StepResult> => {
 				continue;
 			}
 			const recipe = recipes[0];
-			if (recipe) {
-				await bot.craft(recipe, Math.min(log.count, 8));
+			if (!recipe) continue;
+			// bot.craft can DESYNC on a dirty 2x2 grid ("Missing ingredient id=…") or HANG
+			// ("Promise timed out") — both stall the whole mid-game (leader stuck crafting the
+			// planks it needs for a table→buckets). Race a timeout, and on any failure close the
+			// window + re-reclaim the grid to resync, then retry once. Failure-path only.
+			const before = windowItems(bot.inventory)
+				.filter((i) => i.name === plankName)
+				.reduce((n, i) => n + i.count, 0);
+			for (let attempt = 0; attempt < 2; attempt++) {
+				try {
+					await Promise.race([
+						bot.craft(recipe, Math.min(log.count, 8)),
+						new Promise((_, rej) =>
+							setTimeout(() => rej(new Error("craft timeout")), 8000),
+						),
+					]);
+					break;
+				} catch {
+					if (bot.currentWindow) {
+						try {
+							bot.closeWindow(bot.currentWindow);
+						} catch {}
+						await sleep(250);
+					}
+					await reclaimCraftingGrid(bot);
+					await sleep(150);
+				}
 			}
+			const after = windowItems(bot.inventory)
+				.filter((i) => i.name === plankName)
+				.reduce((n, i) => n + i.count, 0);
+			if (after > before) break; // got planks — stop; don't burn every log type
 		}
 		return success("Crafted planks from logs");
 	} catch (err) {
