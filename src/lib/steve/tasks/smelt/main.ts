@@ -172,9 +172,15 @@ export const smeltItems = async (
 		await evict(0, (n) => n.includes(inputItem));
 		await evict(1, isFuelName);
 
-		// Load fuel if the fuel slot is empty.
+		// Load fuel if the fuel slot is empty. PREFER coal/charcoal over wood: burning
+		// planks/logs here starves the downstream chain (the crafting_table + tools +
+		// buckets all need wood), and on a deforested cell the bot then can't re-plank to
+		// finish the smelt — the fuel-at-smelt deadlock that caps races at ~3 ingots. Coal
+		// is mined right beside the iron, so spend that first and keep the wood.
+		const isCoal = (n: string) => n === "coal" || n === "charcoal";
 		if (!furnaceWindow.slots[1]) {
-			await moveToSlot(isFuelName, 1);
+			const loadedCoal = await moveToSlot(isCoal, 1);
+			if (!loadedCoal && !furnaceWindow.slots[1]) await moveToSlot(isFuelName, 1);
 		}
 		// Load input if the input slot is empty.
 		if (!furnaceWindow.slots[0]) {
@@ -192,7 +198,14 @@ export const smeltItems = async (
 		// step never reached its ironIngots>=7 target in one call.
 		const target = Math.min(furnaceWindow.slots[0]?.count ?? 0, count);
 		logEvent("smelt", "waiting", `target ${target}x ${inputItem}`);
-		const waitDeadline = Date.now() + 120_000;
+		// Cap the in-call wait BELOW the run-loop's ~120s per-step timeout. Equal 120s
+		// deadlines raced: the step was force-killed at 120s WHILE still in this loop, so
+		// the take-output code below never ran and the finished ingots stayed stuck in the
+		// furnace — a bot smelted 8 iron (smelt-preempt fix let Smelt Iron run) but 0 ingots
+		// ever landed in its pack, looping `Smelt Iron timed out (120s)` (race127/312). 90s
+		// covers 8 iron (~80s) and, if the furnace is slower, we still exit and COLLECT the
+		// partial output, then the step re-enters to finish the rest next tick.
+		const waitDeadline = Date.now() + 90_000;
 		while (Date.now() < waitDeadline) {
 			await sleep(2500);
 			const out = furnaceWindow.slots[2]?.count ?? 0;

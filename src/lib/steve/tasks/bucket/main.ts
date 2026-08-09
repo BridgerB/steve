@@ -30,13 +30,46 @@ const waterKey = (p: Vec3) => `${p.x},${p.y},${p.z}`;
 export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 	const bad = (p: Vec3): boolean =>
 		failedWater.get(bot)?.has(waterKey(p)) ?? false;
+	// Only TRUE SOURCE water (fluid level 0) fills a bucket — typecraft names FLOWING
+	// water "water" too, and scooping a flowing tongue silently fails every attempt,
+	// then the block gets blacklisted. Two race leaders (745, 751) reached water with a
+	// bucket but never filled it because pickWater handed the scoop a flowing block.
+	// Mirror the proven source-filter from the portal lava cast (cast.ts isSource):
+	// source blocks have properties.level missing or "0". Prefer source + air-above.
+	const isSource = (p: Vec3): boolean => {
+		const lv = (
+			bot.blockAt(p) as { properties?: { level?: unknown } } | null
+		)?.properties?.level;
+		return lv == null || String(lv) === "0";
+	};
+	// Prefer SURFACE ponds, never deep cave/aquifer water. When the bot (resurfaced to
+	// ~sea level) scans for water, findBlocks also returns cave water 20+ blocks DOWN;
+	// diving in to scoop it drops the bot into a 1-wide flooded pocket where the scoop
+	// fails AND escapeWater can't climb out (`water_escape_failed_final`) — a hard drown-
+	// trap that ended the best-ever run (race81/192: dove to y41 cave water, trapped).
+	// Signals of a safe surface pond: SOURCE (level 0), real `air` (open sky) directly
+	// above — not `cave_air` — and within a few blocks of the bot's own Y. If only deep
+	// cave water is in range, return null so the caller escalates to the long-range hunt
+	// for a real surface pond elsewhere, rather than diving into the aquifer.
 	const pickWater = (list: Vec3[]): Vec3 | null => {
-		const ok = list.filter((p) => !bad(p));
-		for (const p of ok) {
-			const above = bot.blockAt(offset(p, 0, 1, 0));
-			if (above && (above.name === "air" || above.name === "cave_air")) return p;
-		}
-		return ok[0] ?? null;
+		const botY = bot.entity.position.y;
+		const src = list.filter((p) => !bad(p) && isSource(p));
+		const aboveName = (p: Vec3): string =>
+			bot.blockAt(offset(p, 0, 1, 0))?.name ?? "";
+		// Tier 1: open-sky surface pond near our level — the only truly safe scoop.
+		const surface = src.filter(
+			(p) => aboveName(p) === "air" && p.y >= botY - 5,
+		);
+		if (surface.length) return surface[0] ?? null;
+		// Tier 2: air/cave_air above but still near our level (a shallow pool we won't
+		// get trapped diving into). Excludes anything well below us.
+		const shallow = src.filter((p) => {
+			const a = aboveName(p);
+			return (a === "air" || a === "cave_air") && p.y >= botY - 8;
+		});
+		if (shallow.length) return shallow[0] ?? null;
+		// Only deep cave water in range — refuse it (drown-trap) and let the search escalate.
+		return null;
 	};
 	const search = (dist: number, count: number): Vec3 | null =>
 		pickWater(
@@ -89,6 +122,71 @@ export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 			await exploreRandom(bot, 60);
 			waterPos = search(128, 30);
 			if (waterPos) break;
+		}
+	}
+
+	// 4b. Long-range DIRECTIONAL hunt. The explore rounds above are short RANDOM walks
+	//     (~60-80 blocks) that stay in the same area, so a water-scarce spawn loops
+	//     "No water found" forever even when a lake sits 150-300 blocks away — the
+	//     confirmed #1 bottleneck for smelted bots (race69/76 at -3936,5504: a bot with
+	//     iron + bucket stuck 10-20 min at the water link, never relocating far enough).
+	//     Commit to each cardinal + diagonal direction and travel FAR into fresh chunks,
+	//     searching a wide radius at each leg. Mirrors gather-wood's long-relocate: turns
+	//     an unwinnable dry pocket into a solvable hunt. goTo may only get partway on
+	//     rough terrain, but even partial progress relocates us into new ground to scan.
+	if (!waterPos) {
+		const origin = bot.entity.position;
+		const dirs: ReadonlyArray<readonly [number, number]> = [
+			[1, 0],
+			[0, 1],
+			[-1, 0],
+			[0, -1],
+			[1, 1],
+			[-1, -1],
+			[1, -1],
+			[-1, 1],
+		];
+		for (const [dx, dz] of dirs) {
+			if (waterPos) break;
+			for (let leg = 1; leg <= 2 && !waterPos; leg++) {
+				const here = bot.entity.position;
+				const target = vec3(
+					Math.floor(here.x + dx * 140),
+					Math.floor(here.y),
+					Math.floor(here.z + dz * 140),
+				);
+				logEvent(
+					"bucket",
+					"long_hunt",
+					`dir ${dx},${dz} leg ${leg} → ${target.x},${target.z}`,
+				);
+				await goTo(bot, target, { range: 8, timeout: 30000 }).catch(() => {});
+				await bot.waitForChunksToLoad();
+				waterPos = search(160, 300);
+			}
+		}
+	}
+
+	// 5. Recovery: every reachable source got blacklisted (5 failed scoops each) and
+	//    no fresh water turned up — in a water-sparse biome that's a permanent
+	//    deadlock (the bot loops "no water" forever). Clear the blacklist and retry
+	//    the nearest source: the misses are usually positioning/flow-luck, not a
+	//    truly unscoopable block, so a fresh approach often lands it.
+	if (!waterPos) {
+		const set = failedWater.get(bot);
+		if (set && set.size > 0) {
+			logEvent("bucket", "blacklist_reset", `clearing ${set.size} sources`);
+			set.clear();
+			waterPos =
+				search(128, 200) ??
+				(await (async () => {
+					for (let i = 0; i < 3; i++) {
+						await exploreRandom(bot, 60);
+						const w = search(128, 30);
+						if (w) return w;
+					}
+					return null;
+				})());
 		}
 	}
 

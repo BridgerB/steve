@@ -1,171 +1,228 @@
-# LOOP.md — perfect the gym, then chain to the Nether
+# LOOP.md — race → debug → gym, one turning wheel
 
-Persistent state + procedure for a self-driving loop. The model forgets between
-firings; this file doesn't. Read it top-to-bottom each iteration, do the work, then
-**update the Reliability table + Fixes log + Current focus** before ending.
+Persistent state + procedure for a self-driving loop toward `ticks.dimension = the_nether`
+from a cold random spawn, zero human input. The model forgets between firings; this file
+doesn't. **Read it top-to-bottom each iteration, do the phase you're on, then update the
+Blocker board + Fixes log + Current phase before ending.**
 
-## Why this loop (the reframe)
+## The cycle (this replaces the old "gym-first" loop)
 
-Full raw-spawn races don't converge — a ~16-link chain stalls at a different random
-hazard every time and each stall wastes ~60 min on reset. Instead: **perfect each
-speedrun step in ISOLATION via the gym** (each gym run grants the step's prereqs,
-random-teleports, runs just that task — seconds-to-minutes per trial), until every
-critical-path piece clears the bar. Then chain them in a full race: if each link works
-independently, the chain reaches the Nether.
+One full turn is four phases. Each phase feeds the next; the whole thing repeats forever
+until a bot reaches the nether.
 
-## Goal & done criterion
-
-Every **critical-path** gym step passes **≥50% on WINNABLE terrain** (exclude
-biome-unwinnable spawns — ocean/desert with no trees, etc. — via the stored x,z), THEN
-a full chain race reaches `ticks.dimension = the_nether`.
-```bash
-# per-step reliability (winnable rate = judgment on the failure spots' x,z):
-sqlite3 data/gym.db "SELECT slug,count(*) n,sum(pass) p,round(100.0*sum(pass)/count(*)) pct FROM gym_runs WHERE ts>$START GROUP BY slug;"
-# chain done:
-docker exec steve-db-1 psql -U root -d local -t -A -c "SELECT DISTINCT dimension FROM ticks WHERE race_id='<RID>'"  # → the_nether
+```
+   ┌────────────────────────────────────────────────────────────────┐
+   │  1. RACE (2h)  →  2. DIAGNOSE  →  3. DEBUG+FIX (MCP)  →  4. GYM (1h)  ┐
+   └──────────────────────────────────────────────────────────────────────┘
+                                    ↑___________________________________________│
 ```
 
-## Critical path = 16 links (skip food/sword/iron-pickaxe — not needed for the Nether)
+1. **RACE — run a real cold-start race for ~2 hours.** 4 bots, fresh world, no help.
+   This is the ground truth: it exercises the *whole* 16-link chain under real terrain,
+   contention, and server lag — things the gym can't fake. Let it run the full 2h (or
+   until a bot reaches the nether = DONE). Check in every ~10 min only to keep it alive
+   (relaunch dead procs, escape dead cells) — do NOT fix code mid-race.
+
+2. **DIAGNOSE — after 2h, do a full post-mortem of the current state.** Find the
+   **furthest bot** and the **exact wall it died/stalled on**: the step it looped, the
+   inventory it had, the coords, the terrain, the packet/timeout it hit. Write it on the
+   Blocker board. One race → one (maybe two) concrete blocker(s) to attack.
+
+3. **DEBUG + FIX — reproduce that blocker with a live MCP bot and fix the code.** Spawn a
+   debug bot via the MCP server INTO that spot with those conditions (same items, same
+   block layout — use RCON to recreate it), then walk it through the *next* steps by hand
+   with the MCP tools until you understand *why* it fails. If it's an interaction/protocol
+   failure (a craft that times out, a bucket that won't scoop), **`sniff` the packets** to
+   see what the server actually sends. Then fix the task/bot code so the next round gets
+   past this wall. Update the code AS YOU GO.
+
+4. **GYM — spend ~1 hour hammering the fixed hurdle(s) in isolation.** The gym grants a
+   step its prereqs, random-teleports, and runs just that task (seconds-to-minutes per
+   trial vs ~60 min per race). Run many fresh `gym-cli` trials on the step(s) you just
+   fixed, confirm the fix holds across terrain/luck, and fix anything the gym surfaces
+   that the single MCP repro missed. **Take those lessons back into the code.**
+
+Then loop back to RACE with a better codebase. Every turn the chain should reach one link
+further.
+
+## Done criterion
+
+```bash
+# GOAL — any bot in the nether ends the loop:
+docker exec steve-db-1 psql -U root -d local -tA -c \
+  "SELECT DISTINCT bot_id,dimension FROM ticks WHERE dimension LIKE '%nether%';"
+```
+
+## The 16-link chain (skip food/sword/iron-pickaxe — not needed for the nether)
 
 gather-wood → craft-planks → craft-table → craft-sticks → craft-wooden-pickaxe →
 mine-cobblestone → craft-stone-pickaxe → craft-furnace → mine-coal → mine-iron →
-smelt-iron → craft-buckets → fill-water → flint-and-steel → **build-nether-portal** →
+smelt-iron → craft-buckets → **fill-water** → flint-and-steel → **build-nether-portal** →
 **enter-nether**. `escape_water` (priority-0 override) is not a link but silently breaks
-the mining/water links whenever the bot falls in water.
+the mining/water links whenever the bot falls in water. **build-nether-portal + enter are
+PROVEN in the gym given a filled water_bucket + lava** — the fight is getting the kit there.
 
-## Iteration procedure
+---
 
-1. **Ensure env**: MC server on `144.24.32.76:25565` (`.env` has MC_HOST/PORT). RCON
-   tunnel `127.0.0.1:25575` (`ssh -fN -L 25575:127.0.0.1:25575 bridger@144.24.32.76`,
-   pass `minecraft-test-rcon`). Postgres `steve-db-1` (4623) for chain races only.
-   **Check box load** first: RCON `list` — if many `rust-*` bots are on, contention
-   makes craft/place flaky; prefer running trials when the box is light, keep concurrent
-   bots low.
-2. **Pick the target**: the lowest-reliability critical-path step below 50% (see
-   Reliability table). Ties → hardest-first order: build-nether-portal, mine-iron,
-   mine-coal, mine-cobblestone, fill-water, smelt-iron, flint-and-steel, enter-nether.
-3. **Run N fresh trials** (fresh process per trial — robust vs the disconnects a single
-   long-lived bot hits):
-   ```bash
-   for i in $(seq 1 12); do STEP=<slug> BOT=g<slug><i> node --env-file=.env --import ./typecraft-resolve.mjs gym-cli.ts 2>&1 | grep GYMRESULT; done
-   ```
-   (or loop `subset-test.ts`-style). Records to `data/gym.db` automatically.
-4. **Diagnose**: pull the dominant failure + repro coords —
-   `sqlite3 data/gym.db "SELECT message,count(*) c,group_concat(x||','||y||','||z) FROM gym_runs WHERE slug='<slug>' AND ts>$START AND pass=0 GROUP BY message ORDER BY c DESC LIMIT 8;"`
-   Separate **winnable** failures (a real bug) from **biome-unwinnable** spawns (ocean/
-   desert — don't count against the bar). For placement/portal, also watch a live view
-   at `http://localhost:4558/gym/<slug>` (needs `npm run dev`).
-5. **Fix the real blocker** in the task code (`tasks/*/main.ts`, `bot-utils.ts`,
-   `steps.ts`, `tasks/portal/cast.ts`), **re-run the same N trials**, confirm winnable
-   pass% crossed 50%. Server-side edits need a fresh gym-cli process (each trial is one),
-   so no restart dance — just re-run.
-6. **Log** in Fixes log + bump the Reliability table. If a step resists ~3 distinct
-   fixes, surface it — don't spin.
-7. When **all 16 links ≥50%**, run a **chain race** (`STEVE_CLI=1 node … src/lib/steve/main.ts --bots 4 --timeout 7200`) and check `ticks.dimension`. If it stalls despite reliable links, the residual is the **gym→race gap** (inter-step state, resource accounting, cumulative contention, deforestation) — diagnose from the race DB and fix.
+## PHASE 1 — RACE (run + keep alive)
 
-## Tools
+- **Launch** (spread across fresh terrain via `.race-serial`; DIRECT connect, not tunnel):
+  ```bash
+  STEVE_CLI=1 nohup node --import ./typecraft-resolve.mjs src/lib/steve/main.ts \
+    --bots 4 --timeout 7200 > $SCR/raceN.log 2>&1 &
+  ```
+- **Cell quality matters more than anything.** After launch, check spawn `y` + `is_in_water`.
+  The world has a real spread of terrain and the loop lives or dies on it:
+  - **Ocean / mostly-water cells** (all bots at y~62, `is_in_water=1`) → dead, bots drown.
+    Bump `.race-serial` (`echo '{"next":N}' > .race-serial`) to a different cell.
+  - **Too-dry elevated cells** (forest hilltops) → bots reach iron but can't reach trees
+    for smelt-fuel and there's no surface water to fill a bucket.
+  - **MIXED cells** (some bots dry, a pond/lake nearby) → the sweet spot: dry land to
+    progress + scoopable water for the bucket. Prefer these.
+- **Keep alive** on the ~10-min checks: 0 bots ticking → relaunch (below); RCON dead →
+  fix tunnel; server "Preparing spawn area" → wait, NEVER restart the shared server.
+- **NEVER** wipe/reset the shared world or restart the MC server — the box is shared with
+  ruststeve and Bridger resets it manually. `keep_inventory` is snake_case and must stay
+  true (verify via `gamerule keep_inventory`).
+- Relaunch after a dead cell / stall: `pkill -f 'src/lib/steve/main.ts'` first (bots
+  auto-reconnect and collide otherwise), then relaunch with the next serials.
 
-- **`gym-cli.ts`** — one gym trial per process: `STEP=<slug> BOT=<uniq> node --env-file=.env --import ./typecraft-resolve.mjs gym-cli.ts`. Prints `GYMRESULT {json}`; records to `data/gym.db`.
-- **`data/gym.db`** (node:sqlite, table `gym_runs`: ts,slug,pass,duration_ms,x,y,z,prereq,message) — the reliability + failure-mode + reproduction store.
-- **`/gym` dashboard** (`npm run dev` → `http://localhost:4558/gym`) — pass-rate/spread/difficulty/location charts, per-step history at `/gym/<slug>`, live 3D at `/gym/all`.
-- **`water-harness.ts`** — deterministic `escapeWater` repro (modes tunnel/deep/pocket/lakeedge) for the aquifer/enclosed-pocket case.
-- **RCON** for ad-hoc probes (`locate biome`, `data get block`, `fill … replace …` to count blocks) — read the box before assuming terrain.
+## PHASE 2 — DIAGNOSE (post-mortem)
 
-## The gym now covers the whole path (Phase 0 — done)
+Find the furthest bot and its wall. Telemetry is Postgres (`steve-db-1`, port 4623; `ts`
+is TEXT → cast `ts::timestamptz`):
+```bash
+# furthest bot by kit (which links it cleared):
+docker exec steve-db-1 psql -U root -d local -tA -c "SELECT bot_id,
+  max(CASE WHEN item_name='iron_ingot' THEN count END) ii,
+  max(CASE WHEN item_name='raw_iron' THEN count END) ri,
+  bool_or(item_name='water_bucket') wb, bool_or(item_name IN ('bucket','lava_bucket')) buck,
+  bool_or(item_name='obsidian') obs
+  FROM inventory_snapshots WHERE bot_id LIKE 'steve-race-%'
+  AND ts::timestamptz>now()-interval '2 hours' GROUP BY bot_id
+  ORDER BY obs DESC,wb DESC,buck DESC,ii DESC NULLS LAST;"
+# what that bot looped on (its wall):
+docker exec steve-db-1 psql -U root -d local -tA -c "SELECT category,event,detail
+  FROM events WHERE bot_id='<furthest>' AND ts::timestamptz>now()-interval '20 minutes'
+  ORDER BY ts DESC LIMIT 40;"
+```
+Write the wall on the Blocker board: **step + inventory + coords + terrain + failure mode**.
 
-`GymStep` has an optional `setup?(bot, rcon, at)` hook (`gym/registry.ts`), invoked by
-`runGymStep` after teleport, before `run` (`gym/run.ts`). Two new exercises:
-- **build-nether-portal** (order 18) — FULL autonomous: prereq `water_bucket 1 + bucket 1 + flint_and_steel 1 + dirt 32`; `run` = `prepareCastSite` then `buildPortalByCasting`; `pass` = a `nether_portal` block within 16; `timeoutMs 420000` (lava-find-dominated).
-- **enter-nether** (order 19) — `setup` RCON-builds+lights a portal 4 blocks ahead; `run` = `enterPortal`; `pass` = `game.dimension` includes `nether`.
+## PHASE 3 — DEBUG + FIX (MCP repro + code fix)
 
-## Portal cast — where the risk is (from the deep-dive)
+Spawn a live debug bot via the MCP server and reproduce the wall. **`src/lib/steve/mcp.ts`**
+exposes tools to Claude Code: `spawn`/`use` (a bot), `state`, `inventory`, `look`,
+`navigate`, `mine`, `craft`, `eval` (run TS against the live bot; imports relative to
+`src/` — `await import("./tasks/...")`, never `./src/...`), `chat`, and **`sniff`**.
+- **`sniff {duration, action, filter}`** captures incoming packets during an action (runs
+  the `action` TS while listening), filtering movement/chunk noise (`NOISE_PACKETS`). Use
+  it to see what the server actually returns for a failing interaction. Examples of what to
+  look for on the two current walls:
+  - **craft clickWindow** (`Failed to craft crafting_table`/`Promise timed out`/`table_missing`):
+    `sniff` with `filter:"container"` or `"slot"` while running a craft — watch whether
+    `container_set_slot`/`container_set_content`/`container_ack` come back for the clicks,
+    or whether the 30s `withTimeout` (typecraft `bot/crafting.ts:294`) trips because
+    `windowOpen`/slot-updates never arrive under server lag.
+  - **water-scoop** (`scoop_blacklist`, never a `filled water_bucket`): `sniff` while using
+    the bucket on water — confirm the bot is aiming a SOURCE block (level 0) not flowing,
+    and whether a `set_slot`/`block_update`(water→air) comes back. (Fix already landed:
+    `pickWater` now source-filters, mirroring the cast's `isSource`.)
+- If you can't reach the exact repro terrain, RCON-build it: `fill`/`setblock` the block
+  layout, `give` the inventory, `tp` the bot in. Then step through with the MCP tools.
+- **Fix the task/bot code** (`tasks/*/main.ts`, `bot-utils.ts`, `steps.ts`,
+  `tasks/portal/cast.ts`, or typecraft `bot/crafting.ts` for protocol) so the wall is gone.
+  Server-side edits need a fresh process to reload (the bot runs in-process). Log it.
 
-The cast splits in two:
-- **`prepareCastSite` (find/reach lava) = the fragile crux, likely never fully
-  succeeded.** No X-ray, so it needs natural lava line-of-sight within 30 OR mines down
-  to cave lava within 8 passes / 6 min, AND `fillBucket` needs solid air-topped footing
-  beside the source. Same capability class as mine-iron descend-and-find. Improve this
-  first for build-nether-portal.
-- **`castObsidianAt` + frame = deterministic given a lava source**, but physics-timing
-  fragile: pillar-stalls, float-off, cup/bowl mis-placement; each gate bail (`cup_leak`,
-  `bowl_leak`, `pos_fail`) burns 1 of 3 attempts; a block that drifts twice fails the
-  whole frame.
-- Pre-checks: frame is 4×5 OUTER, **corners optional (10 edge blocks)**; **clear all
-  scaffold from the 2×3 interior before lighting**; **never dig obsidian** (iron pick
-  can't, `digAt` hangs); do NOT y-sort the frame build order.
-- **26.1.2 gotcha**: `activateItem()` leaves `usingHeldItem` stuck true → next bucket use
-  silently no-ops. All bucket use goes through `reliableUse()` (`cast.ts`).
+## PHASE 4 — GYM (isolate + confirm the fix, harvest more lessons)
 
-## Reliability table (target ≥50% winnable — UPDATE each iteration)
+Run many fresh trials on the step(s) you just fixed; fresh-process-per-trial is robust vs
+the disconnects a long-lived bot hits:
+```bash
+for i in $(seq 1 12); do STEP=<slug> BOT=g<slug>$i \
+  node --env-file=.env --import ./typecraft-resolve.mjs gym-cli.ts 2>&1 | grep GYMRESULT; done
+```
+- Records to `data/gym.db` (node:sqlite, table `gym_runs`: ts,slug,pass,duration_ms,x,y,z,
+  prereq,message). Pull the dominant failure + repro coords:
+  ```bash
+  sqlite3 data/gym.db "SELECT message,count(*) c,group_concat(x||','||y||','||z) FROM gym_runs
+    WHERE slug='<slug>' AND ts>$START AND pass=0 GROUP BY message ORDER BY c DESC LIMIT 8;"
+  ```
+- Separate **winnable** failures (a real bug to fix) from **biome-unwinnable** spawns
+  (ocean/desert — don't count them). Live view: `npm run dev` → `http://localhost:4558/gym/<slug>`.
+- Every gym lesson that isn't already covered → back into the code. Then return to PHASE 1.
+- The gym covers the whole path incl. `build-nether-portal` (order 18, full autonomous) and
+  `enter-nether` (order 19) via the `setup?(bot,rcon,at)` hook in `gym/registry.ts`.
+- `water-harness.ts` reproduces the `escapeWater` aquifer/pocket case deterministically.
 
-Rates below are STALE (pre/post-fix mixed in gym.db) — **re-baseline in Phase 1** with
-fresh trials before trusting them.
+---
 
-| step | last winnable pass% | status |
-|---|---|---|
-| gather-wood | ~65% (stale) | re-baseline |
-| craft-planks / table / sticks / w-pickaxe | ~40-68% (stale) | re-baseline |
-| mine-cobblestone | ~19% (stale) | WEAK — flat-terrain stone dig-down |
-| craft-stone-pickaxe / furnace | ~47-49% (stale) | re-baseline |
-| mine-coal | ~5% (stale) | WEAK — ore-finding |
-| mine-iron | ~2% (stale) | WEAK — over-descend into lava/aquifer |
-| smelt-iron | ~27%→73% post-fix | re-baseline |
-| craft-buckets | ~52% (stale) | re-baseline |
-| fill-water | ~26% (stale) | WEAK |
-| flint-and-steel | ~11%→50% post-fix | re-baseline |
-| build-nether-portal | UNTESTED (new) | perfect (lava-find first) |
-| enter-nether | UNTESTED (new) | perfect (should be easy) |
+## Blocker board (the wall the wheel is currently on — UPDATE EACH TURN)
 
-## Fixes log (append-only; never re-fix)
+**Furthest reach ever:** race53/751 — **10 iron_ingot + empty bucket, standing at water,
+at the fill-water step.** The closest any bot has come to the nether.
 
-Session 1 (raw-race loop, all committed in c21109f): fixed the race orchestrator
-`--bots` spawn, smelt window-desync, gather-wood nav loop, iron-economy (defer iron
-pickaxe), craft-timeout contention, table walk-back, deforestation (pristine-forest
-spawn), plank-threshold deadlock, table-on-leaves placement, bucket-iron counting,
-craft output-strand verification, place-relocate-retry. Plus the 5-step lab winners
-(smelt, mining, gather-flint, food). Learned: contention on the shared 4-core box makes
-craft/place packets flaky (place fails 41→0 when the box is light); the hazard tail is
-deep (water/aquifer/slow-iron); parallelism helps only at low load.
+**Current wall — water-scoop reliability (fill-water).** Two leaders (race52/745,
+race53/751) both reached water with a bucket but the scoop failed and blacklisted the
+source, never producing a `water_bucket`. Root cause found: `pickWater` handed the scoop
+FLOWING water (unscoopable); **fixed** — it now source-filters (level 0) like the lava
+cast. Needs a race to confirm a bot now lands the first-ever `filled water_bucket`.
 
-- **Phase 0 — extended the gym to the full path** (`gym/registry.ts`, `gym/run.ts`):
-  added `setup?` hook + `build-nether-portal` (autonomous) + `enter-nether` (scaffolded,
-  RCON builds obsidian frame + `setblock fire` to form a real portal). 19 steps load.
-- **DIMENSION DETECTION FIX** (`typecraft/bot/game.ts`) — surfaced by the enter-nether
-  smoke test: on this protocol-774 build the nether's dimension arrives as the integer
-  REGISTRY INDEX `3`, and typecraft stored it as `String(3)="3"`, so `getPhase` /
-  `enter.ts` / the **`enter_nether` goal** never recognized the nether even after
-  walking through a portal. Fix: keep the registry `entry.key` in `dimensionTypes[]` and
-  resolve a numeric dimension → name via that registry. **VERIFIED: enter-nether now
-  PASSES — "Entered portal - now in the_nether".** (A race never reached the portal, so
-  this bug was invisible until the gym isolated the step.)
-- **build-nether-portal smoke test**: ran the full autonomous cast; `FAIL 362s — No lava
-  pool found to cast at`. Confirms lava-finding (`prepareCastSite`) is the dominant
-  blocker (Phase 2 #1) — as predicted; the deterministic cast mechanic is downstream.
+**Wall #2 — craft reliability is LAG-INDUCED, not a code bug (sniff-confirmed).**
+`craft-sniff.ts` ran the crafting_table craft on a QUIET flat platform: **4/4 success**,
+`container_set_slot` acks return cleanly, ~2.5s per craft. So the code is correct — the
+race failures (`Failed to craft crafting_table` / `Promise timed out` / `table_missing`)
+come from the small Oracle box's window-sync **lag under load** (4 bots + mining + terrain):
+`bot.craft` does N sequential `clickWindow` round-trips (place each ingredient, await ack)
++ a 2s result-wait + a 30s `withTimeout` (typecraft `bot/crafting.ts`); when acks are
+delayed enough, an attempt trips a timeout, both craftItem retries burn, and the step/loop
+gives up. NOT ruststeve contention (high fail rate with 0 other bots). **Fix direction (do
+next):** cut the round-trips — send all placement clicks then verify once (a `bot.craft`
+rewrite), or make craftItem far more retry-tolerant (more attempts + longer settle), since
+the craft DOES succeed once the server catches up. (The `section_blocks_update` "BigInt"
+flood seen while sniffing was a false alarm — the sniff tool's own `JSON.stringify`, now
+fixed BigInt-safe; real bots don't hit it.)
 
-- **Phase 1 re-baseline (ZERO contention) — verdict**: the CRAFT/water/smelt steps are
-  already solid (craft-buckets 100%, fill-water 75%, smelt 75%); their old low rates
-  were pure contention. The weak links are ALL resource-finding: mine-iron 0%, mine-coal
-  25%, mine-cobblestone 11%, flint 25%, build-portal 0% (lava). So Phase 2 = perfect the
-  underground-find capability.
-- **Gym-fidelity fix** (`gym/run.ts`): run `escapeWater` before the step (mimics the
-  race's priority-0 override), so a spawn-in-water no longer falsely tanks resource
-  steps. (Doesn't cover MID-mining aquifer hits, which still show "yielding to
-  escape_water" — those are ~gym artifacts; a race's escape_water handles them.)
-- **mine-cobblestone collection fix** (`tasks/mining/main.ts`): the SURFACE path counted
-  blocks DUG, not the drop COLLECTED, so it "succeeded" at 16 dug while cobble rolled
-  away (0%). Now loops until `invCount(dropItem) >= target` (added `stone→cobblestone`
-  to DROP_ITEM), 3x dig cap. **Result: ~2/3 on winnable (non-water) terrain.**
-- **mine-iron coverage fix** (`branchMineOre`): at the y24 band the branch-mine bailed
-  after ~4 blocks (`dug=4/0`) when boxed by the band's water/lava/caves, then paid a
-  costly climb-out+relocate → never exposed ore. Now `digDownOne()` drops a level and
-  keeps strip-mining down through the band (floor `max(8, level-16)`). **Result: 0% →
-  50% (3/6).** Shared with mine-coal (same `branchMineOre`) — verifying.
+**Other recurring walls:** smelt-interrupt (a death at mining depth strands iron IN the
+furnace — keep_inventory doesn't protect furnace contents); wood-reachability in dry cells
+(gather-wood times out fetching smelt-fuel); water-traps / aquifers (`escapeWater` fails
+on enclosed pockets); ocean/too-dry/too-wet cell luck.
 
-## Current focus
+## Fixes log (newest first)
 
-mine-iron ✅50% and mine-cobblestone ✅~50%(winnable). Verifying mine-coal (should ride
-the same coverage fix). Remaining weak: **mine-coal**, **flint (25%, gravel-find)**,
-**build-portal (0%, lava-find)**, and the shared **descent-reliability** issue —
-mine-iron's remaining fails are `dug=0` at y62-63 (digDownVertical stuck at the water
-table, never reaching the band); fixing that lifts iron higher AND coal AND portal-lava.
-Then re-confirm the ≥50% set and run a Phase 3 chain race → the_nether.
+- **sniff tool BigInt-safe** — `mcp.ts` `sniff` (and `craft-sniff.ts`) now stringify
+  BigInt packet fields as strings; the plain `JSON.stringify` threw on block-change/varlong
+  packets and the client swallowed it, silently dropping those packets from captures.
+- **craft-sniff.ts (new debug tool)** — spawns a bot on a quiet platform, gives it planks
+  via RCON, and sniffs the `container_set_slot` packet flow around a crafting_table craft.
+  Proved crafts are correct (4/4 quiet) → race craft failures are lag-induced.
+- **water-scoop source-filter** — `tasks/bucket/main.ts` `pickWater` now prefers SOURCE
+  water (level 0, `bot.blockAt(p).properties.level` missing/"0") over flowing; flowing
+  water is unscoopable and was silently failing every attempt (race52/745, race53/751).
+- **gather-wood blacklist-recovery** — `tasks/gather-wood/main.ts`: after an explore-relocate,
+  clear the `unreachable` tree set so distant trees are re-tried from the new position
+  (bots blacklisted every tree at dist ~52 and starved).
+- **gather-wood-resurface (REVERTED)** — resurface-when-tree-is-above broke the early game
+  (bots stalled at ~16 cobble in a craft/gather loop); reverted. The deep-mine wood problem
+  is rarer than the regression it caused.
+- **wood-reserve** — `steps.ts` `gather_wood.isComplete` keeps a wood reserve
+  (`hasCraftingTable || logs>=1 || planks>=4`); after smelting burns the planks a bot with
+  coal but 0 wood could never craft the buckets' table (deadlocked "Need crafting table").
+- **water-scoop blacklist-recovery** — `tasks/bucket/main.ts`: when all found water is
+  blacklisted + none fresh, clear the blacklist + retry (was a permanent "no water" loop).
+- **smelt/craft resilience (earlier)** — craftPlanks Promise.race timeout + reclaimCraftingGrid;
+  smelt with wood fuel; longer gather_wood/craft-window timeouts; race terrain-spread.
+
+## Current phase
+
+RACE (race54, bots steve-race-753..756, launched ~10:34 local 2026-08-07, mixed cell, carries
+the water-scoop source-filter fix). When this race's 2h is up (or a bot stalls hard), go to
+PHASE 2 DIAGNOSE, then PHASE 3 sniff-debug the craft/clickWindow wall (wall #2), then PHASE 4 gym.
+
+## Env / operational quick-ref
+
+- MC game DIRECT `144.24.32.76:25565` (bots connect direct; `.env` MC_HOST/PORT). RCON via
+  SSH tunnel `127.0.0.1:25575` → box 25575, pass `minecraft-test-rcon`
+  (`ssh -fN -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -L 25575:127.0.0.1:25575 bridger@144.24.32.76`).
+- Postgres telemetry `steve-db-1` (Docker, port 4623): `ticks`, `events`, `inventory_snapshots`.
+  `ts` is TEXT — cast `ts::timestamptz`. inventory_snapshots is per-slot (item_name,count).
+- **Never** commit AI attribution; never push; never restart the shared MC server / wipe the world.

@@ -637,7 +637,17 @@ Run an action via eval BEFORE calling sniff, or use the action parameter to run 
 			const name = meta?.name ?? "unknown";
 			if (NOISE_PACKETS.has(name)) return;
 			if (filter && !name.includes(filter)) return;
-			packets.push({ name, data: JSON.stringify(data).slice(0, 400) });
+			// BigInt-safe: block-change/varlong packets carry BigInt fields and a plain
+			// JSON.stringify throws "Do not know how to serialize a BigInt" — which the
+			// client's packet try/catch swallows, so those packets would silently vanish
+			// from the capture. Stringify BigInts as their decimal string instead.
+			packets.push({
+				name,
+				data: JSON.stringify(
+					data,
+					(_k, v) => (typeof v === "bigint" ? v.toString() : v),
+				).slice(0, 400),
+			});
 		};
 
 		b.client.on("packet", listener);

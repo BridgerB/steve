@@ -1345,6 +1345,15 @@ export const getCraftingTable = async (bot: Bot): Promise<Block | null> => {
 	// table would FORGET the table, then (out of planks) deadlock re-gathering wood in a
 	// worked-out area — right at the portal's doorstep. Walking back even 150 blocks to a
 	// known-good table beats an impossible wood-gather.
+	//
+	// BUT: if we're carrying a table, placing a fresh one where we stand is far cheaper
+	// than trekking to a remembered one — and a mid-mine table is often walled off, so the
+	// 30s pathfind fails and every craft call burns it re-attempting from out of range.
+	// race65/910 stalled here: 20 planks, 40 sticks, a stone pickaxe AND 2 tables in hand,
+	// yet stuck re-walking to a remembered table at dist 23 ("Too far to interact"), never
+	// crafting its iron pickaxe. Only trek to a far remembered table when we can't just drop
+	// one ourselves.
+	const carriesTable = !!findItem(bot, "crafting_table");
 	if (mem.craftingTablePos) {
 		const d = distance(
 			bot.entity.position,
@@ -1354,7 +1363,11 @@ export const getCraftingTable = async (bot: Bot): Promise<Block | null> => {
 				mem.craftingTablePos.z,
 			),
 		);
-		if (d < 150) {
+		if (carriesTable && d > 8) {
+			// Have a table in the bag and the remembered one isn't right here — forget it
+			// and fall through to place a fresh table adjacent.
+			mem.craftingTablePos = null;
+		} else if (d < 150) {
 			const remembered = getBlock(
 				bot,
 				vec3(

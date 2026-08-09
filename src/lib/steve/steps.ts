@@ -71,9 +71,27 @@ export const steps: readonly Step[] = [
 			// (live race-11 leader: table + 2 planks + no coal, stuck). Done only when it has
 			// real fuel: coal, OR enough planks for a table + a wood-smelt (>=12), OR an iron
 			// pickaxe / 20 planks (handled above).
+			// AND it can still (re)craft a crafting table — buckets are crafted at a table, so
+			// a bot that smelted (planks burned as fuel) and has coal but 0 wood + no reachable
+			// table deadlocks forever on "Craft Buckets/Stone Pickaxe → Need crafting table"
+			// (race31/178, race32/181). Require a table already, or wood to make one (1 log =
+			// 4 planks), else keep gathering so the table (hence buckets) can be crafted.
 			((s.inventory.ironOre + s.inventory.ironIngots >= 1 ||
 				s.equipment.hasFurnace) &&
-				(s.inventory.coal >= 2 || s.inventory.planks >= 12)),
+				// Enough smelt fuel to STOP re-gathering wood and let Smelt Iron run. The old
+				// `coal>=2||planks>=12` was too strict AND ignored logs: 1 coal smelts a full
+				// 8-item furnace load, ~6 planks smelt 8 iron, and 2 logs = 8 planks — yet a
+				// bot with 1 coal (or 2-3 logs) + furnace + raw_iron stayed "not done", so
+				// gather_wood (priority 1) preempted Smelt Iron every tick and, on a cell whose
+				// near trees were depleted, oscillated forever chasing far wood (`Gather Wood
+				// timed out 210s`) with 6-8 raw iron it never smelted (race123/299, race124/303
+				// — the deepest wall). Count coal, planks, OR logs as valid fuel.
+				(s.inventory.coal >= 1 ||
+					s.inventory.planks >= 8 ||
+					s.inventory.logs >= 2) &&
+				(s.equipment.hasCraftingTable ||
+					s.inventory.logs >= 1 ||
+					s.inventory.planks >= 4)),
 		execute: async (bot, _state) => {
 			const { gatherWood } = await import("./tasks/gather-wood/main.ts");
 			return gatherWood(bot, 5);

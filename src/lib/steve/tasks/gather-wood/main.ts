@@ -6,6 +6,7 @@ import type { Bot } from "typecraft";
 import { createGoalNear, distance, offset, type Vec3, vec3 } from "typecraft";
 import {
 	escapeWater,
+	exploreRandom,
 	getBlock,
 	getMineEntry,
 	getPathfinder,
@@ -354,6 +355,18 @@ export const gatherWood = async (
 	const huntStart = botPos();
 	let attempts = 0;
 	let blocksDug = 0;
+	// Consecutive trees blacklisted as unreachable without reaching one. findClosestLog
+	// keeps returning fresh (farther, also-unreachable) trees in a forest across a
+	// water/ravine barrier, so the "no trees → relocate + clear blacklist" branch never
+	// fires and the bot blacklists trees in place forever (race59/775: 20 min looping on
+	// trees at dist 23→27, furnace in hand, never getting wood for fuel). Force a physical
+	// relocation once we've failed to reach several in a row so blacklist-recovery kicks in.
+	let consecutiveFails = 0;
+	// Successive relocations must reach FARTHER each time. A single fixed 30-block hop
+	// leaves the same scattered/barrier-locked trees (dist 26-34) as the nearest, still
+	// unreachable, so the bot re-blacklists them and spins (race105/106/110: relocate_stuck
+	// fires but 30 blocks isn't enough to clear the pocket). Escalate 60→90→120→…→150.
+	let relocateCount = 0;
 	let exploreAngle = Math.random() * Math.PI * 2;
 
 	while (
@@ -448,20 +461,47 @@ export const gatherWood = async (
 			bot.setControlState("sprint", false);
 			await bot.waitForChunksToLoad();
 			exploreAngle += Math.PI * 0.3;
+			// We just physically relocated (~30 blocks). Trees blacklisted as
+			// "unreachable" were unreachable FROM THE OLD SPOT — across a ravine/water
+			// barrier. From here they may be reachable, so clear the blacklist and let
+			// the next iteration re-try them. Without this a bot with 8 ingots but no
+			// wood for the buckets' table blacklists every tree in a forest at dist ~52
+			// and starves at the record frontier (race39/322). Mirrors the water-scoop
+			// blacklist-recovery.
+			unreachable.clear();
 			continue;
 		}
 
 		const reached = await navigateTo(target.pos);
 		if (!reached) {
 			unreachable.add(posKey(target.pos));
+			consecutiveFails++;
 			logEvent(
 				"wood",
 				"blacklist",
 				`${target.name} at ${posKey(target.pos)}`,
 				target.pos,
 			);
+			// Every nearby tree is behind the same barrier — stop blacklisting them one
+			// by one from the same spot and physically relocate, then clear the blacklist
+			// so the trees (unreachable from HERE) get re-tried from the new position.
+			if (consecutiveFails >= 4) {
+				relocateCount++;
+				const hop = Math.min(30 + relocateCount * 30, 150);
+				logEvent(
+					"wood",
+					"relocate_stuck",
+					`${consecutiveFails} unreachable in a row → hop ${hop}`,
+				);
+				await exploreRandom(bot, hop);
+				await bot.waitForChunksToLoad();
+				unreachable.clear();
+				consecutiveFails = 0;
+			}
 			continue;
 		}
+		consecutiveFails = 0;
+		relocateCount = 0; // reached a tree — reset the escalating-hop distance
 
 		const dug = await mineBlock(target.pos, target.name);
 		if (dug) blocksDug++;
