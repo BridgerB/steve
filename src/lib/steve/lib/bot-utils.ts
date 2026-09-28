@@ -758,10 +758,14 @@ export const digStaircaseUp = async (
 	}
 
 	// A placeable block to pillar with (cobblestone is what a miner has plenty of).
-	const isFiller = (s: { name: string } | null): boolean =>
+	const isFiller = (s: { name: string; count?: number } | null): boolean =>
 		!!s &&
 		(s.name.includes("cobblestone") ||
 			s.name === "dirt" ||
+			// Planks pillar just as well; keep 9 back for a table + wooden pick. A
+			// fresh bot that fell into a cave under the trees (race35 698: 16 planks,
+			// no pick) otherwise stair-digs stone BARE-HANDED at 7.5s a block.
+			(s.name.endsWith("_planks") && (s.count ?? 0) > 9) ||
 			s.name === "stone" ||
 			s.name.includes("deepslate") ||
 			s.name.includes("granite") ||
@@ -814,7 +818,9 @@ export const digStaircaseUp = async (
 				const b = B(fx + dx, fy + dy, fz + dz);
 				if (!solid(b) || fallable(b)) continue;
 				const n = b!.name;
-				if (!(n === "stone" || n === "dirt" || n === "deepslate" || n === "granite" || n === "andesite" || n === "diorite" || n === "tuff")) continue;
+				// Bare hands drop nothing from stone — only dirt is worth digging then.
+				const rock = n === "stone" || n === "deepslate" || n === "granite" || n === "andesite" || n === "diorite" || n === "tuff";
+				if (!(n === "dirt" || (rock && pickSlot >= 0))) continue;
 				if (digExposesWater(bot, (b as { position: Vec3 }).position) || digExposesLava(bot, (b as { position: Vec3 }).position)) continue;
 				await digAt(b);
 				got++;
