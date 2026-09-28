@@ -395,7 +395,11 @@ export const setViewerPath = (
 			m = new StandardMaterial(`botPath_${kind}`, viewer.scene);
 			m.emissiveColor = new Color3(c[0], c[1], c[2]);
 			m.disableLighting = true;
-			m.backFaceCulling = false;
+			// Tubes are seen from any side; the dig/place marker CUBES must cull their
+			// back faces, or a marker on the bot's own cell (a pillar "place" cell is
+			// its feet) is seen from inside and paints the whole first-person view
+			// purple/orange — drawn in rendering group 1 it even sits over terrain.
+			m.backFaceCulling = kind.endsWith("Mark");
 			m.alpha = c[3];
 			ov.mats.set(kind, m);
 		}
@@ -441,7 +445,10 @@ export const setViewerPath = (
 		cells: readonly { x: number; y: number; z: number }[],
 		kind: string,
 	): void => {
+		const cam = viewer.camera.position;
 		for (const c of cells) {
+			// Skip the cell the camera is standing in — nothing to see from inside.
+			if (Math.hypot(c.x + 0.5 - cam.x, c.y + 0.5 - cam.y, c.z + 0.5 - cam.z) < 1.3) continue;
 			const box = MeshBuilder.CreateBox("botMark", { size: 0.72 }, viewer.scene);
 			box.position.set(c.x + 0.5, c.y + 0.5, c.z + 0.5);
 			box.renderingGroupId = 1;
