@@ -280,7 +280,15 @@ export const steps: readonly Step[] = [
 			8,
 		execute: async (bot, _state) => {
 			const { mineBlock } = await import("./tasks/mining/main.ts");
-			return mineBlock(bot, "iron_ore", 8);
+			// Only the iron still MISSING from the kit — the band loop otherwise mines
+			// until 8 loose raw_iron (race28 669 went back to y24 after buckets + flint
+			// and steel were already crafted).
+			const kit =
+				(_state.inventory.buckets + _state.inventory.waterBuckets) * 3 +
+				(_state.inventory.flintAndSteel >= 1 ? 1 : 0);
+			const need = 8 - kit - _state.inventory.ironIngots;
+			if (need <= 0) return { success: true, message: "Iron kit already complete" };
+			return mineBlock(bot, "iron_ore", Math.max(1, need));
 		},
 	},
 
