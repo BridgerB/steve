@@ -25,6 +25,21 @@ import {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const key = (p: Vec3) => `${p.x},${p.y},${p.z}`;
+// Gravel touching water is a POND FLOOR / bank: walking up to it puts the bot in
+// the pond, escape_water preempts, and the next attempt picks the same gravel —
+// race32 686 (first bot ever with a filled water bucket) looped Get Flint and
+// Steel → Get Out Of Water 6× in 90s on a pond whose whole floor was gravel.
+const wet = (bot: Bot, p: Vec3): boolean =>
+	(
+		[
+			[0, 1, 0],
+			[1, 0, 0],
+			[-1, 0, 0],
+			[0, 0, 1],
+			[0, 0, -1],
+			[0, -1, 0],
+		] as const
+	).some((o) => (getBlock(bot, vec3(p.x + o[0], p.y + o[1], p.z + o[2]))?.name ?? "").includes("water"));
 const NEIGHBORS = [
 	[1, 0, 0],
 	[-1, 0, 0],
@@ -91,7 +106,7 @@ const harvestPocket = async (
 			const np = vec3(pos.x + dx, pos.y + dy, pos.z + dz);
 			if (seen.has(key(np))) continue;
 			seen.add(key(np));
-			if (getBlock(bot, np)?.name === "gravel") queue.push(np);
+			if (getBlock(bot, np)?.name === "gravel" && !wet(bot, np)) queue.push(np);
 		}
 	}
 };
@@ -115,7 +130,7 @@ const roam = async (bot: Bot, seen: Set<string>): Promise<Vec3 | null> => {
 			await goTo(bot, t, { range: 4, timeout: 7000 });
 		} catch {}
 		const s = findBlocks(bot, "gravel", 64, 40)
-			.filter((q) => !seen.has(key(q)))
+			.filter((q) => !seen.has(key(q)) && !wet(bot, q))
 			.map((q) => ({ q, d: distance(bot.entity.position, q) }))
 			.sort((x, y) => x.d - y.d)[0]?.q;
 		if (s) return s;
@@ -140,7 +155,7 @@ export const gatherFlint = async (
 		throwIfPreempted();
 		if ((bot.health ?? 20) < 6) break; // don't die for a flint
 		let seed = findBlocks(bot, "gravel", 64, 40)
-			.filter((p) => !doneSeeds.has(key(p)))
+			.filter((p) => !doneSeeds.has(key(p)) && !wet(bot, p))
 			.map((p) => ({ p, d: distance(bot.entity.position, p) }))
 			.sort((a, b) => a.d - b.d)[0]?.p;
 
@@ -150,7 +165,7 @@ export const gatherFlint = async (
 			seed = (await roam(bot, doneSeeds)) ?? undefined;
 			if (!seed) continue;
 		}
-		if (!(await approach(bot, seed))) {
+		if (!(await approach(bot, seed)) || bot.entity.isInWater) {
 			doneSeeds.add(key(seed));
 			continue;
 		}
