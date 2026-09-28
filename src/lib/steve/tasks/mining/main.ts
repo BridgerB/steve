@@ -675,6 +675,33 @@ export const branchMineExplore = async (
 // big cavern's walls counts dug>0 (so the "boxed in" climb-out never fires) and
 // grabbing the odd reachable ore resets any dry counter — but if the bot isn't
 // MOVING it's wedged at a cavern mouth and should relocate to fresh rock.
+/** Cut a straight 1x2 tunnel `n` cells in (dx,dz) at the current level and walk it.
+ *  Refuses cells that touch lava/water or have no floor; returns cells advanced. */
+const tunnelToward = async (bot: Bot, dx: number, dz: number, n: number): Promise<number> => {
+	await ensurePickaxe(bot);
+	let moved = 0;
+	for (let i = 0; i < n; i++) {
+		throwIfPreempted();
+		const p = bot.entity.position;
+		const fx = Math.floor(p.x);
+		const fy = Math.floor(p.y);
+		const fz = Math.floor(p.z);
+		const head = bot.blockAt(vec3(fx + dx, fy + 1, fz + dz));
+		const feet = bot.blockAt(vec3(fx + dx, fy, fz + dz));
+		const floor = bot.blockAt(vec3(fx + dx, fy - 1, fz + dz));
+		if ([head, feet, floor].some((bb) => isLiquid(bb)) || isAir(floor)) break;
+		const cell = vec3(fx + dx, fy, fz + dz);
+		const cellUp = vec3(fx + dx, fy + 1, fz + dz);
+		if ([cell, cellUp].some((c) => digExposesLava(bot, c) || digExposesWater(bot, c))) break;
+		if (!(await lookDig(bot, head))) break;
+		if (!(await lookDig(bot, feet))) break;
+		await walkToXZ(bot, fx + dx + 0.5, fz + dz + 0.5, { targetDist: 0.3, maxTime: 1500 });
+		if (Math.floor(bot.entity.position.x) === fx && Math.floor(bot.entity.position.z) === fz) break;
+		moved++;
+	}
+	return moved;
+};
+
 const mineStuckState = new WeakMap<
 	Bot,
 	{ x: number; z: number; n: number; iron: number }
@@ -1135,7 +1162,13 @@ const mineDeepOre = async (
 		const hop = noOre ? 20 : 12;
 		const tx = Math.floor(bot.entity.position.x) + best[0] * hop;
 		const tz = Math.floor(bot.entity.position.z) + best[1] * hop;
-		await goTo(bot, vec3(tx, baseY, tz), { range: 3, timeout: 25000 });
+		// The chosen direction is by construction the one with the MOST rock ahead, so
+		// goTo (pathfinder) returned early / no-path and the bot stayed put: race32 685
+		// "Relocated toward" twice from the exact same cell, 120s per cycle. Cut a
+		// straight 1x2 tunnel there ourselves — that's what a branch-miner does anyway.
+		const moved = await tunnelToward(bot, best[0], best[1], hop);
+		if (moved < hop / 2) await goTo(bot, vec3(tx, baseY, tz), { range: 3, timeout: 15000 }).catch(() => {});
+		logEvent(mineCat(blockType), "relocated", `${moved}/${hop} cells toward ${best[0]},${best[1]} → ${Math.floor(bot.entity.position.x)},${Math.floor(bot.entity.position.z)}`);
 		return { success: true, message: `Relocated toward ${tx},${tz}` };
 	}
 	// Collecting ore OR cutting fresh tunnel both count as progress, so a
@@ -1373,6 +1406,7 @@ export const mineBlock = async (
 	// Cap total digs at 3x so an unreachable-drop spot can't spin forever.
 	const dropItem = DROP_ITEM[blockType] ?? blockType;
 	const collected = () => invCount(bot, dropItem);
+	let fillerDug = 0;
 	while (
 		collected() < targetCount &&
 		mined < targetCount * 3 &&
@@ -1447,6 +1481,39 @@ export const mineBlock = async (
 			}
 			block = b;
 			break;
+		}
+
+		// Stone only: the tunnel ran into a granite/diorite/andesite/tuff blob (they
+		// don't drop cobblestone). Tunnel THROUGH it — blobs are a few blocks thick —
+		// instead of "Could not find stone" every 20s (race32 684: 3 fails in a granite
+		// pocket at y58 with 9/16 cobble). Capped so a huge blob can't eat the budget.
+		if (!block && isStone && fillerDug < 14) {
+			const isFillerRock = (bb: Block | null): boolean =>
+				!!bb && /^(granite|diorite|andesite|tuff|dirt|deepslate|calcite)$/.test(bb.name);
+			for (const [ci, bb] of candidates.entries()) {
+				if (ci === 3 || !isFillerRock(bb)) continue;
+				if (ci <= 1 && !dropColumnSafe(bot, bb!.position.x, bb!.position.y - 1, bb!.position.z)) continue;
+				if (digExposesWater(bot, bb!.position) || digExposesLava(bot, bb!.position)) continue;
+				try {
+					const over = bot.blockAt(offset(bb!.position, 0, 1, 0)) as Block | null;
+					if (over && ci === 2 && over.name !== "air" && !isLiquid(over)) {
+						await bot.lookAt(offset(over.position, 0.5, 0.5, 0.5));
+						await safeDig(bot, over);
+					}
+					await bot.lookAt(offset(bb!.position, 0.5, 0.5, 0.5));
+					await safeDig(bot, bb!);
+					fillerDug++;
+					logEvent(mineCat(blockType), "through_filler", `${bb!.name} ${fillerDug}`);
+					await sleep(150);
+				} catch {}
+				break;
+			}
+			if (fillerDug > 0) {
+				// Step into what we opened (ahead) or drop (below) before re-scanning.
+				const p2 = bot.entity.position;
+				await walkToXZ(bot, Math.floor(p2.x) + 0.5 + dirX * 0.6, Math.floor(p2.z) + 0.5 + dirZ * 0.6, { targetDist: 0.3, maxTime: 800 }).catch(() => {});
+				continue;
+			}
 		}
 
 		if (!block) {
