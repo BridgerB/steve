@@ -53,8 +53,17 @@ const wet = (bot: Bot, p: Vec3): boolean =>
 // test when it sits under more gravel; the approach then walks the bot into the
 // pond (race42 725: 8 seed_unreachable + Get Out Of Water cycles in 60s at
 // seeds 6-8 blocks below it). Reject anything with water in the 4 blocks above.
-const underWater = (bot: Bot, p: Vec3): boolean =>
-	[1, 2, 3, 4].some((dy) => (getBlock(bot, vec3(p.x, p.y + dy, p.z))?.name ?? "").includes("water"));
+// Scan the whole column up to the surface: race51 762 picked gravel on a lake
+// bed 13 blocks under the water (y49 under a y62 lake), walked in, drowned,
+// escaped to the same shore and picked the next lake seed — four times.
+const underWater = (bot: Bot, p: Vec3): boolean => {
+	for (let dy = 1; dy <= 20; dy++) {
+		const n = getBlock(bot, vec3(p.x, p.y + dy, p.z))?.name ?? "";
+		if (n.includes("water")) return true;
+		if (n !== "air" && n !== "cave_air" && !n.includes("water")) return false; // a roof: cave gravel
+	}
+	return false;
+};
 const NEIGHBORS = [
 	[1, 0, 0],
 	[-1, 0, 0],
