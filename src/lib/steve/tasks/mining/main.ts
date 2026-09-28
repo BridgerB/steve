@@ -480,6 +480,24 @@ const branchMineOre = async (
 				return false;
 			}
 		}
+		// Water on the straight line to the ore → the pathfinder walks the bot into it
+		// (no buoyancy, escape_water preempts, the step restarts and does it again —
+		// race59 793: 17 rounds in 3 min at a flooded pit). Skip and forget that ore.
+		{
+			const p = bot.entity.position;
+			const steps = Math.ceil(distance(p, ore.position));
+			for (let i = 1; i < steps; i++) {
+				const t = i / steps;
+				const cx = Math.floor(p.x + (ore.position.x + 0.5 - p.x) * t);
+				const cz = Math.floor(p.z + (ore.position.z + 0.5 - p.z) * t);
+				const cy = Math.floor(p.y + (ore.position.y - p.y) * t);
+				if ([-1, 0, 1].some((dy) => isWater(bot.blockAt(vec3(cx, cy + dy, cz))))) {
+					logEvent(mineCat(blockType), "ore_wet", `${ore.position.x},${ore.position.y},${ore.position.z} — water on the way at ${cx},${cy},${cz}`);
+					if (fromMem) forgetResource(bot, blockType, ore.position);
+					return false;
+				}
+			}
+		}
 		try {
 			if (distance(bot.entity.position, ore.position) > 3.5) {
 				await goTo(bot, ore.position, { range: 2, timeout: 12000 });
@@ -1348,6 +1366,7 @@ export const mineBlock = async (
 		try {
 			await bot.clickWindow(pickSlot, 0, 0); // pick up
 			await bot.clickWindow(36, 0, 0); // place in hotbar slot 0
+			if (bot.inventory.selectedItem) await bot.clickWindow(pickSlot, 0, 0); // displaced item back, not left on the cursor
 			bot.setQuickBarSlot(0);
 		} catch {}
 	}
@@ -1593,6 +1612,7 @@ export const mineBlock = async (
 					try {
 						await bot.clickWindow(idx, 0, 0);
 						await bot.clickWindow(36, 0, 0);
+						if (bot.inventory.selectedItem) await bot.clickWindow(idx, 0, 0); // displaced item back, not left on the cursor
 						bot.setQuickBarSlot(0);
 					} catch {}
 					break;

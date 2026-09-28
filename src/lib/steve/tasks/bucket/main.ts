@@ -412,6 +412,7 @@ export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 			try {
 				await bot.clickWindow(bucketSlot, 0, 0);
 				await bot.clickWindow(36, 0, 0);
+				if (bot.inventory.selectedItem) await bot.clickWindow(bucketSlot, 0, 0); // displaced item back, not left on the cursor
 				bot.setQuickBarSlot(0);
 			} catch {}
 		}

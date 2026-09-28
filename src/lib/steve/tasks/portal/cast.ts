@@ -19,6 +19,7 @@ import {
 	getBlock,
 	getRememberedResource,
 	goTo,
+	nudgeThrough,
 	sleep,
 	surfaceYAt,
 	walkToXZ,
@@ -65,6 +66,7 @@ const equip = async (bot: Bot, name: string): Promise<boolean> => {
 	try {
 		await bot.clickWindow(s, 0, 0);
 		await bot.clickWindow(36, 0, 0);
+		if (bot.inventory.selectedItem) await bot.clickWindow(s, 0, 0); // displaced item back, not left on the cursor
 		bot.setQuickBarSlot(0);
 	} catch {
 		/* ignore */
@@ -1479,12 +1481,22 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 	// saw one 18 above and 65 away and, with the old |dy| test, skipped the walk and
 	// tunnelled 70 blocks underground beneath it instead). Only lava far BELOW goes
 	// straight to the descent.
-	for (let hop = 0; hop < 10 && Date.now() < deadline && bot.entity.position.y - lava.y <= 8; hop++) {
-		const bp = bot.entity.position;
+	// A hop that moves nothing (goTo no-path across a lake/forest — race59 794 sat
+	// at the same block logging the pool every 10-20s) gets a dig-through nudge
+	// toward the pool; after 4 such hops stop hopping and let the tunnel legs run.
+	let stuckHops = 0;
+	for (let hop = 0; hop < 10 && stuckHops < 4 && Date.now() < deadline && bot.entity.position.y - lava.y <= 8; hop++) {
+		const bp0 = bot.entity.position;
+		const bp = vec3(bp0.x, bp0.y, bp0.z);
 		if (Math.hypot(bp.x - (lava.x + 0.5), bp.z - (lava.z + 0.5)) <= 6) break;
 		await goTo(bot, vec3(lava.x, lava.y, lava.z), { range: 4, timeout: 20000 }).catch(
 			() => {},
 		);
+		if (distance(bp, bot.entity.position) < 2 && !bot.entity.isInWater) {
+			stuckHops++;
+			logEvent("cast", "hop_stuck", `hop ${hop} moved <2 (${stuckHops}) — nudge toward ${lava.x},${lava.z}`, bp);
+			await nudgeThrough(bot, Math.sign(lava.x + 0.5 - bp.x) || 1, Math.sign(lava.z + 0.5 - bp.z), 4000).catch(() => {});
+		}
 		const re = findLava();
 		if (re) lava = re;
 	}

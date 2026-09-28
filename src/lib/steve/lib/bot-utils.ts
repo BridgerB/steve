@@ -751,6 +751,7 @@ export const digStaircaseUp = async (
 		try {
 			await bot.clickWindow(pickSlot, 0, 0);
 			await bot.clickWindow(36, 0, 0);
+			if (bot.inventory.selectedItem) await bot.clickWindow(pickSlot, 0, 0); // displaced item back, not left on the cursor
 			bot.setQuickBarSlot(0);
 		} catch {
 			/* ignore */
@@ -791,6 +792,7 @@ export const digStaircaseUp = async (
 			try {
 				await bot.clickWindow(slot, 0, 0);
 				await bot.clickWindow(36, 0, 0);
+				if (bot.inventory.selectedItem) await bot.clickWindow(slot, 0, 0); // displaced item back, not left on the cursor
 				bot.setQuickBarSlot(0);
 			} catch {
 				/* ignore */
@@ -1044,6 +1046,7 @@ export const pillarInWater = async (bot: Bot, levels: number): Promise<number> =
 			try {
 				await bot.clickWindow(slot, 0, 0);
 				await bot.clickWindow(36, 0, 0);
+				if (bot.inventory.selectedItem) await bot.clickWindow(slot, 0, 0); // displaced item back, not left on the cursor
 				bot.setQuickBarSlot(0);
 			} catch {
 				break;
@@ -2715,6 +2718,7 @@ const escapeWaterInner = async (
 					try {
 						await bot.clickWindow(s, 0, 0);
 						await bot.clickWindow(36, 0, 0);
+						if (bot.inventory.selectedItem) await bot.clickWindow(s, 0, 0); // displaced item back, not left on the cursor
 						bot.setQuickBarSlot(0);
 					} catch {
 						/* dig bare-handed */
