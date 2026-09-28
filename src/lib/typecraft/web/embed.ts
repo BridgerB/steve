@@ -247,6 +247,18 @@ export function mountViewer(
 		const d = ((((b - a) % TWO_PI) + TWO_PI + Math.PI) % TWO_PI) - Math.PI; // shortest arc
 		return a + d * t;
 	};
+	// Same easing for entities: the relay batches their moves at ~10Hz, which
+	// would otherwise step visibly. Keep a target + current pose per entity.
+	type EntPose = { x: number; y: number; z: number; yaw: number };
+	const entTarget = new Map<number, EntPose>();
+	const entCur = new Map<number, EntPose>();
+	const setEntTarget = (id: number, x: number, y: number, z: number, yaw: number) => {
+		entTarget.set(id, { x, y, z, yaw });
+		if (!entCur.has(id)) {
+			entCur.set(id, { x, y, z, yaw });
+			if (viewer) updateViewerEntity(viewer, id, x, y, z, yaw); // first fix: snap
+		}
+	};
 
 	const sizeCanvas = () => {
 		const w = canvas.clientWidth || 300;
@@ -302,13 +314,15 @@ export function mountViewer(
 				msg.skinUrl,
 			);
 		} else if (msg.type === "entityMove") {
-			updateViewerEntity(viewer, msg.id, msg.x, msg.y, msg.z, msg.yaw);
+			setEntTarget(msg.id, msg.x, msg.y, msg.z, msg.yaw);
 		} else if ((msg as { type: string }).type === "entityMoves") {
-			// Relay-batched entity moves (latest position per entity, ~10Hz).
+			// Relay-batched entity moves (latest position per entity, ~10Hz) — eased in the render loop.
 			for (const m of (msg as unknown as { moves: { id: number; x: number; y: number; z: number; yaw: number }[] }).moves)
-				updateViewerEntity(viewer, m.id, m.x, m.y, m.z, m.yaw);
+				setEntTarget(m.id, m.x, m.y, m.z, m.yaw);
 		} else if (msg.type === "entityGone") {
 			removeViewerEntity(viewer, msg.id);
+			entTarget.delete(msg.id);
+			entCur.delete(msg.id);
 		} else if (msg.type === "entityEquip") {
 			updateEntityEquipment(viewer.entityRenderer, msg.id, msg.slot, msg.itemName);
 		} else if (msg.type === "path") {
@@ -408,19 +422,28 @@ export function mountViewer(
 	let lastFrame = performance.now();
 	const loop = () => {
 		try {
+			// Time-based easing (~90ms to converge) so it's frame-rate independent.
+			const now = performance.now();
+			const t = Math.min(1, (now - lastFrame) / 90);
+			lastFrame = now;
 			if (viewer && camTarget && camCur) {
-				// Time-based easing (~90ms to converge) so it's frame-rate independent.
-				const now = performance.now();
-				const t = Math.min(1, (now - lastFrame) / 90);
-				lastFrame = now;
 				camCur.x += (camTarget.x - camCur.x) * t;
 				camCur.y += (camTarget.y - camCur.y) * t;
 				camCur.z += (camTarget.z - camCur.z) * t;
 				camCur.yaw = lerpAngle(camCur.yaw, camTarget.yaw, t);
 				camCur.pitch += (camTarget.pitch - camCur.pitch) * t;
 				setViewerCamera(viewer, vec3(camCur.x, camCur.y, camCur.z), camCur.yaw, camCur.pitch);
-			} else {
-				lastFrame = performance.now();
+			}
+			if (viewer) {
+				for (const [id, tg] of entTarget) {
+					const c = entCur.get(id);
+					if (!c) continue;
+					c.x += (tg.x - c.x) * t;
+					c.y += (tg.y - c.y) * t;
+					c.z += (tg.z - c.z) * t;
+					c.yaw = lerpAngle(c.yaw, tg.yaw, t);
+					updateViewerEntity(viewer, id, c.x, c.y, c.z, c.yaw);
+				}
 			}
 			if (viewer) renderViewer(viewer);
 		} catch (_) {
