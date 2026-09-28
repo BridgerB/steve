@@ -797,6 +797,53 @@ export const digStaircaseUp = async (
 	const fallable = (b: ReturnType<typeof getBlock>): boolean =>
 		!!b && (b.name.includes("sand") || b.name.includes("gravel"));
 
+	// The climb is vertical; when the two blocks overhead would open into water/lava
+	// (an aquifer or lake right above), tunnel SIDEWAYS 2-6 blocks to a column whose
+	// ceiling is dry and resume there. Breaking out instead left the caller failing
+	// the same spot every second (race31 681: 40× "Returning to surface for wood"
+	// in 2 min under a y49 aquifer, with 9 ingots in the pack).
+	let shifts = 0;
+	const wouldExpose = (b: ReturnType<typeof getBlock>): boolean =>
+		solid(b) &&
+		(digExposesWater(bot, (b as { position: Vec3 }).position) ||
+			digExposesLava(bot, (b as { position: Vec3 }).position));
+	const shiftUnderDryCeiling = async (fx: number, fy: number, fz: number): Promise<boolean> => {
+		if (++shifts > 4) return false;
+		for (const [dx, dz] of [[1, 0], [0, 1], [-1, 0], [0, -1]] as const) {
+			for (let k = 2; k <= 6; k++) {
+				const cx = fx + dx * k;
+				const cz = fz + dz * k;
+				const c1 = B(cx, fy + 2, cz);
+				const c2 = B(cx, fy + 3, cz);
+				if ([c1, c2].some((b) => blocked(b) || fallable(b))) break; // wetter that way
+				if ([c1, c2].some(wouldExpose)) continue;
+				let ok = true;
+				for (let j = 1; j <= k && ok; j++) {
+					const px = fx + dx * j;
+					const pz = fz + dz * j;
+					if (!solid(B(px, fy - 1, pz))) ok = false; // no floor: a cave/drop
+					const over = B(px, fy + 2, pz);
+					if (blocked(over) || fallable(over)) ok = false;
+					for (const dy of [0, 1]) {
+						const t = B(px, fy + dy, pz);
+						if (blocked(t) || fallable(t) || wouldExpose(t)) ok = false;
+					}
+				}
+				if (!ok) continue;
+				logEvent("nav", "stairs_shift", `dry ceiling ${k} blocks toward ${dx},${dz}`, bot.entity.position);
+				for (let j = 1; j <= k; j++) {
+					const px = fx + dx * j;
+					const pz = fz + dz * j;
+					await digAt(B(px, fy + 1, pz));
+					await digAt(B(px, fy, pz));
+					await walkToXZ(bot, px + 0.5, pz + 0.5, { targetDist: 0.3, maxTime: 2500 });
+				}
+				return true;
+			}
+		}
+		return false;
+	};
+
 	let stuck = 0;
 	while (Math.floor(bot.entity.position.y) < targetY && Date.now() < deadline) {
 		if ((bot.health ?? 20) < 8) break;
@@ -811,15 +858,15 @@ export const digStaircaseUp = async (
 		// there's a real apex window to place into. Bail on liquids/falling blocks.
 		const ceil = B(fx, fy + 2, fz);
 		const ceil2 = B(fx, fy + 3, fz);
-		if ([ceil, ceil2].some((b) => blocked(b) || fallable(b))) break;
+		if ([ceil, ceil2].some((b) => blocked(b) || fallable(b))) {
+			if (await shiftUnderDryCeiling(fx, fy, fz)) continue;
+			break;
+		}
 		// Never open the ceiling into a lake: race29 674 pillared from y28 to y47,
 		// broke the two blocks above into a capped aquifer and drowned in it.
-		if (
-			[ceil, ceil2].some(
-				(b) => solid(b) && (digExposesWater(bot, (b as { position: Vec3 }).position) || digExposesLava(bot, (b as { position: Vec3 }).position)),
-			)
-		) {
+		if ([ceil, ceil2].some(wouldExpose)) {
 			logEvent("nav", "stairs_blocked", `liquid behind the ceiling at y=${fy + 2}`, bot.entity.position);
+			if (await shiftUnderDryCeiling(fx, fy, fz)) continue;
 			break;
 		}
 		await digAt(ceil);
