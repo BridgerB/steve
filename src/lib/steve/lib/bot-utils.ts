@@ -1859,6 +1859,10 @@ export const getCraftingTable = async (bot: Bot): Promise<Block | null> => {
  * window), so it's safe to call any time; skips the 4 armor slots.
  */
 export const reclaimCraftingGrid = async (bot: Bot): Promise<void> => {
+	// Pull the server's truth first: the client's grid view drifts under load and
+	// an "empty" grid slot may still hold a plank server-side.
+	await bot.resyncInventory().catch(() => false);
+	await sleep(150);
 	const win = bot.inventory;
 	// Slots 0..inventoryStart = output(0) + 2x2 craft grid + 4 armor slots. Sweep
 	// the output + grid (everything except the 4 armor slots right before the
@@ -1885,16 +1889,10 @@ export const reclaimCraftingGrid = async (bot: Bot): Promise<void> => {
 	// buttons from 6 planks in one click (race36 700 at 11:52:42, "got
 	// acacia_button"). A plain click takes exactly one result; drop it into an
 	// empty inventory slot.
-	const out = win.slots[0];
-	if (out && out.count > 0) {
-		try {
-			await bot.clickWindow(0, 0, 0);
-			await sleep(80);
-			const empty = win.slots.findIndex((x, i) => i >= win.inventoryStart && !x);
-			if (empty >= 0) await bot.clickWindow(empty, 0, 0);
-			await sleep(80);
-		} catch {}
-	}
+	// The RESULT slot is a live recipe PREVIEW, never a stranded item: clicking it
+	// crafts whatever the server's grid currently forms (a plank the client no
+	// longer sees → a button, race38 708/710/711 still 1-2 buttons each after
+	// 0fadb04). Leave it alone; only the grid slots above get reclaimed.
 };
 
 export const craftItem = async (
@@ -1957,17 +1955,28 @@ export const craftItem = async (
 		return best;
 	};
 
-	const recipe = recipes.find((r) => {
-		if (r.inShape) {
-			return r.inShape.every((row) =>
-				row.every((item) => item.id === -1 || hasIngredient(item.id)),
-			);
-		}
-		if (r.ingredients) {
-			return r.ingredients.every((item) => hasIngredient(item.id));
-		}
-		return false;
-	});
+	const findRecipe = () =>
+		recipes.find((r) => {
+			if (r.inShape) {
+				return r.inShape.every((row) =>
+					row.every((item) => item.id === -1 || hasIngredient(item.id)),
+				);
+			}
+			if (r.ingredients) {
+				return r.ingredients.every((item) => hasIngredient(item.id));
+			}
+			return false;
+		});
+	let recipe = findRecipe();
+	if (!recipe) {
+		// The client's inventory view can momentarily lose a stack (race38 710: 29
+		// planks in hand, "No matching recipe for wooden_pickaxe", planks back a
+		// second later). Pull the server's truth and look once more.
+		await bot.resyncInventory().catch(() => false);
+		await sleep(300);
+		recipe = findRecipe();
+		if (recipe) logEvent("craft", "recipe_after_resync", itemName);
+	}
 
 	if (!recipe) {
 		return { success: false, message: `No matching recipe for ${itemName}` };

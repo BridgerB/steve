@@ -310,6 +310,16 @@ export const initCrafting = (bot: Bot, _options: BotOptions): void => {
 					}
 				}
 			} finally {
+				// Closing a window while an item is on the cursor DROPS it on the ground.
+				// Park it in any inventory slot first and say so (race38 710: 14 planks
+				// vanished at a table craft).
+				const w = windowCraftingTable ?? bot.inventory;
+				if (w?.selectedItem) {
+					bot.emit("debug", "craft", { event: "cursor_stuck", item: w.selectedItem.name, count: w.selectedItem.count });
+					try {
+						await bot.putSelectedItemRange(w.inventoryStart, w.inventoryEnd, w, 0);
+					} catch {}
+				}
 				if (windowCraftingTable) {
 					bot.closeWindow(windowCraftingTable);
 				}
