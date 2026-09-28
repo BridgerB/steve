@@ -15,6 +15,7 @@ import {
 	rimYAt,
 	sleep,
 	surfaceYAt,
+	throwIfPreempted,
 } from "../../lib/bot-utils.ts";
 import { logEvent } from "../../lib/logger.ts";
 import type { StepResult } from "../../types.ts";
@@ -150,6 +151,7 @@ export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 	// 4. Explore around the current level for more water.
 	if (!waterPos) {
 		for (let i = 0; i < 5; i++) {
+			throwIfPreempted();
 			logEvent("bucket", "exploring", `looking for water ${i + 1}/5`);
 			await exploreRandom(bot, 60);
 			waterPos = search(128, 30);
@@ -184,6 +186,10 @@ export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 			// "No path found" every time and the bot never left its cell (race26 660
 			// ran all 16 legs standing still). Three 60-block legs cover the same reach.
 			for (let leg = 1; leg <= 3 && !waterPos; leg++) {
+				// A call cut short by the step budget kept spinning here: every goTo
+				// threw (stale epoch), the catch below swallowed it, and all 24 legs
+				// "ran" in 2s (race36 700 at 12:10:28). Unwind instead.
+				throwIfPreempted();
 				const here = bot.entity.position;
 				const target = vec3(
 					Math.floor(here.x + dx * 60),
