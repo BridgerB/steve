@@ -48,6 +48,23 @@ const LEAF_TYPES = [
 
 const isLeafName = (name: string) => LEAF_TYPES.includes(name);
 
+// Trees whose walk put the bot in water, per bot, ACROSS calls. The in-call
+// `unreachable` set is rebuilt every time the step starts, and a water preempt
+// (escape_water) ends the call — so race48 751 re-picked the same oak across a
+// pond 34 times in 4 min (walk in → escape → same shore → walk in). Expires.
+const waterTrees = new WeakMap<Bot, Map<string, number>>();
+const WATER_TREE_TTL = 6 * 60_000;
+const waterTreeMap = (bot: Bot): Map<string, number> => {
+	let m = waterTrees.get(bot);
+	if (!m) {
+		m = new Map();
+		waterTrees.set(bot, m);
+	}
+	const now = Date.now();
+	for (const [k, exp] of m) if (exp < now) m.delete(k);
+	return m;
+};
+
 export const gatherWood = async (
 	bot: Bot,
 	targetCount: number,
@@ -127,6 +144,28 @@ export const gatherWood = async (
 	const unreachable = new Set<string>();
 	// Key by X,Z only — blacklist entire tree column, not individual blocks
 	const posKey = (p: Vec3) => `${Math.floor(p.x)},${Math.floor(p.z)}`;
+	const wetTrees = waterTreeMap(bot);
+	// Straight line from the bot to the tree crosses open water (the top block of
+	// the column, within ±6 of our level, is water) — a pond between us and it.
+	const lineCrossesWater = (to: Vec3): boolean => {
+		const from = botPos();
+		const dx = to.x - from.x;
+		const dz = to.z - from.z;
+		const len = Math.hypot(dx, dz);
+		if (len < 3) return false;
+		const fy = Math.floor(from.y);
+		for (let d = 2; d < len - 1; d += 2) {
+			const x = Math.floor(from.x + (dx / len) * d);
+			const z = Math.floor(from.z + (dz / len) * d);
+			for (let y = fy + 6; y >= fy - 6; y--) {
+				const n = getBlock(bot, vec3(x, y, z))?.name;
+				if (!n || n === "air" || n === "cave_air" || n.includes("leaves") || n.endsWith("_log")) continue;
+				if (n.includes("water")) return true;
+				break;
+			}
+		}
+		return false;
+	};
 
 	// A tree whose trunk stands IN water (base block or its 4 neighbours are water)
 	// can only be chopped from the pond — the bot walks in, the drown guard preempts,
@@ -187,10 +226,15 @@ export const gatherWood = async (
 			} as never);
 			if (positions.length === 0) continue;
 
-			const reachable = positions
+			const candidates = positions
 				.filter((p) => !unreachable.has(posKey(p)))
+				.filter((p) => !wetTrees.has(posKey(p)))
 				.filter((p) => !trunkInWater(p))
-				.filter((p) => logHeightAboveGround(p) <= 6)
+				.filter((p) => logHeightAboveGround(p) <= 6);
+			// Prefer trees we can reach without swimming; only if EVERY tree is across
+			// water do we take the swim (a real player would too).
+			const dry = candidates.filter((p) => !lineCrossesWater(p));
+			const reachable = (dry.length ? dry : candidates)
 				// Nearest first, but a log high in a canopy costs extra: acacia/jungle
 				// branch logs 5+ blocks up were picked by raw 3D distance, the walk-to
 				// failed (nothing to stand on), and the bot burned 11s + a blacklist per
@@ -251,6 +295,7 @@ export const gatherWood = async (
 		let stuckTicks = 0;
 		let climbed = false;
 
+		try {
 		while (Date.now() - start < timeout) {
 			await sleep(250);
 			if (!bot.entity?.position) {
@@ -267,6 +312,8 @@ export const gatherWood = async (
 			// Water escape
 			if (bot.entity.isInWater) {
 				pf.stop();
+				wetTrees.set(posKey(target), Date.now() + WATER_TREE_TTL);
+				logEvent("wood", "wet_tree", `walked into water toward ${posKey(target)} — blacklisted`, botPos());
 				await escapeWater(bot);
 				pf.setGoal(goal);
 				stuckTicks = 0;
@@ -320,6 +367,13 @@ export const gatherWood = async (
 
 		pf.stop();
 		return distance(botPos(), target) <= 5;
+		} finally {
+			// escape_water preempts unwind through here while we are IN the pond.
+			if (bot.entity?.isInWater && !wetTrees.has(posKey(target))) {
+				wetTrees.set(posKey(target), Date.now() + WATER_TREE_TTL);
+				logEvent("wood", "wet_tree", `preempted in water toward ${posKey(target)} — blacklisted`, botPos());
+			}
+		}
 	};
 
 	// Mine a single block
