@@ -15,6 +15,7 @@
 import type { Bot, Vec3 } from "typecraft";
 import { distance, offset, vec3 } from "typecraft";
 import {
+	digStaircaseUp,
 	findBlocks,
 	findItem,
 	getBlock,
@@ -165,6 +166,15 @@ const roam = async (bot: Bot, seen: Set<string>): Promise<Vec3 | null> => {
 			bot.setControlState("forward", false);
 			bot.setControlState("jump", false);
 			if (bot.entity.isInWater) return null;
+			// Still pinned (a 2-deep pit — e.g. the notch the water escape dug): carve
+			// a staircase 2 up out of it.
+			if (distance(bot.entity.position, q) < 2) {
+				const y0 = Math.floor(bot.entity.position.y);
+				logEvent("flint", "roam_pit", `jump-walk moved <2 at y=${y0} — staircase up`, bot.entity.position);
+				try {
+					await digStaircaseUp(bot, y0 + 2, Date.now() + 15000);
+				} catch {}
+			}
 		}
 		const s = findBlocks(bot, "gravel", 64, 40)
 			.filter((q) => !seen.has(key(q)) && !wet(bot, q))
