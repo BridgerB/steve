@@ -3,7 +3,7 @@
  */
 
 import type { Bot } from "typecraft";
-import { distance, offset, vec3 } from "typecraft";
+import { distance, offset, raycast, vec3 } from "typecraft";
 import {
 	craftItem,
 	digExposesLava,
@@ -126,6 +126,30 @@ const lookDig = async (bot: Bot, b: Block | null): Promise<boolean> => {
 	} catch {
 		return false;
 	}
+};
+
+/** Clear every block between the bot's eyes and `ore` (max 3) so the ore is
+ *  actually exposed before it is broken. Refuses if the line crosses liquid. */
+const openLineToOre = async (bot: Bot, ore: Block): Promise<boolean> => {
+	for (let i = 0; i < 3; i++) {
+		const p = bot.entity.position;
+		const eye = vec3(p.x, p.y + 1.62, p.z);
+		const c = vec3(ore.position.x + 0.5, ore.position.y + 0.5, ore.position.z + 0.5);
+		const d = vec3(c.x - eye.x, c.y - eye.y, c.z - eye.z);
+		const len = Math.hypot(d.x, d.y, d.z) || 1;
+		const hit = raycast(bot.world as never, eye, vec3(d.x / len, d.y / len, d.z / len), 6);
+		if (!hit) return true; // nothing between us (or the ore is not a solid hit) — fine
+		if (
+			hit.position.x === ore.position.x &&
+			hit.position.y === ore.position.y &&
+			hit.position.z === ore.position.z
+		)
+			return true;
+		const b = bot.blockAt(hit.position) as Block | null;
+		if (!b || isLiquid(b) || isAir(b)) return false;
+		if (!(await lookDig(bot, b))) return false;
+	}
+	return false;
 };
 
 const STONE_PLUS_PICKS = new Set([
@@ -404,6 +428,13 @@ const branchMineOre = async (
 			// path through tunnel walls) spawns the drop out of pickup range, so the
 			// counter rises but nothing is collected.
 			if (distance(bot.entity.position, ore.position) > 4.5) return false;
+			// TUNNEL TO THE ORE FIRST. findBlock sees ore through rock, and the server
+			// happily breaks a block 3-4 away behind a wall — the raw_iron then drops
+			// into the sealed cavity where the ore was and can never be collected
+			// (race26 660: two "drops_lost" relocates, both drops found on the server
+			// 3-4 blocks inside the wall). Dig the blocks on the eye→ore ray so the
+			// drop falls into an opening the bot can walk into.
+			if (!(await openLineToOre(bot, ore))) return false;
 			const above = bot.blockAt(offset(ore.position, 0, 1, 0)) as Block | null;
 			if (above && !isAir(above) && !isLiquid(above)) await lookDig(bot, above);
 			if (await lookDig(bot, ore)) {

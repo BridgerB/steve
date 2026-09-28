@@ -527,6 +527,7 @@ export {
 	type SpiralIterator2d,
 	saveAll,
 	saveColumn,
+	raycast,
 	setColumn,
 	startAutoSave,
 	stopAutoSave,
