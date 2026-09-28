@@ -3486,9 +3486,13 @@ export const otherBotsNear = (bot: Bot, radius: number): Vec3[] => {
 	const me = bot.entity?.position;
 	if (!me) return [];
 	const out: Vec3[] = [];
-	for (const e of Object.values(bot.entities)) {
-		if (!e || e.type !== "player" || e === bot.entity) continue;
-		if (!e.username || e.username === bot.username) continue;
+	// bot.players is keyed by the tab-list username and linked to the entity on
+	// spawn; entity.username itself is null when the entity spawned before the
+	// player_info packet, so don't rely on it.
+	for (const pl of Object.values(bot.players)) {
+		if (!pl || pl.username === bot.username) continue;
+		const e = pl.entity;
+		if (!e || e === bot.entity) continue;
 		const p = e.position;
 		if (!p) continue;
 		if (Math.hypot(p.x - me.x, p.z - me.z) <= radius) out.push(p);

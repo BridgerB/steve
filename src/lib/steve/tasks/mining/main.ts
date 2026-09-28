@@ -1103,6 +1103,10 @@ const mineDeepOre = async (
 		// Don't sink the shaft on top of another bot's (see spreadFromOtherBots).
 		if (floorY(bot) >= 50) await spreadFromOtherBots(bot);
 		const startY = floorY(bot);
+		// Breadcrumb: race48 749 sat 5 min at y51 in this step with NO events and
+		// timed out; the retry descended in 35s. This pins whether the hang is
+		// before or inside the dig-down.
+		logEvent(mineCat(blockType), "descend_start", `y=${startY} pick=${bot.heldItem?.name ?? "none"}`, bot.entity.position);
 		// Cap how far down one call digs: most spawns (y60-90) reach the band at `level`;
 		// only an extreme mountain (y100+) is capped so descent can't eat the whole call.
 		const target = Math.max(level, startY - 80);
