@@ -25,6 +25,14 @@
 	let liveYaw = $state(0);
 
 	const race = $derived(data.race);
+	// The bot the viewer is attached to. When the poll brings a new race (new bot
+	// id), drop the previous bot's live state so the panel doesn't show its last
+	// position/ladder under the new name until the new socket delivers.
+	const liveBotId = $derived(race.bots[0]?.id ?? '');
+	$effect(() => {
+		liveBotId;
+		live = null;
+	});
 	// Merge the live stream over the server snapshot: fast-changing fields come live;
 	// historical bits (split times, event log) still come from the snapshot.
 	const bot = $derived.by(() => {
@@ -357,16 +365,22 @@
 
 			<!-- CENTER : VIEWPORT (real first-person feed) -->
 			<div class="viewport">
-				<BotWindow
-					index={0}
-					name={bot.id}
-					step={currentStep}
-					wsUrl={`${data.relayUrl}/viewer/${bot.id}`}
-					onState={(s) => (live = s)}
-					onPose={(p) => (liveYaw = p.yaw)}
-					w="100%"
-					h="100%"
-				/>
+				<!-- Keyed on the bot id: the 5s poll swaps in a new race's bot, but the
+					 viewer mounts its relay socket once. Without the key, the page kept
+					 showing the PREVIOUS race's dead bot (its DO replays a stale buffer)
+					 under the new bot's name. -->
+				{#key liveBotId}
+					<BotWindow
+						index={0}
+						name={liveBotId}
+						step={currentStep}
+						wsUrl={`${data.relayUrl}/viewer/${liveBotId}`}
+						onState={(s) => (live = s)}
+						onPose={(p) => (liveYaw = p.yaw)}
+						w="100%"
+						h="100%"
+					/>
+				{/key}
 
 				<div class="vp-badge vp-badge-left">
 					<span class="dot dot-red sm"></span>
