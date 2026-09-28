@@ -3462,17 +3462,60 @@ export const attachSafety = (bot: Bot): void => {
  * await exploreRandom(bot, 30);
  * ```
  */
+/**
+ * Force a few blocks of progress along (dx,dz) when the pathfinder returned
+ * without moving: open leaves at feet/head level for two cells ahead (a bot that
+ * pillared up through a canopy stands with leaves at head height on every side —
+ * race43 728, race52 765 sat through 9 explore legs without moving) and then
+ * sprint-jump the bearing so a 1-high lip can't pin it either.
+ */
+export const nudgeThrough = async (bot: Bot, dx: number, dz: number, ms = 3000): Promise<void> => {
+	const here = bot.entity.position;
+	const fx = Math.floor(here.x);
+	const fy = Math.floor(here.y);
+	const fz = Math.floor(here.z);
+	for (let k = 0; k <= 2; k++) {
+		for (const dy of [0, 1, 2]) {
+			if (k === 0 && dy < 2) continue;
+			const lb = bot.blockAt(vec3(fx + dx * k, fy + dy, fz + dz * k));
+			if (lb && lb.name.includes("leaves")) {
+				try {
+					await bot.dig(lb as never, true);
+				} catch {}
+			}
+		}
+	}
+	await bot.lookAt(vec3(here.x + dx * 10, here.y, here.z + dz * 10));
+	bot.setControlState("forward", true);
+	bot.setControlState("sprint", true);
+	bot.setControlState("jump", true);
+	await sleep(ms);
+	bot.setControlState("forward", false);
+	bot.setControlState("sprint", false);
+	bot.setControlState("jump", false);
+};
+
 export const exploreRandom = async (bot: Bot, dist = 30): Promise<void> => {
 	if (!bot.entity?.position) return;
 	// From a boxed cell A* is exhaustive and fails; get out of the hole first.
 	await unboxToRim(bot).catch(() => false);
 	const angle = Math.random() * Math.PI * 2;
+	const p0 = bot.entity.position;
+	const before = vec3(p0.x, p0.y, p0.z);
 	const target = vec3(
-		bot.entity.position.x + Math.cos(angle) * dist,
-		bot.entity.position.y,
-		bot.entity.position.z + Math.sin(angle) * dist,
+		p0.x + Math.cos(angle) * dist,
+		p0.y,
+		p0.z + Math.sin(angle) * dist,
 	);
 	await goTo(bot, target, { range: 5 });
+	// Didn't move: the pathfinder gave up from this cell (leaves at head height,
+	// a lip). Punch through toward the target rather than burn the next leg too.
+	if (distance(bot.entity.position, before) < 3 && !bot.entity.isInWater) {
+		const dx = Math.sign(Math.round(Math.cos(angle)));
+		const dz = Math.sign(Math.round(Math.sin(angle)));
+		logEvent("nav", "explore_stuck", `moved <3 — nudge ${dx},${dz}`);
+		await nudgeThrough(bot, dx || 1, dz);
+	}
 };
 
 /**

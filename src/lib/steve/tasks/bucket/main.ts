@@ -7,6 +7,7 @@ import { distance, offset, type Vec3, vec3, windowItems } from "typecraft";
 import {
 	digStaircaseUp,
 	exploreRandom,
+	nudgeThrough,
 	forgetResource,
 	getRememberedResource,
 	goTo,
@@ -265,25 +266,7 @@ export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 					logEvent("bucket", "long_hunt_stuck", `leg moved <3 — jump-walk dir ${dx},${dz}`);
 					// Under a tree canopy the pathfinder and the sprint both hit leaves
 					// (race43 728: leaves at head height on every side, 2 legs lost).
-					// Open the two cells ahead at feet and head level if they are leaves.
-					for (let k = 1; k <= 2; k++) {
-						for (const dy of [0, 1]) {
-							const lb = bot.blockAt(vec3(Math.floor(here.x) + dx * k, Math.floor(here.y) + dy, Math.floor(here.z) + dz * k));
-							if (lb && lb.name.includes("leaves")) {
-								try {
-									await bot.dig(lb as never, true);
-								} catch {}
-							}
-						}
-					}
-					await bot.lookAt(vec3(here.x + dx * 10, here.y, here.z + dz * 10));
-					bot.setControlState("forward", true);
-					bot.setControlState("sprint", true);
-					bot.setControlState("jump", true);
-					await sleep(4000);
-					bot.setControlState("forward", false);
-					bot.setControlState("sprint", false);
-					bot.setControlState("jump", false);
+					await nudgeThrough(bot, dx, dz, 4000);
 					if (bot.entity.isInWater) return { success: false, message: "in water — yielding to escape_water" };
 				}
 				await bot.waitForChunksToLoad();
