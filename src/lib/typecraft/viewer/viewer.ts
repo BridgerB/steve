@@ -399,7 +399,11 @@ export const setViewerPath = (
 			// back faces, or a marker on the bot's own cell (a pillar "place" cell is
 			// its feet) is seen from inside and paints the whole first-person view
 			// purple/orange — drawn in rendering group 1 it even sits over terrain.
-			m.backFaceCulling = kind.endsWith("Mark");
+			// The tubes too: a "place" segment that starts in the bot's own cell (a
+			// pillar/bridge from where it stands) runs through the first-person
+			// camera, and from inside a tube its back faces fill the whole view
+			// purple (race27/28: full-screen purple on 664/668 during crafting).
+			m.backFaceCulling = true;
 			m.alpha = c[3];
 			ov.mats.set(kind, m);
 		}
