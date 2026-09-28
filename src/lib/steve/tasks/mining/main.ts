@@ -391,6 +391,12 @@ const branchMineOre = async (
 	let dir = pickDigDir(bot);
 	// Progress is the drop item actually in the pack, not blocks dug.
 	const have = () => invCount(bot, dropItem);
+	// Where the time goes (race59 795: "dug 11" in 221s, ~20s per cell, no events).
+	let tNear = 0;
+	let tStep = 0;
+	let nStuck = 0;
+	let nNear = 0;
+	const timing = () => `near=${nNear}x/${Math.round(tNear / 1000)}s step=${Math.round(tStep / 1000)}s stuck=${nStuck}`;
 
 	const mineNearbyOre = async (): Promise<boolean> => {
 		// Prefer remembered ore (blockSeen), then a wider scan
@@ -666,16 +672,25 @@ const branchMineOre = async (
 		// blocks up out of the band and started over. Give a barren spot longer,
 		// then report it as barren so the caller relocates sideways, not up.
 		if (mined > 0 && Date.now() - lastCollectAt > 50000) {
-			logEvent(mineCat(blockType), "drops_lost", `50s no collection at y=${floorY(bot)} (mined ${mined}) — relocating`);
+			logEvent(mineCat(blockType), "drops_lost", `50s no collection at y=${floorY(bot)} (mined ${mined}) — relocating | ${timing()}`);
 			return { mined, dug, lostDrops: true };
 		}
-		if (mined === 0 && Date.now() - lastCollectAt > 120000) {
-			logEvent(mineCat(blockType), "no_ore", `120s no ore at y=${floorY(bot)} (dug ${dug}) — relocating sideways`);
+		// The relocate (20-cell tunnel + optional goTo) needs ~60-80s; fire it while
+		// the step budget can still hold it. race59 795: the loop-head check only runs
+		// between sub-calls, no_ore fired at 259s of a 300s step, the relocate was
+		// cut off by the timeout and the fresh step dug the same barren spot again.
+		const late = Date.now() > deadline - 80000;
+		if (mined === 0 && (Date.now() - lastCollectAt > 120000 || late)) {
+			logEvent(mineCat(blockType), "no_ore", `${late ? "budget low" : "120s"} no ore at y=${floorY(bot)} (dug ${dug}) — relocating sideways | ${timing()}`);
 			return { mined, dug, lostDrops: false, noOre: true };
 		}
 		await ensurePickaxe(bot);
 		// Grab any ore the tunnel has already exposed in its walls/floor/ceiling.
-		if (await mineNearbyOre()) {
+		const tn = Date.now();
+		const gotOre = await mineNearbyOre();
+		tNear += Date.now() - tn;
+		nNear++;
+		if (gotOre) {
 			turns = 0;
 			continue;
 		}
@@ -685,7 +700,10 @@ const branchMineOre = async (
 		// with sparse ore it exposes no vein at all (mined=0 dug=18); the ribs multiply
 		// the exposed wall area — the no-X-ray way to actually surface a vein — and
 		// digBranch harvests + retreats each one. (digBranch was previously dead code.)
+		const t0 = Date.now();
 		const r = await digStep(dir[0], dir[1]);
+		tStep += Date.now() - t0;
+		if (r === "stuck") nStuck++;
 		if (r === "ok") {
 			turns = 0;
 			forward++;
@@ -766,7 +784,7 @@ export const tunnelToward = async (bot: Bot, dx: number, dz: number, n: number):
 
 const mineStuckState = new WeakMap<
 	Bot,
-	{ x: number; z: number; n: number; iron: number }
+	{ x: number; z: number; n: number; iron: number; rx?: number; rz?: number; dir?: [number, number] }
 >();
 // Relocate horizontally `cells` blocks onto fresh SOLID rock, digging the 1x2 opening
 // as it goes, to route the vertical dig-down around a hazard directly below (lava,
@@ -1205,22 +1223,29 @@ const mineDeepOre = async (
 	const near = !!anc && Math.hypot(cur.x - anc.x, cur.z - anc.z) <= 5;
 	const gained = !!anc && have > anc.iron;
 	const stuckN = near && !gained && anc ? anc.n + 1 : 0;
+	const lastReloc = anc && anc.rx !== undefined ? { rx: anc.rx, rz: anc.rz, dir: anc.dir } : {};
 	mineStuckState.set(
 		bot,
 		stuckN > 0 && anc
-			? { x: anc.x, z: anc.z, n: stuckN, iron: anc.iron }
-			: { x: cur.x, z: cur.z, n: 0, iron: have },
+			? { x: anc.x, z: anc.z, n: stuckN, iron: anc.iron, ...lastReloc }
+			: { x: cur.x, z: cur.z, n: 0, iron: have, ...lastReloc },
 	);
 	if ((stuckN >= 3 || lostDrops || noOre || boxed) && have < targetCount) {
-		mineStuckState.set(bot, { x: cur.x, z: cur.z, n: 0, iron: have });
 		const fx = Math.floor(cur.x);
 		const fz = Math.floor(cur.z);
-		const dirs: [number, number][] = [
-			[1, 0],
-			[-1, 0],
-			[0, 1],
-			[0, -1],
-		];
+		// Relocating AGAIN from (near) the same origin means the last relocate moved
+		// nothing / led nowhere ("relocated 0/20", "Relocated toward" the same target
+		// every cycle — race55 777 ×3, 779 ×7). Don't pick that direction again.
+		const repeat =
+			!!anc?.dir && anc.rx !== undefined && anc.rz !== undefined && Math.hypot(fx - anc.rx, fz - anc.rz) <= 6;
+		const dirs: [number, number][] = (
+			[
+				[1, 0],
+				[-1, 0],
+				[0, 1],
+				[0, -1],
+			] as [number, number][]
+		).filter((d) => !(repeat && anc?.dir && d[0] === anc.dir[0] && d[1] === anc.dir[1]));
 		let best = dirs[0];
 		let bestSolid = -1;
 		for (const d of dirs) {
@@ -1247,7 +1272,8 @@ const mineDeepOre = async (
 		// 641/642: ore broken in a cavern wall, drop rolled off) still pillared 10
 		// blocks up out of the band.
 		const deep = feetY < 45 && !noOre && lavaAround(bot, 6);
-		logEvent(mineCat(blockType), "relocate", `lost=${lostDrops} noOre=${!!noOre} stuck=${stuckN} at ${fx},${fz},y${feetY} deep=${deep} solid=${bestSolid}`);
+		mineStuckState.set(bot, { x: cur.x, z: cur.z, n: 0, iron: have, rx: fx, rz: fz, dir: best });
+		logEvent(mineCat(blockType), "relocate", `lost=${lostDrops} noOre=${!!noOre} stuck=${stuckN} at ${fx},${fz},y${feetY} deep=${deep} solid=${bestSolid} dir=${best[0]},${best[1]}${repeat ? " (rotated)" : ""}`);
 		if (deep) {
 			const climbTo = Math.min(level + 14, 50); // stay underground, never the sky
 			if (climbTo > feetY) {
