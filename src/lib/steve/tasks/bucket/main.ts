@@ -59,20 +59,23 @@ export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 		const src = list.filter((p) => !bad(p) && isSource(p));
 		const aboveName = (p: Vec3): string =>
 			bot.blockAt(offset(p, 0, 1, 0))?.name ?? "";
-		// Tier 1: open-sky surface pond near our level — the only truly safe scoop.
+		// Tier 1: open-sky surface pond — the only truly safe scoop. NOT tied to our own
+		// height: from a hilltop the valley pond 15 below is the obvious scoop, but the
+		// old `p.y >= botY - 5` threw it out and Fill Water timed out "surface water
+		// 4/4" with a pond in plain view (race33 691). nearSurface rules out cave water.
 		// … and at the TERRAIN surface of its own column: a cave lake in a ravine
 		// has plain `air` above too (race30 676/677 targeted water at y19 under a
 		// y70 surface and never got out of the cave).
 		const nearSurface = (p: Vec3, slack: number): boolean => p.y >= surfaceYAt(bot, p.x, p.z) - slack;
 		const surface = src.filter(
-			(p) => aboveName(p) === "air" && p.y >= botY - 5 && nearSurface(p, 3),
+			(p) => aboveName(p) === "air" && p.y >= botY - 24 && nearSurface(p, 3),
 		);
 		if (surface.length) return surface[0] ?? null;
 		// Tier 2: air/cave_air above but still near our level (a shallow pool we won't
 		// get trapped diving into). Excludes anything well below us or the terrain.
 		const shallow = src.filter((p) => {
 			const a = aboveName(p);
-			return (a === "air" || a === "cave_air") && p.y >= botY - 8 && nearSurface(p, 8);
+			return (a === "air" || a === "cave_air") && p.y >= botY - 12 && nearSurface(p, 8);
 		});
 		if (shallow.length) return shallow[0] ?? null;
 		// Only deep cave water in range — refuse it (drown-trap) and let the search escalate.
