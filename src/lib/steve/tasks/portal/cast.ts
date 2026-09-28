@@ -11,7 +11,7 @@
  */
 
 import type { Bot } from "typecraft";
-import { distance, offset, vec3, type Vec3 } from "typecraft";
+import { distance, offset, raycast, vec3, type Vec3 } from "typecraft";
 import {
 	digExposesLava,
 	digExposesWater,
@@ -81,9 +81,43 @@ const count = (bot: Bot, name: string): number =>
  * Use the held item (a bucket) reliably. bot.activateItem() leaves usingHeldItem
  * set on 26.1.2, which blocks the next use — so deactivate and clear it.
  */
-const reliableUse = async (bot: Bot, look: Vec3): Promise<void> => {
-	await bot.lookAt(look);
-	await sleep(350);
+// The cell a bucket use would fill: the air cell the eye ray is in just before
+// it hits a block. Uses the SNEAKING eye height when sneaking — the server does,
+// and lookAt/blockAtCursor assume 1.62, which aimed 35 cm high.
+const useTargetCell = (bot: Bot, look: Vec3): Vec3 | null => {
+	if (!bot.world) return null;
+	const p = bot.entity.position;
+	const eyeH = bot.controlState.sneak ? 1.27 : 1.62;
+	const eye = vec3(p.x, p.y + eyeH, p.z);
+	const d = vec3(look.x - eye.x, look.y - eye.y, look.z - eye.z);
+	const len = Math.hypot(d.x, d.y, d.z) || 1;
+	const dir = vec3(d.x / len, d.y / len, d.z / len);
+	const hit = raycast(bot.world, eye, dir, 6);
+	if (!hit) return null;
+	const i = hit.intersect;
+	return vec3(Math.floor(i.x - dir.x * 0.02), Math.floor(i.y - dir.y * 0.02), Math.floor(i.z - dir.z * 0.02));
+};
+
+// `expect`: the cell the liquid must land in. race48 748 died at its first
+// portal cast: standing (sneaking) on the +Z cup wall the lava pour ray grazed
+// the top of that wall and the bucket emptied into the bot's own feet cell.
+// With an expectation the use is refused (cast/aim_fail) instead of poured.
+const reliableUse = async (bot: Bot, look: Vec3, expect?: Vec3): Promise<boolean> => {
+	bot.unlockLook?.();
+	await bot.lookAt(look, true);
+	await sleep(150);
+	if (expect) {
+		const cell = useTargetCell(bot, look);
+		if (!cell || cell.x !== expect.x || cell.y !== expect.y || cell.z !== expect.z) {
+			const p = bot.entity.position;
+			logEvent(
+				"cast",
+				"aim_fail",
+				`want ${expect.x},${expect.y},${expect.z} got ${cell ? `${cell.x},${cell.y},${cell.z}` : "none"} from ${p.x.toFixed(2)},${p.y.toFixed(2)},${p.z.toFixed(2)} sneak=${bot.controlState.sneak ? 1 : 0}`,
+			);
+			return false;
+		}
+	}
 	bot.activateItem();
 	await sleep(750);
 	try {
@@ -93,6 +127,7 @@ const reliableUse = async (bot: Bot, look: Vec3): Promise<void> => {
 	}
 	(bot as unknown as { usingHeldItem: boolean }).usingHeldItem = false;
 	await sleep(200);
+	return true;
 };
 
 /** Place a cobblestone block at `pos` (against any solid neighbour). */
@@ -892,7 +927,12 @@ export const castObsidianAt = async (
 			`${pos.x},${pos.y},${pos.z} bot=${bp.x.toFixed(2)},${bp.z.toFixed(2)} feet=${feetY(bot)}`,
 		);
 		await equip(bot, "lava_bucket");
-		await reliableUse(bot, vec3(pos.x + 0.5, pos.y + 0.2, pos.z + 0.5));
+		// Aim at the far-bottom of the cup so the ray clears the top of the +Z wall
+		// we stand on by ~25 cm even at the sneaking eye height (see reliableUse).
+		if (!(await reliableUse(bot, vec3(pos.x + 0.5, pos.y + 0.05, pos.z + 0.2), pos))) {
+			bot.setControlState("sneak", false);
+			continue;
+		}
 		await sleep(400);
 		const afterLava = getBlock(bot, pos)?.name ?? "?";
 
@@ -952,7 +992,12 @@ export const castObsidianAt = async (
 			`bot=${wp.x.toFixed(2)},${wp.z.toFixed(2)} f=${feetY(bot)} cup=${getBlock(bot, pos)?.name} bowl=${getBlock(bot, above)?.name} held=${bot.heldItem?.name}`,
 		);
 		await equip(bot, "water_bucket");
-		await reliableUse(bot, vec3(pos.x + 0.5, pos.y + 1.5, pos.z + 0.15));
+		// Keep the validated bowl aim: the ray hits the far (-Z) bowl wall's inner
+		// face at bowl height, so the water lands in `above`, never in the cup.
+		if (!(await reliableUse(bot, vec3(pos.x + 0.5, pos.y + 1.5, pos.z + 0.15), above))) {
+			bot.setControlState("sneak", false);
+			continue;
+		}
 		await sleep(300);
 		logEvent(
 			"cast",
