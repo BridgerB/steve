@@ -597,16 +597,37 @@ const fillBucket = async (
 		return false;
 	};
 
+	// Open a cell ABOVE the pool's level for a stance: rock/dirt only (never a
+	// liquid or a falling block), and never a cell with lava beside it at the same
+	// height — that lava would flow in. Cells above the lava level are safe to open:
+	// lava cannot rise. race44 732 reached a cave pool whose only source sat under
+	// dirt with every neighbour column solid; no stance was air, so 6 minutes of
+	// 'fill_fail 1 srcs no scoop' with the pool one block away.
+	const openCell = async (p: Vec3): Promise<boolean> => {
+		const n = getBlock(bot, p)?.name;
+		if (isAir(n)) return true;
+		if (!isSolid(n) || /gravel|sand/.test(n ?? "")) return false;
+		if (
+			([[1, 0], [-1, 0], [0, 1], [0, -1]] as const).some(([ox, oz]) =>
+				isLava(getBlock(bot, vec3(p.x + ox, p.y, p.z + oz))?.name),
+			)
+		)
+			return false;
+		await digAt(bot, p);
+		return isAir(getBlock(bot, p)?.name);
+	};
+
 	for (const src of srcs) {
 		// PRIMARY: stand ABOVE, look DOWN. Feet at src.y+1 in a neighbour column, standing
 		// ON a solid non-lava block at src.y (build a dirt dock if the column is open but has
 		// an anchor below). Covers flush, depression, and mid-pool sources.
+		// The source's own cap (src.y+1) must be open too, or the down-look hits rock.
+		if (!(await openCell(vec3(src.x, src.y + 1, src.z)))) continue;
 		for (const [dx, dz] of NB8) {
 			const foot = vec3(src.x + dx, src.y, src.z + dz);
 			const feet = vec3(src.x + dx, src.y + 1, src.z + dz);
 			const head = vec3(src.x + dx, src.y + 2, src.z + dz);
-			if (!isAir(getBlock(bot, feet)?.name) || !isAir(getBlock(bot, head)?.name))
-				continue;
+			if (!(await openCell(feet)) || !(await openCell(head))) continue;
 			const footN = getBlock(bot, foot)?.name;
 			if (isLava(footN)) continue;
 			if (!isSolid(footN)) {
