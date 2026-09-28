@@ -376,10 +376,20 @@ const branchMineOre = async (
 		// Skip ore whose drop would fall into lava — scan down to where the raw_iron
 		// would land; if that's lava, it burns before we can collect it (this is what
 		// made y14 mining break 100 ore and net ~0). Belt to the y40 level change.
+		// And skip ore whose drop LANDS out of reach: race24 652/653 mined ore high
+		// in cavern walls, the raw_iron settled on ledges 5-7 blocks above their feet
+		// (confirmed on the server), collectDrops couldn't climb to it, and every
+		// ore became a "drops_lost" relocate — 13 min in the band for 0 iron.
 		{
 			let dy = 1;
 			while (dy <= 8 && isAir(bot.blockAt(offset(ore.position, 0, -dy, 0)))) dy++;
 			if (isLava(bot.blockAt(offset(ore.position, 0, -dy, 0)))) {
+				if (fromMem) forgetResource(bot, blockType, ore.position);
+				return false;
+			}
+			const landingY = ore.position.y - dy + 1;
+			if (landingY > floorY(bot) + 1) {
+				logEvent(mineCat(blockType), "ore_unreachable", `${ore.position.x},${ore.position.y},${ore.position.z} lands y=${landingY}, feet y=${floorY(bot)}`);
 				if (fromMem) forgetResource(bot, blockType, ore.position);
 				return false;
 			}
@@ -1408,8 +1418,11 @@ export const mineBlock = async (
 			logEvent(mineCat(blockType),"mined", `${blockType} ${mined}/${targetCount}`);
 			await sleep(100);
 
-			// Navigate to dropped item for pickup
+			// Navigate to dropped item for pickup — but never into water: race24 655
+			// chased cobble that had rolled into a cave lake, 20 preempt/escape cycles.
 			await bot.collectDrops(6, 3000, async (p) => {
+				if (isWater(bot.blockAt(p) as Block | null) || isWater(bot.blockAt(offset(p, 0, -1, 0)) as Block | null))
+					throw new Error("drop is in water");
 				await goTo(bot, p, { range: 1.4, timeout: 3000 });
 			});
 		} catch (err) {
