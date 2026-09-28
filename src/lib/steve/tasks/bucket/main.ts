@@ -5,6 +5,7 @@
 import type { Bot } from "typecraft";
 import { distance, offset, type Vec3, vec3, windowItems } from "typecraft";
 import {
+	digStaircaseUp,
 	exploreRandom,
 	forgetResource,
 	getMineEntry,
@@ -12,7 +13,9 @@ import {
 	goTo,
 	interactReliably,
 	returnToSurface,
+	rimYAt,
 	sleep,
+	surfaceYAt,
 } from "../../lib/bot-utils.ts";
 import { logEvent } from "../../lib/logger.ts";
 import type { StepResult } from "../../types.ts";
@@ -57,15 +60,19 @@ export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 		const aboveName = (p: Vec3): string =>
 			bot.blockAt(offset(p, 0, 1, 0))?.name ?? "";
 		// Tier 1: open-sky surface pond near our level — the only truly safe scoop.
+		// … and at the TERRAIN surface of its own column: a cave lake in a ravine
+		// has plain `air` above too (race30 676/677 targeted water at y19 under a
+		// y70 surface and never got out of the cave).
+		const nearSurface = (p: Vec3, slack: number): boolean => p.y >= surfaceYAt(bot, p.x, p.z) - slack;
 		const surface = src.filter(
-			(p) => aboveName(p) === "air" && p.y >= botY - 5,
+			(p) => aboveName(p) === "air" && p.y >= botY - 5 && nearSurface(p, 3),
 		);
 		if (surface.length) return surface[0] ?? null;
 		// Tier 2: air/cave_air above but still near our level (a shallow pool we won't
-		// get trapped diving into). Excludes anything well below us.
+		// get trapped diving into). Excludes anything well below us or the terrain.
 		const shallow = src.filter((p) => {
 			const a = aboveName(p);
-			return (a === "air" || a === "cave_air") && p.y >= botY - 8;
+			return (a === "air" || a === "cave_air") && p.y >= botY - 8 && nearSurface(p, 8);
 		});
 		if (shallow.length) return shallow[0] ?? null;
 		// Only deep cave water in range — refuse it (drown-trap) and let the search escalate.
@@ -93,6 +100,15 @@ export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 			`for water, from y=${Math.floor(yNow)}`,
 		);
 		await returnToSurface(bot);
+		// returnToSurface can fall short and return false; the old code then hunted
+		// water from wherever it stood — race30 676/677 explored at y21, found cave
+		// water at y19 and spent the rest of the race notching an aquifer bank.
+		// Insist on the real surface: carve stairs to the rim before any search.
+		for (let tries = 0; tries < 2 && bot.entity.position.y < rimYAt(bot) - 6; tries++) {
+			const rim = rimYAt(bot);
+			logEvent("bucket", "still_underground", `y=${Math.floor(bot.entity.position.y)} rim=${rim} — climbing`);
+			await digStaircaseUp(bot, rim, Date.now() + 100000);
+		}
 		waterPos = search(128, 100);
 		for (let i = 0; i < 4 && !waterPos; i++) {
 			logEvent("bucket", "exploring", `surface water ${i + 1}/4`);
