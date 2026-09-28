@@ -151,8 +151,13 @@ export async function getRaceData(db: D1Database | undefined): Promise<RaceData>
 			const w = getWalk(r.bot_id);
 			const ms = Date.parse(r.ts);
 			if (r.event === 'success') {
+				// A success row's detail is the step's RESULT message ("Smelted raw_iron
+				// (+8)"), not its name, so the name lookup never hit and every bot's
+				// `done` stayed empty (the ladder ticks came only from the live feed and
+				// the leader pick always fell back to bots[0]). Credit the step whose
+				// round is active (set by its 'start' row).
 				const name = (r.detail ?? '').split(': ')[0];
-				const i = STEP_IDX.get(name);
+				const i = STEP_IDX.get(name) ?? (w.active !== null ? w.active : undefined);
 				if (i !== undefined) {
 					if (!b.done.includes(i)) b.done.push(i);
 					if (b.doneAt[i] === undefined && !Number.isNaN(ms)) b.doneAt[i] = ms;
