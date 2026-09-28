@@ -261,6 +261,26 @@ export const initCrafting = (bot: Bot, _options: BotOptions): void => {
 						});
 					}
 
+					// VERIFY the result is the recipe's item before taking it. A right-click
+					// that didn't land (window desync under load) leaves e.g. ONE plank in the
+					// grid, whose result is a button/pressure plate; taking it blindly wasted
+					// the wood (race34 692: 25 birch buttons, 25 planks gone; 686: a door +
+					// stairs). Put the grid back and let the caller retry instead.
+					const got = window.slots[0];
+					if (got && got.type !== recipe.result.id) {
+						bot.emit("debug", "craft", { event: "wrong_result", got: got.name, want: recipe.result.id });
+						for (let s = 1; s <= w * h; s++) {
+							if (window.slots[s]) await bot.putAway(s);
+						}
+						throw new Error(`Wrong craft result: ${got.name}`);
+					}
+					if (!got) {
+						for (let s = 1; s <= w * h; s++) {
+							if (window.slots[s]) await bot.putAway(s);
+						}
+						throw new Error("No craft result");
+					}
+
 					// Take the result from slot 0
 					await bot.putAway(0);
 
