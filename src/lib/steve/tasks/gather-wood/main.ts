@@ -696,6 +696,13 @@ export const gatherWood = async (
 					const got = await digStaircaseUp(bot, surf, Date.now() + 90000);
 					up = got >= surf - 1;
 					logEvent("wood", "climb_out_stairs", `reached y=${got} (target ${surf})`, botPos());
+					// The stair climb digs dirt for filler as it goes; if it still failed,
+					// the proven pillar (cast.ts) now has blocks to work with.
+					if (!up) {
+						up = await pillarUp(bot, surf);
+						bot.setControlState("sneak", false);
+						logEvent("wood", "climb_out_pillar2", `y=${Math.floor(botPos().y)} (target ${surf}) ok=${up}`, botPos());
+					}
 				}
 				if (up) continue; // try the same tree from the surface
 			}
