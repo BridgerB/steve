@@ -2018,6 +2018,12 @@ export const craftItem = async (
 				} else {
 					await moveCloser(bot, craftingTable.position, { maxDistance: 2.5 });
 				}
+				// goTo returns false (no throw) when it fell short: nudge the rest of
+				// the way rather than let bot.craft die "Too far to interact
+				// (dist=6.6, max=6)" (race42 725, race41 718).
+				if (distance(bot.entity.position, craftingTable.position) > 4) {
+					await moveCloser(bot, craftingTable.position, { maxDistance: 2.5, maxWalkTime: 3000 });
+				}
 				await bot.lookAt(offset(craftingTable.position, 0.5, 0.5, 0.5), true);
 				await sleep(150);
 			} catch {}

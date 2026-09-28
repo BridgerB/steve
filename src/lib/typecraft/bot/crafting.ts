@@ -172,6 +172,12 @@ export const initCrafting = (bot: Bot, _options: BotOptions): void => {
 
 					let originalSourceSlot: number | null = null;
 
+					// Forget the client's idea of the result slot before placing: the
+					// server clears slot 0 after a result is taken and resends it once the
+					// grid changes, so anything still cached here is stale (race42 725:
+					// grid empty, result "crafting_table" — a leftover from the previous
+					// craft — which the take-the-result step then trusted).
+					window.slots[0] = null;
 					// Place shaped ingredients
 					bot.emit("debug", "craft", {
 						event: "place",
@@ -260,7 +266,7 @@ export const initCrafting = (bot: Bot, _options: BotOptions): void => {
 							const timeout = setTimeout(() => {
 								window.onSlotUpdate = prevCb;
 								resolve();
-							}, 2000);
+							}, 3000);
 							window.onSlotUpdate = (slot, _old, newItem) => {
 								prevCb?.(slot, _old, newItem);
 								if (slot === 0 && newItem) {
