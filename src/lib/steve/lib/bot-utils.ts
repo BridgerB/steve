@@ -675,7 +675,7 @@ export const getMineEntry = (
  */
 /** Topmost solid (non-air, non-water, non-leaves) block in a column → the y to
  *  stand on at the surface. Used to climb out when the mine-entry memory is gone. */
-const surfaceYAt = (bot: Bot, x: number, z: number): number => {
+export const surfaceYAt = (bot: Bot, x: number, z: number): number => {
 	for (let y = 110; y > 40; y--) {
 		const b = bot.blockAt({ x, y, z });
 		if (
@@ -683,7 +683,8 @@ const surfaceYAt = (bot: Bot, x: number, z: number): number => {
 			b.name !== "air" &&
 			b.name !== "cave_air" &&
 			!b.name.includes("water") &&
-			!b.name.includes("leaves")
+			!b.name.includes("leaves") &&
+			!b.name.endsWith("_log") // a trunk overhead is still "on the surface"
 		)
 			return y + 1;
 	}

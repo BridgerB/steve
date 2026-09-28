@@ -13,6 +13,7 @@ import {
 	goTo,
 	returnToSurface,
 	sleep,
+	surfaceYAt,
 	throwIfPreempted,
 } from "../../lib/bot-utils.ts";
 import { logEvent } from "../../lib/logger.ts";
@@ -383,15 +384,22 @@ export const gatherWood = async (
 	// returnToSurface climbs to the LOCAL surface when the entry is gone; pillarUp
 	// falls back to a sea-level-ish target.
 	const entry = getMineEntry(bot);
-	const surfaceY = entry ? entry.y : 70;
-	if (botPos().y < surfaceY - 8 && !findClosestLog()) {
+	const p0 = botPos();
+	const localSurface = surfaceYAt(bot, Math.floor(p0.x), Math.floor(p0.z));
+	const surfaceY = entry ? entry.y : Math.max(localSurface, 64);
+	// Trigger on being UNDERGROUND, full stop. The old gate also required "no tree
+	// in sight" — but findClosestLog sees logs through rock (exposed:false), so a
+	// bot in its own 5-deep stone hole (y58, trees at y63) or a mine at y28 "found"
+	// a tree 40 blocks away, tried to walk to it, nav_stuck → blacklist → relocate
+	// for the whole step (race 616/617/619: 3 of 4 bots parked on Gather Wood).
+	if (p0.y < localSurface - 2) {
 		let reached = await returnToSurface(bot);
 		if (!reached) {
 			// The pathfinder can't climb the staircase back up (deep mines defeat
 			// it) — so dig/pillar straight up to the surface instead. Digging the
 			// ceiling yields the cobble it re-places, so it's self-sustaining.
 			const { pillarUp } = await import("../portal/cast.ts");
-			reached = await pillarUp(bot, surfaceY - 2);
+			reached = await pillarUp(bot, localSurface); // straight up THIS column
 			bot.setControlState("sneak", false); // pillarUp leaves it on for the cast
 		}
 		if (!reached) {
