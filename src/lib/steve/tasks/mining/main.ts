@@ -1590,6 +1590,9 @@ export const mineBlock = async (
 				};
 			}
 			const dist = distance(bot.entity.position, block.position);
+			// Trace: race36 702 stood still 90s on Mine Cobblestone with no events at
+			// all ("Mined 0 stone") — log what it chose and whether it got there.
+			logEvent(mineCat(blockType), "target", `${block.name} at ${block.position.x},${block.position.y},${block.position.z} dist=${dist.toFixed(1)}`);
 			try {
 				if (dist > 4) {
 					await goTo(bot, block.position, { range: 2, timeout: 8000 });
@@ -1598,6 +1601,10 @@ export const mineBlock = async (
 				}
 			} catch {
 				logEvent(mineCat(blockType),"nav_fail", "couldn't reach block");
+				continue;
+			}
+			if (distance(bot.entity.position, block.position) > 5.5) {
+				logEvent(mineCat(blockType), "nav_short", `still ${distance(bot.entity.position, block.position).toFixed(1)} away`);
 				continue;
 			}
 		}
