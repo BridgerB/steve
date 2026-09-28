@@ -138,10 +138,30 @@ const createRemoteWriter = (url: string): Writer => {
 	};
 };
 
+// Tee: write locally (fast to tail for debugging, keeps the orchestrator's
+// milestone reads working) AND remotely (keeps the deployed dashboard live).
+const tee = (local: Writer, remote: Writer): Writer => ({
+	registerRace: (...a) => {
+		local.registerRace(...a);
+		remote.registerRace(...a);
+	},
+	writeBatch: (e, t, i) => {
+		local.writeBatch(e, t, i);
+		remote.writeBatch(e, t, i);
+	},
+	query: (sql, ...p) => local.query(sql, ...p),
+	close: () => {
+		local.close();
+		remote.close();
+	},
+});
+
 export const createWriter = (): Writer => {
 	ensureEnvLoaded();
 	const url = process.env.STEVE_INGEST_URL;
-	return url ? createRemoteWriter(url) : createLocalWriter();
+	if (!url) return createLocalWriter();
+	// STEVE_D1_TEE=1 → local + remote; otherwise remote only.
+	return process.env.STEVE_D1_TEE ? tee(createLocalWriter(), createRemoteWriter(url)) : createRemoteWriter(url);
 };
 
 // Back-compat for the orchestrator (main.ts): a local read/write handle.
