@@ -1520,6 +1520,7 @@ export const mineBlock = async (
 		if (!block && isStone && fillerDug < 14) {
 			const isFillerRock = (bb: Block | null): boolean =>
 				!!bb && /^(granite|diorite|andesite|tuff|dirt|deepslate|calcite)$/.test(bb.name);
+			let dugNow = false;
 			for (const [ci, bb] of candidates.entries()) {
 				if (ci === 3 || !isFillerRock(bb)) continue;
 				if (ci <= 1 && !dropColumnSafe(bot, bb!.position.x, bb!.position.y - 1, bb!.position.z)) continue;
@@ -1533,12 +1534,16 @@ export const mineBlock = async (
 					await bot.lookAt(offset(bb!.position, 0.5, 0.5, 0.5));
 					await safeDig(bot, bb!);
 					fillerDug++;
+					dugNow = true;
 					logEvent(mineCat(blockType), "through_filler", `${bb!.name} ${fillerDug}`);
 					await sleep(150);
 				} catch {}
 				break;
 			}
-			if (fillerDug > 0) {
+			// Only loop back if we actually opened a cell THIS iteration. `fillerDug > 0`
+			// re-looped forever once any filler had ever been dug: race36 702 stood on a
+			// grass block 90s with no events ("Mined 0 stone").
+			if (dugNow) {
 				// Step into what we opened (ahead) or drop (below) before re-scanning.
 				const p2 = bot.entity.position;
 				await walkToXZ(bot, Math.floor(p2.x) + 0.5 + dirX * 0.6, Math.floor(p2.z) + 0.5 + dirZ * 0.6, { targetDist: 0.3, maxTime: 800 }).catch(() => {});
