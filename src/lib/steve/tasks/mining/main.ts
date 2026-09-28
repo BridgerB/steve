@@ -27,6 +27,7 @@ import {
 	rememberMineEntry,
 	returnToSurface,
 	sleep,
+	spreadFromOtherBots,
 	success,
 	surfaceYAt,
 	throwIfPreempted,
@@ -1099,6 +1100,8 @@ const mineDeepOre = async (
 	// staircase ate the entire budget just getting down and early-returned before
 	// mining a single block — so one gym run (a single call) never collected any ore.
 	if (floorY(bot) > level + 2) {
+		// Don't sink the shaft on top of another bot's (see spreadFromOtherBots).
+		if (floorY(bot) >= 50) await spreadFromOtherBots(bot);
 		const startY = floorY(bot);
 		// Cap how far down one call digs: most spawns (y60-90) reach the band at `level`;
 		// only an extreme mountain (y100+) is capped so descent can't eat the whole call.
@@ -1393,6 +1396,7 @@ export const mineBlock = async (
 		startBlock = findDryTarget(64);
 	}
 	if (!startBlock && isStone) {
+		await spreadFromOtherBots(bot);
 		startBlock = await digDownToStone();
 	}
 	// Explore before giving up — walk around and search wider

@@ -3463,6 +3463,64 @@ export const exploreRandom = async (bot: Bot, dist = 30): Promise<void> => {
 };
 
 /**
+ * Other race bots (player entities that are not us) within `radius` blocks
+ * horizontally. Race bots are dropped ~24 blocks apart but converge on the same
+ * trees/shore, then each digs its shaft where it stands — race46 had all four
+ * shafts within 5 blocks at y24: 741 branch-mined straight through 743's furnace
+ * (8 raw_iron inside) and pocketed the drops, so 743 "smelted" +0 and re-mined.
+ */
+export const otherBotsNear = (bot: Bot, radius: number): Vec3[] => {
+	const me = bot.entity?.position;
+	if (!me) return [];
+	const out: Vec3[] = [];
+	for (const e of Object.values(bot.entities)) {
+		if (!e || e.type !== "player" || e === bot.entity) continue;
+		if (!e.username || e.username === bot.username) continue;
+		const p = e.position;
+		if (!p) continue;
+		if (Math.hypot(p.x - me.x, p.z - me.z) <= radius) out.push(p);
+	}
+	return out;
+};
+
+/**
+ * Before sinking a mine shaft: if another bot is within `minDist` blocks, walk
+ * `moveDist` blocks straight away from the group's centroid (surface walk) so the
+ * shafts, branch tunnels, furnaces and tables don't overlap. Best effort — a
+ * failed walk still lets the caller dig where it stands.
+ */
+export const spreadFromOtherBots = async (
+	bot: Bot,
+	minDist = 14,
+	moveDist = 22,
+): Promise<boolean> => {
+	const me = bot.entity?.position;
+	if (!me) return false;
+	const near = otherBotsNear(bot, minDist);
+	if (near.length === 0) return false;
+	const cx = near.reduce((a, p) => a + p.x, 0) / near.length;
+	const cz = near.reduce((a, p) => a + p.z, 0) / near.length;
+	let dx = me.x - cx;
+	let dz = me.z - cz;
+	let len = Math.hypot(dx, dz);
+	if (len < 0.5) {
+		const ang = Math.random() * Math.PI * 2;
+		dx = Math.cos(ang);
+		dz = Math.sin(ang);
+		len = 1;
+	}
+	const tx = Math.floor(me.x + (dx / len) * moveDist);
+	const tz = Math.floor(me.z + (dz / len) * moveDist);
+	const ty = surfaceYAt(bot, tx, tz);
+	logEvent("nav", "spread", `${near.length} bot(s) within ${minDist} — moving to ${tx},${ty},${tz}`);
+	const ok = await goTo(bot, vec3(tx + 0.5, ty, tz + 0.5), { range: 4, timeout: 25000 }).catch(() => false);
+	const after = bot.entity.position;
+	const moved = Math.hypot(after.x - me.x, after.z - me.z);
+	logEvent("nav", "spread_done", `ok=${ok} moved=${moved.toFixed(1)} still_near=${otherBotsNear(bot, minDist).length}`);
+	return moved >= minDist / 2;
+};
+
+/**
  * Move around to search for entities
  *
  * @example
