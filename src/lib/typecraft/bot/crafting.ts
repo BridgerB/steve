@@ -296,11 +296,17 @@ export const initCrafting = (bot: Bot, _options: BotOptions): void => {
 						}
 					}
 
-					// Clear any items left in the crafting grid back to inventory (including result slot 0)
-					for (let s = 0; s <= w * h; s++) {
+					// Clear any items left in the crafting grid back to inventory. GRID FIRST,
+					// result slot LAST: taking slot 0 while a stray plank still sits in the
+					// grid *crafts* that plank into a button (race35 696/699 still minted
+					// oak_buttons after the result check — from this sweep, not the take).
+					for (let s = w * h; s >= 1; s--) {
 						if (window.slots[s]) {
 							await bot.putAway(s);
 						}
+					}
+					if (window.slots[0] && window.slots[0].type === recipe.result.id) {
+						await bot.putAway(0);
 					}
 				}
 			} finally {

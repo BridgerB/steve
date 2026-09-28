@@ -802,6 +802,36 @@ export const digStaircaseUp = async (
 	// ceiling is dry and resume there. Breaking out instead left the caller failing
 	// the same spot every second (race31 681: 40× "Returning to surface for wood"
 	// in 2 min under a y49 aquifer, with 9 ingots in the pack).
+	// No filler in the pack (a fresh bot that fell into a cave under the trees):
+	// mine up to 6 wall blocks at feet/head level around us and pick up the
+	// cobble/dirt, so the CLIMB can pillar instead of the stair mode that made
+	// race35 698 wander a cave for 106s to gain 4 blocks.
+	const acquireFiller = async (fx: number, fy: number, fz: number): Promise<boolean> => {
+		let got = 0;
+		for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+			for (const dy of [0, 1]) {
+				if (got >= 6) break;
+				const b = B(fx + dx, fy + dy, fz + dz);
+				if (!solid(b) || fallable(b)) continue;
+				const n = b!.name;
+				if (!(n === "stone" || n === "dirt" || n === "deepslate" || n === "granite" || n === "andesite" || n === "diorite" || n === "tuff")) continue;
+				if (digExposesWater(bot, (b as { position: Vec3 }).position) || digExposesLava(bot, (b as { position: Vec3 }).position)) continue;
+				await digAt(b);
+				got++;
+			}
+		}
+		if (got === 0) return false;
+		try {
+			await bot.collectDrops(4, 2500, async (p) => {
+				await walkToXZ(bot, p.x, p.z, { targetDist: 0.4, maxTime: 1500 });
+			});
+		} catch {
+			/* ignore */
+		}
+		await walkToXZ(bot, fx + 0.5, fz + 0.5, { targetDist: 0.3, maxTime: 1500 }).catch(() => {});
+		return true;
+	};
+
 	let shifts = 0;
 	const wouldExpose = (b: ReturnType<typeof getBlock>): boolean =>
 		solid(b) &&
@@ -874,6 +904,9 @@ export const digStaircaseUp = async (
 		// Pillar up one: equip a block, look down, hold jump, and SPAM placeBlock under
 		// our feet until we rise — in a tight shaft the apex is brief, so a single
 		// timed place misses; spamming lands the block the instant the feet clear.
+		if (!equipFiller() && (await acquireFiller(fx, fy, fz)) && equipFiller()) {
+			logEvent("nav", "filler_acquired", `y=${fy}`, bot.entity.position);
+		}
 		if (!equipFiller()) {
 			// Out of blocks — carve a REAL stair instead (what the doc above promises):
 			// pick a side whose foot-level block is solid, clear the two above it, and
