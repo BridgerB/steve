@@ -263,6 +263,19 @@ export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 					// Pathfinder found nothing and the nudge hit a wall: jump-walk the
 					// bearing for 4s so a ledge or 1-high lip can't pin us.
 					logEvent("bucket", "long_hunt_stuck", `leg moved <3 — jump-walk dir ${dx},${dz}`);
+					// Under a tree canopy the pathfinder and the sprint both hit leaves
+					// (race43 728: leaves at head height on every side, 2 legs lost).
+					// Open the two cells ahead at feet and head level if they are leaves.
+					for (let k = 1; k <= 2; k++) {
+						for (const dy of [0, 1]) {
+							const lb = bot.blockAt(vec3(Math.floor(here.x) + dx * k, Math.floor(here.y) + dy, Math.floor(here.z) + dz * k));
+							if (lb && lb.name.includes("leaves")) {
+								try {
+									await bot.dig(lb as never, true);
+								} catch {}
+							}
+						}
+					}
 					await bot.lookAt(vec3(here.x + dx * 10, here.y, here.z + dz * 10));
 					bot.setControlState("forward", true);
 					bot.setControlState("sprint", true);

@@ -955,6 +955,15 @@ export const digStaircaseUp = async (
 		}
 		const floorRef = B(fx, fy - 1, fz);
 		if (!floorRef) break;
+		// Standing on a crafting table / furnace: a plain right-click OPENS it, so the
+		// pillar block never lands and the bot jumps in place until the deadline
+		// (race43 731: 3+ min on its own table at y33 with a full iron kit). Sneak
+		// while placing — the server then places instead of interacting.
+		const sneakPlace = /crafting_table|furnace|smoker|chest|barrel|anvil|bed|trapdoor|door|gate|lever|button/.test(floorRef.name);
+		if (sneakPlace) {
+			logEvent("nav", "pillar_sneak", `on ${floorRef.name} at y=${fy}`, bot.entity.position);
+			bot.setControlState("sneak", true);
+		}
 		await bot.lookAt(vec3(fx + 0.5, fy - 0.5, fz + 0.5), true);
 		bot.setControlState("jump", true);
 		for (let k = 0; k < 14; k++) {
@@ -976,10 +985,17 @@ export const digStaircaseUp = async (
 			if (solid(B(fx, fy, fz))) break; // a block landed under us — risen a level
 		}
 		bot.setControlState("jump", false);
+		if (sneakPlace) bot.setControlState("sneak", false);
 		await sleep(350);
 
-		if (Math.floor(bot.entity.position.y) > fy) stuck = 0;
-		else if (++stuck > 5) break;
+		// Count a level GAINED only when a block actually landed under us: the old
+		// y > fy test was satisfied by the jump itself, so the stuck counter never
+		// tripped and a failing pillar looped until the step deadline.
+		if (solid(B(fx, fy, fz)) || (bot.entity.onGround && Math.floor(bot.entity.position.y) > fy)) stuck = 0;
+		else if (++stuck > 5) {
+			logEvent("nav", "pillar_stuck", `no block landed at y=${fy} after 6 tries`, bot.entity.position);
+			break;
+		}
 	}
 	bot.clearControlStates();
 	return Math.floor(bot.entity.position.y);
