@@ -249,6 +249,7 @@ export const gatherWood = async (
 		const start = Date.now();
 		let lastDist = dist;
 		let stuckTicks = 0;
+		let climbed = false;
 
 		while (Date.now() - start < timeout) {
 			await sleep(250);
@@ -281,13 +282,26 @@ export const gatherWood = async (
 			}
 			lastDist = currentDist;
 
-			if (stuckTicks >= 10) {
+			if (stuckTicks >= 16) {
 				logEvent(
 					"wood",
 					"nav_stuck",
 					`dist=${currentDist.toFixed(1)} after ${stuckTicks} ticks`,
 				);
 				pf.stop();
+				// A tree on a ledge above us (mountain spawns): the pathfinder can't
+				// scaffold up, so race38 711 blacklisted every tree within 10 blocks,
+				// hopped away and came back, for 6 minutes. Dig/pillar up to the
+				// tree's level once, then walk again.
+				if (!climbed && target.y - botPos().y >= 2) {
+					climbed = true;
+					logEvent("wood", "climb_to_tree", `to y=${Math.floor(target.y) - 1} from y=${Math.floor(botPos().y)}`, botPos());
+					await digStaircaseUp(bot, Math.floor(target.y) - 1, Date.now() + 25000);
+					pf.setGoal(goal);
+					stuckTicks = 0;
+					lastDist = distance(botPos(), target);
+					continue;
+				}
 				// Raw walk fallback
 				await bot.lookAt(target);
 				bot.setControlState("forward", true);

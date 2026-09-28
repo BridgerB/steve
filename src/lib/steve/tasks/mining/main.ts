@@ -451,6 +451,10 @@ const branchMineOre = async (
 						const left = bot.blockAt(ore.position);
 						if (!left || !isTarget(left.name)) {
 							mined++;
+							// The climb itself took ~60s; don't let the "50s no collection"
+							// watchdog fire on the very next tick (race38 710: ore 1/8 (climbed)
+							// → drops_lost → 2-min climb-out in the same second).
+							lastCollectAt = Date.now();
 							logEvent(mineCat(blockType), "ore", `${blockType} ${mined}/${targetCount} (climbed)`);
 							return true;
 						}
@@ -1139,7 +1143,10 @@ const mineDeepOre = async (
 	// entry → climb back up by placing blocks, rather than jittering at the bottom
 	// of a dead-end shaft. returnToSurface now pillars via the pathfinder; pillarUp
 	// is the proven manual fallback (same sequence gather-wood uses).
-	if (have <= before && dug === 0) {
+	// Lost drops are a sideways-relocate case, not "boxed": race38 710 mined a
+	// climbed ore, the watchdog fired, and dug===0 sent it on a 2-min climb to the
+	// y111 mine entry before relocating at y81 (out of the band).
+	if (have <= before && dug === 0 && !lostDrops) {
 		const entry = getMineEntry(bot);
 		if (entry && floorY(bot) < entry.y - 6) {
 			logEvent(mineCat(blockType),"climb_out", `boxed at y=${floorY(bot)} → entry y=${entry.y}`);
