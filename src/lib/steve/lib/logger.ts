@@ -1,17 +1,17 @@
 /**
- * Postgres logger for Steve bot.
- * Shared db: all bots (across processes and boxes) write to one Postgres server
- * with bot_id + race_id columns. Postgres handles concurrent multi-bot writes
- * natively. Events are buffered in memory and flushed as batched inserts every
- * 500ms. The public API stays synchronous (callers push to in-memory buffers);
- * only the periodic flush is async.
+ * D1 (SQLite) logger for the Steve bot.
+ * All bots (across processes) write to one D1 database with bot_id + race_id
+ * columns. Locally this is the miniflare D1 file opened via node:sqlite (WAL +
+ * busy timeout handles concurrent multi-bot writes). Events are buffered in
+ * memory and flushed as batched inserts every 500ms. The public API stays
+ * synchronous (callers push to in-memory buffers); the periodic flush writes
+ * synchronously via node:sqlite inside a transaction.
  */
 
 import type { Bot } from "typecraft";
-import { connectDb, type Sql } from "./db.ts";
+import { connectDb, type SteveDb } from "./db.ts";
 
-let sql: Sql | null = null;
-let ready: Promise<void> = Promise.resolve();
+let db: SteveDb | null = null;
 let flushing = false;
 let raceId: string = "";
 let botId: string = "";
@@ -41,15 +41,17 @@ export const NOISY_DEBUG = new Set([
 
 // ── Write buffer ──────────────────────────────────────────────────
 type EventRow = [
-	string,
-	string,
-	string,
-	string,
-	string,
-	string | null,
-	number | null,
-	number | null,
-	number | null,
+	string, // race_id
+	string, // bot_id
+	string, // ts
+	string, // category
+	string, // event
+	string | null, // detail
+	number | null, // x
+	number | null, // y
+	number | null, // z
+	number | null, // yaw
+	number | null, // pitch
 ];
 type TickRow = [
 	string,
@@ -76,18 +78,17 @@ const invBuf: InvRow[] = [];
 
 const FLUSH_INTERVAL_MS = 500;
 
-/** Connect to Postgres and start a new logging session. */
+/** Connect to D1 and start a new logging session. */
 export const initLogger = (race: string): void => {
 	botId = process.env.MC_USERNAME ?? "Steve";
 	raceId = race;
 
-	sql = connectDb();
+	db = connectDb();
 	// Tables are owned by the Drizzle schema (src/lib/server/db/schema.ts) and
-	// created with `npm run db:push` — the logger no longer defines its own DDL.
-	ready = Promise.resolve();
+	// created with `npm run db:apply:local` — the logger just connects and writes.
 
 	flushInterval = setInterval(() => {
-		void flushBuffers();
+		flushBuffers();
 	}, FLUSH_INTERVAL_MS);
 };
 
@@ -99,108 +100,66 @@ export const registerRace = (
 	timeoutSec?: number,
 	goal?: string,
 ): void => {
-	if (!sql) return;
-	const s = sql;
-	void ready
-		.then(
-			() =>
-				s`INSERT INTO races (race_id, kind, started_at, bot_count, timeout_sec, goal)
-				  VALUES (${id}, ${kind}, ${new Date().toISOString()}, ${botCount}, ${timeoutSec ?? null}, ${goal ?? null})
-				  ON CONFLICT (race_id) DO NOTHING`,
-		)
-		.catch(() => {});
+	if (!db) return;
+	try {
+		db.prepare(
+			`INSERT INTO races (race_id, kind, started_at, bot_count, timeout_sec, goal)
+			 VALUES (?, ?, ?, ?, ?, ?)
+			 ON CONFLICT (race_id) DO NOTHING`,
+		).run(id, kind, new Date().toISOString(), botCount, timeoutSec ?? null, goal ?? null);
+	} catch {
+		/* best-effort */
+	}
 };
 
 const ts = () => new Date().toISOString();
 
-// ── Flush: write all buffered rows as batched inserts ─────────────
-const flushBuffers = async (): Promise<void> => {
-	if (!sql || flushing) return;
+// ── Flush: write all buffered rows as batched inserts (one transaction) ──
+const flushBuffers = (): void => {
+	if (!db || flushing) return;
 	if (eventBuf.length === 0 && tickBuf.length === 0 && invBuf.length === 0)
 		return;
 
 	flushing = true;
 	try {
-		await ready;
-		const s = sql;
-		if (!s) return;
-
 		const events = eventBuf.splice(0);
 		const ticks = tickBuf.splice(0);
 		const inv = invBuf.splice(0);
 
-		if (events.length) {
-			const rows = events.map(
-				([race_id, bot_id, t, category, event, detail, x, y, z, yaw, pitch]) => ({
-					race_id,
-					bot_id,
-					ts: t,
-					category,
-					event,
-					detail,
-					x,
-					y,
-					z,
-					yaw,
-					pitch,
-				}),
-			);
-			await s`INSERT INTO events ${s(rows, "race_id", "bot_id", "ts", "category", "event", "detail", "x", "y", "z", "yaw", "pitch")}`;
-		}
-		if (ticks.length) {
-			const rows = ticks.map(
-				([
-					race_id,
-					bot_id,
-					t,
-					x,
-					y,
-					z,
-					yaw,
-					pitch,
-					health,
-					food,
-					dimension,
-					block_below,
-					block_at_cursor,
-					is_in_water,
-					on_ground,
-				]) => ({
-					race_id,
-					bot_id,
-					ts: t,
-					x,
-					y,
-					z,
-					yaw,
-					pitch,
-					health,
-					food,
-					dimension,
-					block_below,
-					block_at_cursor,
-					is_in_water,
-					on_ground,
-				}),
-			);
-			await s`INSERT INTO ticks ${s(rows, "race_id", "bot_id", "ts", "x", "y", "z", "yaw", "pitch", "health", "food", "dimension", "block_below", "block_at_cursor", "is_in_water", "on_ground")}`;
-		}
-		if (inv.length) {
-			const rows = inv.map(([race_id, bot_id, t, slot, item_name, count]) => ({
-				race_id,
-				bot_id,
-				ts: t,
-				slot,
-				item_name,
-				count,
-			}));
-			await s`INSERT INTO inventory_snapshots ${s(rows, "race_id", "bot_id", "ts", "slot", "item_name", "count")}`;
+		db.exec("BEGIN");
+		try {
+			if (events.length) {
+				const stmt = db.prepare(
+					`INSERT INTO events (race_id, bot_id, ts, category, event, detail, x, y, z, yaw, pitch)
+					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				);
+				for (const r of events) stmt.run(...r);
+			}
+			if (ticks.length) {
+				const stmt = db.prepare(
+					`INSERT INTO ticks (race_id, bot_id, ts, x, y, z, yaw, pitch, health, food, dimension, block_below, block_at_cursor, is_in_water, on_ground)
+					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				);
+				for (const r of ticks) stmt.run(...r);
+			}
+			if (inv.length) {
+				const stmt = db.prepare(
+					`INSERT INTO inventory_snapshots (race_id, bot_id, ts, slot, item_name, count)
+					 VALUES (?, ?, ?, ?, ?, ?)`,
+				);
+				for (const r of inv) stmt.run(...r);
+			}
+			db.exec("COMMIT");
+		} catch (e) {
+			try {
+				db.exec("ROLLBACK");
+			} catch {
+				/* ignore */
+			}
+			throw e;
 		}
 	} catch (e) {
-		console.error(
-			"logger: flush failed:",
-			e instanceof Error ? e.message : e,
-		);
+		console.error("logger: flush failed:", e instanceof Error ? e.message : e);
 	} finally {
 		flushing = false;
 	}
@@ -213,7 +172,7 @@ export const logEvent = (
 	detail?: string,
 	pos?: { x: number; y: number; z: number },
 ): void => {
-	if (!sql) return;
+	if (!db) return;
 	// Auto-capture the bot's current pose so every event line carries position +
 	// look direction — makes "is it stuck?" obvious in the debug console.
 	const e = diagBot?.entity;
@@ -235,7 +194,7 @@ export const logEvent = (
 
 /** Log a full tick snapshot */
 const logTick = (bot: Bot): void => {
-	if (!sql || !bot.entity?.position) return;
+	if (!db || !bot.entity?.position) return;
 
 	const p = bot.entity.position;
 
@@ -522,22 +481,19 @@ export const stopLogger = (): void => {
 		clearInterval(flushInterval);
 		flushInterval = null;
 	}
-	if (!sql) return;
-	// Final flush runs while `sql` is still set, then we close the pool.
-	void (async () => {
-		try {
-			await flushBuffers();
-		} catch {
-			/* closing anyway */
-		}
-		const s = sql;
-		sql = null;
-		try {
-			await s?.end({ timeout: 5 });
-		} catch {
-			/* closing anyway */
-		}
-	})();
+	if (!db) return;
+	try {
+		flushBuffers();
+	} catch {
+		/* closing anyway */
+	}
+	const d = db;
+	db = null;
+	try {
+		d.close();
+	} catch {
+		/* closing anyway */
+	}
 };
 
 /** Get current race ID */

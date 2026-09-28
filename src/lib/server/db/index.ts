@@ -1,10 +1,9 @@
-import { drizzle } from 'drizzle-orm/postgres-js';
-import postgres from 'postgres';
+import { drizzle } from 'drizzle-orm/d1';
 import * as schema from './schema';
-import { env } from '$env/dynamic/private';
 
-if (!env.DATABASE_URL) throw new Error('DATABASE_URL is not set');
+// The dashboard (Cloudflare Worker) reads the telemetry DB via the D1 binding,
+// which is only available per-request on `platform.env.DB`. Pass it in from a
+// load function / endpoint: `getDb(platform.env.DB)`.
+export const getDb = (d1: D1Database) => drizzle(d1, { schema });
 
-const client = postgres(env.DATABASE_URL);
-
-export const db = drizzle(client, { schema });
+export { schema };

@@ -264,7 +264,7 @@ export const startBot = async (): Promise<Bot> => {
 import { type ChildProcess, spawn } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { connectDb, type Sql } from "./lib/db.ts";
+import { connectDb, type SteveDb } from "./lib/db.ts";
 
 interface InstanceResult {
 	idx: number;
@@ -302,7 +302,7 @@ const runRace = async (count: number, timeoutMs: number) => {
 
 	const allProcs: ChildProcess[] = [];
 	let winner: number | null = null;
-	let raceDb: Sql | null = null;
+	let raceDb: SteveDb | null = null;
 
 	const viewerBots: Bot[] = [];
 	const killAll = async () => {
@@ -323,7 +323,9 @@ const runRace = async (count: number, timeoutMs: number) => {
 		if (raceDb) {
 			const s = raceDb;
 			raceDb = null;
-			await s.end({ timeout: 2 }).catch(() => {});
+			try {
+				s.close();
+			} catch {}
 		}
 	};
 	process.on("SIGINT", () => {
@@ -344,7 +346,7 @@ const runRace = async (count: number, timeoutMs: number) => {
 		} catch {}
 	});
 
-	const getRaceDb = (): Sql | null => {
+	const getRaceDb = (): SteveDb | null => {
 		if (raceDb) return raceDb;
 		try {
 			raceDb = connectDb();
@@ -392,9 +394,12 @@ const runRace = async (count: number, timeoutMs: number) => {
 		for (const m of MILESTONES) {
 			if (milestonesHit.has(m.name)) continue;
 			try {
-				const rows = (await db`SELECT bot_id FROM inventory_snapshots WHERE race_id = ${RACE_ID} AND (${db.unsafe(m.query)}) LIMIT 1`) as unknown as {
-					bot_id: string;
-				}[];
+				// m.query is a trusted static condition from MILESTONES (no user input).
+				const rows = db
+					.prepare(
+						`SELECT bot_id FROM inventory_snapshots WHERE race_id = ? AND (${m.query}) LIMIT 1`,
+					)
+					.all(RACE_ID) as { bot_id: string }[];
 				const row = rows[0];
 				if (row) {
 					milestonesHit.add(m.name);
@@ -409,9 +414,11 @@ const runRace = async (count: number, timeoutMs: number) => {
 		const db = getRaceDb();
 		if (!db) return false;
 		try {
-			const rows = (await db`SELECT COUNT(*)::int AS c FROM events WHERE race_id = ${RACE_ID} AND bot_id = ${botId} AND event = 'success' AND detail LIKE 'Enter Nether:%'`) as unknown as {
-				c: number;
-			}[];
+			const rows = db
+				.prepare(
+					`SELECT COUNT(*) AS c FROM events WHERE race_id = ? AND bot_id = ? AND event = 'success' AND detail LIKE 'Enter Nether:%'`,
+				)
+				.all(RACE_ID, botId) as { c: number }[];
 			return (rows[0]?.c ?? 0) > 0;
 		} catch {
 			return false;
@@ -422,9 +429,11 @@ const runRace = async (count: number, timeoutMs: number) => {
 		const db = getRaceDb();
 		if (!db) return "no data";
 		try {
-			const rows = (await db`SELECT item_name || 'x' || MAX(count)::text AS inv FROM inventory_snapshots WHERE race_id = ${RACE_ID} AND bot_id = ${botId} GROUP BY item_name ORDER BY MAX(count) DESC LIMIT 5`) as unknown as {
-				inv: string;
-			}[];
+			const rows = db
+				.prepare(
+					`SELECT item_name || 'x' || CAST(MAX(count) AS TEXT) AS inv FROM inventory_snapshots WHERE race_id = ? AND bot_id = ? GROUP BY item_name ORDER BY MAX(count) DESC LIMIT 5`,
+				)
+				.all(RACE_ID, botId) as { inv: string }[];
 			return rows.map((r) => r.inv).join(", ") || "empty";
 		} catch {
 			return "db error";

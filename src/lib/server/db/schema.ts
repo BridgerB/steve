@@ -1,18 +1,13 @@
-import {
-	pgTable,
-	bigserial,
-	integer,
-	text,
-	doublePrecision,
-	index
-} from 'drizzle-orm/pg-core';
+import { integer, real, sqliteTable, text, index } from 'drizzle-orm/sqlite-core';
 
-// One database for everything: the steve bot writes here (logger) and the
-// dashboard reads here (race.ts). This schema is the single source of truth —
-// `npm run db:push` creates these tables in the local Postgres (docker compose).
-// Timestamps are ISO-8601 TEXT (the bot Date.parse()s them); ids are bigserial.
+// One database (Cloudflare D1 / SQLite) for everything: the steve bot writes here
+// (src/lib/steve/lib/logger.ts, via node:sqlite locally or the D1 HTTP API in
+// prod) and the dashboard reads here (src/lib/server/race.ts, via the D1 binding).
+// This schema is the single source of truth — `npm run db:generate` emits the
+// SQLite DDL into ./drizzle, applied with `wrangler d1 migrations apply`.
+// Timestamps are ISO-8601 TEXT (sort lexicographically); ids autoincrement.
 
-export const races = pgTable('races', {
+export const races = sqliteTable('races', {
 	raceId: text('race_id').primaryKey(),
 	kind: text('kind').notNull(),
 	startedAt: text('started_at').notNull(),
@@ -21,19 +16,19 @@ export const races = pgTable('races', {
 	goal: text('goal')
 });
 
-export const ticks = pgTable(
+export const ticks = sqliteTable(
 	'ticks',
 	{
-		id: bigserial('id', { mode: 'number' }).primaryKey(),
+		id: integer('id').primaryKey({ autoIncrement: true }),
 		raceId: text('race_id').notNull(),
 		botId: text('bot_id').notNull(),
 		ts: text('ts').notNull(),
-		x: doublePrecision('x'),
-		y: doublePrecision('y'),
-		z: doublePrecision('z'),
-		yaw: doublePrecision('yaw'),
-		pitch: doublePrecision('pitch'),
-		health: doublePrecision('health'),
+		x: real('x'),
+		y: real('y'),
+		z: real('z'),
+		yaw: real('yaw'),
+		pitch: real('pitch'),
+		health: real('health'),
 		food: integer('food'),
 		dimension: text('dimension'),
 		blockBelow: text('block_below'),
@@ -44,21 +39,21 @@ export const ticks = pgTable(
 	(t) => [index('idx_ticks_race_bot').on(t.raceId, t.botId)]
 );
 
-export const events = pgTable(
+export const events = sqliteTable(
 	'events',
 	{
-		id: bigserial('id', { mode: 'number' }).primaryKey(),
+		id: integer('id').primaryKey({ autoIncrement: true }),
 		raceId: text('race_id').notNull(),
 		botId: text('bot_id').notNull(),
 		ts: text('ts').notNull(),
 		category: text('category').notNull(),
 		event: text('event').notNull(),
 		detail: text('detail'),
-		x: doublePrecision('x'),
-		y: doublePrecision('y'),
-		z: doublePrecision('z'),
-		yaw: doublePrecision('yaw'),
-		pitch: doublePrecision('pitch')
+		x: real('x'),
+		y: real('y'),
+		z: real('z'),
+		yaw: real('yaw'),
+		pitch: real('pitch')
 	},
 	(t) => [
 		index('idx_events_race').on(t.raceId),
@@ -67,10 +62,10 @@ export const events = pgTable(
 	]
 );
 
-export const inventorySnapshots = pgTable(
+export const inventorySnapshots = sqliteTable(
 	'inventory_snapshots',
 	{
-		id: bigserial('id', { mode: 'number' }).primaryKey(),
+		id: integer('id').primaryKey({ autoIncrement: true }),
 		raceId: text('race_id').notNull(),
 		botId: text('bot_id').notNull(),
 		ts: text('ts').notNull(),

@@ -1,43 +1,69 @@
 /**
- * Shared Postgres connection for Steve.
+ * Bot-side connection to the telemetry DB (Cloudflare D1).
  *
- * All bots (and the read-only tools: race-summary, MCP replay) talk to one
- * shared Postgres server so the eye-of-steve dashboard can read live race data
- * from anywhere — not just the box the bots run on.
+ * The Node bot process cannot use the Worker's D1 binding, so:
+ *  - LOCAL dev: open the miniflare-managed local D1 SQLite file directly with
+ *    Node's built-in `node:sqlite` (same pattern as the gym's data/gym.db). This
+ *    is the exact file the local dashboard/Worker reads, so both see the same
+ *    data. Create it first with `npm run db:apply:local`.
+ *  - REMOTE (prod): STEVE_D1_REMOTE=1 → the D1 HTTP API (added in the deploy
+ *    phase). Not wired here yet.
  *
- * Connection string comes from DATABASE_URL (see .env / .env.example). It is a
- * secret and must never be committed.
+ * All bots (and the read-only tools) share one DB via bot_id + race_id columns.
+ * SQLite serialises concurrent writers via WAL + a busy timeout.
  */
 
-import postgres from "postgres";
+import { DatabaseSync } from "node:sqlite";
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
 
-export type Sql = ReturnType<typeof postgres>;
+export type SteveDb = DatabaseSync;
 
-/**
- * Node does not auto-load `.env` (the project's .envrc is `use flake`, not
- * dotenv), so load it here on demand. Idempotent and safe if the file is absent
- * or the var is already set in the environment.
- */
+/** Node does not auto-load `.env`; do it on demand for MC_* / STEVE_* vars. */
 const ensureEnvLoaded = (): void => {
-	if (process.env.DATABASE_URL) return;
+	if (process.env.MC_HOST || process.env.STEVE_D1_FILE) return;
 	try {
 		process.loadEnvFile();
 	} catch {
-		/* no .env file — rely on the ambient environment */
+		/* no .env — rely on the ambient environment */
 	}
 };
 
-export const connectDb = (opts: Record<string, unknown> = {}): Sql => {
-	ensureEnvLoaded();
-	const url = process.env.DATABASE_URL;
-	if (!url)
+/** Locate the miniflare local D1 SQLite file (the 64-hex-named one, not metadata.sqlite). */
+const findLocalD1File = (): string => {
+	if (process.env.STEVE_D1_FILE) return process.env.STEVE_D1_FILE;
+	const dir = join(
+		process.cwd(),
+		".wrangler",
+		"state",
+		"v3",
+		"d1",
+		"miniflare-D1DatabaseObject",
+	);
+	let entries: string[] = [];
+	try {
+		entries = readdirSync(dir);
+	} catch {
 		throw new Error(
-			"DATABASE_URL is not set (see .env.example) — cannot connect to Postgres",
+			`Local D1 not found at ${dir}. Run \`npm run db:apply:local\` first (or set STEVE_D1_FILE).`,
 		);
-	// Cap the pool small: the Postgres server is shared and has limited slots, and
-	// dev-server restarts can leave old pools lingering until they time out.
-	return postgres(url, { onnotice: () => {}, max: 3, ...opts });
+	}
+	const dbFile = entries.find((f) => /^[0-9a-f]{64}\.sqlite$/.test(f));
+	if (!dbFile)
+		throw new Error(
+			`No D1 database file in ${dir}. Run \`npm run db:apply:local\` first.`,
+		);
+	return join(dir, dbFile);
 };
 
-// Schema lives in Drizzle (src/lib/server/db/schema.ts) and is created with
-// `npm run db:push`. The logger/readers just connect and use those tables.
+export const connectDb = (): SteveDb => {
+	ensureEnvLoaded();
+	const file = findLocalD1File();
+	const db = new DatabaseSync(file);
+	// WAL + a generous busy timeout so the orchestrator + N bot processes can
+	// read/write the same file concurrently without SQLITE_BUSY errors.
+	db.exec("PRAGMA journal_mode = WAL");
+	db.exec("PRAGMA busy_timeout = 8000");
+	db.exec("PRAGMA synchronous = NORMAL");
+	return db;
+};
