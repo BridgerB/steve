@@ -3474,11 +3474,16 @@ export const nudgeThrough = async (bot: Bot, dx: number, dz: number, ms = 3000):
 	const fx = Math.floor(here.x);
 	const fy = Math.floor(here.y);
 	const fz = Math.floor(here.z);
+	// Soft blocks only: a dirt/grass lip at the rim of a dug pit pins the bot just
+	// like leaves do (race53 769: three nudges at a mountain-top pit moved ~1 block
+	// each because the wall ahead was dirt), and these dig in well under a second
+	// by hand. Stone is left alone — that is the pathfinder's job.
+	const soft = /leaves|dirt|grass_block|podzol|mycelium|sand|gravel|snow|moss|clay/;
 	for (let k = 0; k <= 2; k++) {
 		for (const dy of [0, 1, 2]) {
 			if (k === 0 && dy < 2) continue;
 			const lb = bot.blockAt(vec3(fx + dx * k, fy + dy, fz + dz * k));
-			if (lb && lb.name.includes("leaves")) {
+			if (lb && soft.test(lb.name)) {
 				try {
 					await bot.dig(lb as never, true);
 				} catch {}
