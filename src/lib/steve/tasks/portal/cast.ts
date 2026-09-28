@@ -764,6 +764,10 @@ const fillBucket = async (
  * solid, top open), pours lava in, then water directly above (flows down onto the
  * lava → obsidian). Returns true once `pos` is obsidian.
  */
+/** The cast site prepareCastSite cleared (per bot): the frame must be built
+ *  exactly there, or the 294-cell chamber was dug around the wrong volume. */
+const siteAnchor = new WeakMap<Bot, Vec3>();
+
 export const castObsidianAt = async (
 	bot: Bot,
 	pos: Vec3,
@@ -1661,6 +1665,7 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 		"site_anchor",
 		`${bx},${by},${bz} lava=${lava.x},${lava.y},${lava.z}`,
 	);
+	siteAnchor.set(bot, vec3(bx, by, bz));
 
 	// 3. Clear a flat chamber (frame box + scaffold) and lay a solid floor.
 	//    Never dig lava or a block touching it — that would flood/kill the bot.
@@ -1802,7 +1807,20 @@ export const buildPortalByCasting = async (bot: Bot): Promise<StepResult> => {
 	// pool; casting the frame there floods every cup and sticks at 0/10 (measured). Step back
 	// (away from the nearest lava) until no lava is within the frame footprint — the pool
 	// stays close enough that fillBucket walks back to refill each block.
-	for (let tries = 0; tries < 8 && findFluidSource(bot, "lava", 6); tries++) {
+	// The frame goes at the anchor prepareCastSite cleared the chamber around —
+	// the anchor is already 5 from the pool and the chamber's lava-touching cells
+	// stay solid. The step-back below moved race55 778 four blocks off its
+	// anchor (the pool was 5 away, inside the 6-block test), so the frame's
+	// columns sat in solid rock outside the cleared box and every cast attempt
+	// pillared into rock and dropped back without a pour.
+	const anchor = siteAnchor.get(bot);
+	if (anchor && distance(bot.entity.position, offset(anchor, 0.5, 0, 0.5)) <= 12) {
+		await goTo(bot, anchor, { range: 0.5, timeout: 15000 }).catch(() => {});
+		await walkToXZ(bot, anchor.x + 0.5, anchor.z + 0.5, { targetDist: 0.3, maxTime: 2000 });
+	}
+	const onAnchor = !!anchor && distance(bot.entity.position, offset(anchor, 0.5, 0, 0.5)) <= 1.5;
+	logEvent("cast", "frame_origin", onAnchor ? `anchor ${anchor!.x},${anchor!.y},${anchor!.z}` : `no anchor (${anchor ? "far" : "none"}) — using the bot's position`);
+	for (let tries = 0; !onAnchor && tries < 8 && findFluidSource(bot, "lava", 6); tries++) {
 		const p = bot.entity.position;
 		const near = findFluidSource(bot, "lava", 12);
 		const dx = near ? Math.sign(p.x - near.x) || 1 : 1;
@@ -1819,9 +1837,9 @@ export const buildPortalByCasting = async (bot: Bot): Promise<StepResult> => {
 	// recessed in the floor (which would occlude the dig). Columns x:0..3, rows
 	// y:0..4, perimeter without corners. Each block's cup is built per-block by
 	// castObsidianAt as the bot pillars up — no upfront wall.
-	const bx = Math.floor(bot.entity.position.x);
-	const by = Math.floor(bot.entity.position.y);
-	const bz = Math.floor(bot.entity.position.z);
+	const bx = onAnchor ? anchor!.x : Math.floor(bot.entity.position.x);
+	const by = onAnchor ? anchor!.y : Math.floor(bot.entity.position.y);
+	const bz = onAnchor ? anchor!.z : Math.floor(bot.entity.position.z);
 	const at = (dx: number, dy: number): Vec3 => vec3(bx + dx, by + dy, bz);
 
 	const frame: Vec3[] = [];
