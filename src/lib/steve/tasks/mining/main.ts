@@ -385,7 +385,7 @@ const branchMineOre = async (
 	level: number,
 	dropItem: string,
 	deadline: number,
-): Promise<{ mined: number; dug: number; lostDrops: boolean; noOre?: boolean }> => {
+): Promise<{ mined: number; dug: number; lostDrops: boolean; noOre?: boolean; fell?: number }> => {
 	let mined = 0;
 	let dug = 0;
 	let dir = pickDigDir(bot);
@@ -623,6 +623,12 @@ const branchMineOre = async (
 
 	let turns = 0;
 	let forward = 0;
+	// The lowest level this call LEGITIMATELY dug to (start, lowered by digDownOne).
+	// An ore_climb tunnel or a pathfinder goTo can open onto a cave and drop the bot
+	// 20-40 levels (race51 760/761, race52 767: y35 → y-12 in 6s), after which it
+	// strip-mines deepslate far below the band with a stone pick. Detect the fall
+	// and hand back to the caller to climb back to the band.
+	let legitY = floorY(bot);
 	// Detect ore whose drops we can't collect (broken over lava — the count rises but
 	// raw_iron never lands in the pack). Without this the loop chases scattered cavern
 	// ore for the full deadline, collecting nothing, and the bot never relocates.
@@ -633,6 +639,11 @@ const branchMineOre = async (
 		// take over cleanly instead of this dig loop fighting it underwater.
 		if (isInWaterTrap(bot)) return { mined, dug, lostDrops: false };
 		if ((bot.health ?? 20) < 7) return { mined, dug, lostDrops: false };
+		if (level > 0 && floorY(bot) < legitY - 6) {
+			logEvent(mineCat(blockType), "fell", `y=${floorY(bot)} below band y=${legitY} — climbing back`);
+			bot.clearControlStates();
+			return { mined, dug, lostDrops: false, fell: legitY };
+		}
 		// Lava two blocks away is already too close for a bot with no buoyancy: the
 		// in-lava guard fires too late to swim out (race 647 died in 4s at y21 after
 		// 90s of tunnelling). Back off now and let the caller relocate sideways.
@@ -693,6 +704,7 @@ const branchMineOre = async (
 			if (++turns >= 4) {
 				if (await digDownOne()) {
 					turns = 0;
+					legitY = Math.min(legitY, floorY(bot));
 				} else {
 					return { mined, dug, lostDrops: false };
 				}
@@ -1140,7 +1152,7 @@ const mineDeepOre = async (
 
 	// At the band — branch-mine until enough of the DROP is actually in the pack.
 	const before = invCount(bot, dropItem);
-	const { dug, lostDrops, noOre } = await branchMineOre(
+	const { dug, lostDrops, noOre, fell } = await branchMineOre(
 		bot,
 		blockType,
 		isTarget,
@@ -1153,6 +1165,21 @@ const mineDeepOre = async (
 	if (have >= targetCount) {
 		mineStuckState.delete(bot);
 		return success(`Collected ${have} ${dropItem}`);
+	}
+	// Fell out of the band into a cave: climb straight back to the level we were
+	// mining at (staircase, then the manual pillar) instead of mining deepslate
+	// 30 levels down or climbing 100 levels to the surface entry.
+	if (fell !== undefined) {
+		const y0 = floorY(bot);
+		await digStaircaseUp(bot, fell, Date.now() + 45000).catch(() => {});
+		if (floorY(bot) < fell - 6) {
+			const { pillarUp } = await import("../portal/cast.ts");
+			await pillarUp(bot, fell).catch(() => {});
+			bot.setControlState("sneak", false); // pillarUp leaves it on
+		}
+		const ok = floorY(bot) >= fell - 6;
+		logEvent(mineCat(blockType), "fell_climb", `y=${y0} → ${floorY(bot)} band y=${fell} ok=${ok}`);
+		return { success: ok, message: `Fell to y=${y0} — climbed back to y=${floorY(bot)}` };
 	}
 	// Fully boxed in (no new drops AND no tunnel cut) and stuck well below the mine
 	// entry → climb back up by placing blocks, rather than jittering at the bottom
