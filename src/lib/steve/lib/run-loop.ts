@@ -16,7 +16,7 @@
  */
 
 import type { Bot } from "typecraft";
-import { exploreRandom, rememberResource } from "./bot-utils.ts";
+import { beginTaskEpoch, exploreRandom, rememberResource, taskScope } from "./bot-utils.ts";
 import { logEvent } from "./logger.ts";
 import { type Channel, CLOSED } from "./channel.ts";
 import { getPhase, isDragonDead } from "../state.ts";
@@ -328,9 +328,12 @@ export const reduce = (
 				cmds.push(
 					{ type: "console", msg: `Starting: ${nextStep.name}` },
 					{ type: "event", category: "step", event: "start", detail: nextStep.name },
-					{ type: "runStep", stepId: nextStep.id, state, epoch: rs.epoch, timeoutMs: stepTimeoutMs(nextStep.id) },
+					// Fresh epoch for EVERY dispatch, so a previous step that timed out (its
+					// promise lost the race but the task itself kept running) sees the live
+					// epoch move on and aborts at its next primitive (see taskScope).
+					{ type: "runStep", stepId: nextStep.id, state, epoch: rs.epoch + 1, timeoutMs: stepTimeoutMs(nextStep.id) },
 				);
-				return { state: { ...rs, status: "running", currentStepId, completed }, commands: cmds };
+				return { state: { ...rs, epoch: rs.epoch + 1, status: "running", currentStepId, completed }, commands: cmds };
 			}
 			return { state: { ...rs, status: "idle", currentStepId, completed }, commands: cmds };
 		}
@@ -357,7 +360,11 @@ const runCommand = (bot: Bot, ch: Channel<Event>, c: Command): void => {
 					c.timeoutMs,
 				),
 			);
-			Promise.race([step.execute(bot, c.state), timeout])
+			// Run under taskScope with this epoch and mark it live: a step displaced by a
+			// preempt/timeout/death is unwound by throwIfPreempted() inside the shared
+			// primitives instead of running on beside its replacement.
+			beginTaskEpoch(bot, c.epoch);
+			Promise.race([taskScope.run({ bot, epoch: c.epoch }, () => step.execute(bot, c.state)), timeout])
 				.then((result) => ch.put({ type: "stepDone", epoch: c.epoch, result }))
 				.catch((err) =>
 					ch.put({ type: "stepError", epoch: c.epoch, message: err instanceof Error ? err.message : String(err) }),

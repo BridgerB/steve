@@ -21,10 +21,34 @@ import {
 	vec3,
 	windowItems,
 } from "typecraft";
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { StepResult } from "../types.ts";
 import { logEvent } from "./logger.ts";
 
 type Block = TypecraftBlock & { hardness: number | null };
+
+// ── Task cancellation ────────────────────────────────────────────────
+// The run-loop starts steps fire-and-forget and only IGNORES a displaced step's
+// eventual result (stale epoch) — it never stopped the step itself. A preempted
+// or timed-out Gather Wood kept running alongside its replacement for minutes:
+// every event doubled, both instances dug the same log, the second dig hit air
+// (→ "dug but didn't collect" ×12, race 588). Steps run inside `taskScope` with
+// their epoch; the shared primitives below (sleep/goTo/moveCloser) throw the
+// moment the bot's live epoch has moved on, unwinding the stale task at its
+// next await. Code outside a step (the safety guard) has no scope → never aborted.
+export const taskScope = new AsyncLocalStorage<{ bot: Bot; epoch: number }>();
+const liveEpoch = new WeakMap<Bot, number>();
+export const beginTaskEpoch = (bot: Bot, epoch: number): void => {
+	liveEpoch.set(bot, epoch);
+};
+export const throwIfPreempted = (): void => {
+	const s = taskScope.getStore();
+	if (!s) return;
+	const live = liveEpoch.get(s.bot);
+	if (live !== undefined && live !== s.epoch) {
+		throw new Error(`preempted (epoch ${s.epoch} → ${live})`);
+	}
+};
 
 /** Get block at position with position and hardness attached */
 export const getBlock = (bot: Bot, pos: Vec3): Block | null => {
@@ -175,6 +199,7 @@ export const goTo = async (
 	options: GoToOptions = {},
 ): Promise<boolean> => {
 	const { range = 2, timeout = 10000 } = options;
+	throwIfPreempted();
 
 	const dist = distance(bot.entity.position, pos);
 	if (dist <= range) return true;
@@ -245,6 +270,7 @@ export const moveCloser = async (
 	target: Vec3,
 	options: MoveCloserOptions = {},
 ): Promise<void> => {
+	throwIfPreempted();
 	const {
 		maxDistance = 4,
 		speedFactor = 150,
@@ -593,6 +619,10 @@ interface BotMemory {
 	// When the bot first entered its current stretch of water — used to bound how far
 	// it may wade before we force an escape back, so it never strands mid-lake.
 	waterEnterAt: number;
+	// Committed swim heading (unit vector) for an open-water escape with no dry
+	// land in the near scan. Kept across escape attempts until the bot is out.
+	waterHeading: { x: number; z: number } | null;
+	waterHeadingAt: number;
 }
 const botMemory = new WeakMap<Bot, BotMemory>();
 
@@ -607,6 +637,8 @@ export const getMemory = (bot: Bot): BotMemory => {
 			waterProgressPos: null,
 			waterProgressAt: 0,
 			waterEnterAt: 0,
+			waterHeading: null,
+			waterHeadingAt: 0,
 		};
 		botMemory.set(bot, mem);
 	}
@@ -1810,6 +1842,7 @@ export const attackUntilDead = async (
  * ```
  */
 export const sleep = (ms: number): Promise<void> => {
+	throwIfPreempted();
 	return new Promise((resolve) => setTimeout(resolve, ms));
 };
 
@@ -1945,6 +1978,9 @@ export const needsWaterEscape = (bot: Bot): boolean => {
 	if (!isInWaterTrap(bot)) {
 		mem.waterProgressPos = null;
 		mem.waterEnterAt = 0;
+		// waterHeading is NOT cleared here: the trap signal blips off on a bubble
+		// column / a bob / mid-fall, and re-rolling the heading each time is what
+		// kept ocean-spawned bots circling. It's cleared on a confirmed escape.
 		return false;
 	}
 	if (bot.entity?.isInWater) return true; // submerged → drowning risk, escape now
@@ -1979,6 +2015,9 @@ const DRY_PLANTS = new Set([
 	"snow_layer",
 	"vine",
 ]);
+/** Air (or a land plant) — NOT water. The headroom test for a real dry target. */
+const isDryAir = (b: ReturnType<typeof getBlock>): boolean =>
+	!b || b.name === "air" || b.name === "cave_air" || DRY_PLANTS.has(b.name);
 
 /**
  * PRIMARY water escape — winner of the /debug/swim strategy bake-off
@@ -2071,7 +2110,10 @@ export const escapeWater = (
 	if (running) return running;
 	const p = escapeWaterInner(bot, lastSafe, opts)
 		.then(async (ok) => {
-			if (ok) await settleInland(bot);
+			if (ok) {
+				getMemory(bot).waterHeading = null;
+				await settleInland(bot);
+			}
 			return ok;
 		})
 		.finally(() => escapeInFlight.delete(bot));
@@ -2177,9 +2219,13 @@ const escapeWaterInner = async (
 				// out to sea.)
 				for (let y = cy + 8; y >= cy - 6; y--) {
 					const g = getBlock(bot, vec3(x, y, z));
-					if (!isStandableGround(g)) continue;
-					if (!isPassableBlock(getBlock(bot, vec3(x, y + 1, z)))) break;
-					if (!isPassableBlock(getBlock(bot, vec3(x, y + 2, z)))) break;
+					if (!isStandableGround(g) || g?.name.includes("water")) continue;
+					// DRY air above — water is "passable" too, and counting it made a
+					// seafloor bump the nearest "dry target": every ocean-spawned bot
+					// swam back to the same submerged bump and pocket-dug it for minutes
+					// (race 592-595) instead of heading for shore.
+					if (!isDryAir(getBlock(bot, vec3(x, y + 1, z)))) break;
+					if (!isDryAir(getBlock(bot, vec3(x, y + 2, z)))) break;
 					if (getBlock(bot, vec3(x, y - 1, z))?.name.includes("water")) break;
 					// Rank by horizontal distance PLUS how far we'd have to climb —
 					// otherwise an equidistant 2-block-high ledge can beat the 1-block
@@ -2266,7 +2312,59 @@ const escapeWaterInner = async (
 		return best;
 	};
 
-	let dirIdx = 0;
+	// No dry land inside dryTargets' 16-block scan (open ocean / big lake): pick ONE
+	// heading toward the nearest land in a wide coarse scan and keep it for the
+	// whole escape — and across escapes (memory) — so successive 35s attempts keep
+	// swimming the same way. Probing the 8 compass points 3 blocks out in turn
+	// netted zero displacement: race 590 sat 4 min at one spot in an ocean spawn
+	// while the shore was ~60 blocks south.
+	const farLandHeading = (): { x: number; z: number } => {
+		const mem = getMemory(bot);
+		// Re-scan once per escape attempt (we may have swum into range of land) —
+		// but if nothing is loaded/visible, KEEP the existing heading rather than
+		// re-rolling: the random heading is only useful if it's held for minutes.
+		if (mem.waterHeading && Date.now() - mem.waterHeadingAt < 5000) return mem.waterHeading;
+		const e = bot.entity?.position;
+		const cx = Math.floor(e?.x ?? 0);
+		const cy = Math.floor(e?.y ?? 64);
+		const cz = Math.floor(e?.z ?? 0);
+		let best: { dx: number; dz: number; d: number } | null = null;
+		for (let dx = -96; dx <= 96; dx += 3) {
+			for (let dz = -96; dz <= 96; dz += 3) {
+				if (Math.abs(dx) < 4 && Math.abs(dz) < 4) continue;
+				for (let y = cy + 8; y >= cy - 2; y--) {
+					const g = getBlock(bot, vec3(cx + dx, y, cz + dz));
+					if (!g) break; // unloaded column
+					if (!isStandableGround(g) || g.name.includes("water")) continue;
+					const a1 = getBlock(bot, vec3(cx + dx, y + 1, cz + dz));
+					const a2 = getBlock(bot, vec3(cx + dx, y + 2, cz + dz));
+					if (!a1 || a1.name.includes("water") || !isPassableBlock(a1)) break;
+					if (a2 && (a2.name.includes("water") || !isPassableBlock(a2))) break;
+					const d = Math.hypot(dx, dz);
+					if (!best || d < best.d) best = { dx, dz, d };
+					break;
+				}
+			}
+		}
+		mem.waterHeadingAt = Date.now();
+		if (!best && mem.waterHeading) return mem.waterHeading;
+		const h = best
+			? { x: best.dx / best.d, z: best.dz / best.d }
+			: (() => {
+					const a = Math.random() * Math.PI * 2;
+					return { x: Math.cos(a), z: Math.sin(a) };
+				})();
+		mem.waterHeading = h;
+		logEvent(
+			"nav",
+			"water_heading",
+			best ? `land ${best.d.toFixed(0)} blocks away at ${cx + best.dx},${cz + best.dz}` : "no land within 96 — random heading",
+			e,
+		);
+		return h;
+	};
+	const headingSign = (v: number): number => (Math.abs(v) >= 0.38 ? Math.sign(v) : 0);
+
 	let locked: Vec3 | null = null;
 	let lockUntil = 0;
 	// "Stuck" is tracked on a WALL CLOCK against an ABSOLUTE anchor, NOT per-target.
@@ -2351,8 +2449,8 @@ const escapeWaterInner = async (
 			if (t) {
 				locked = vec3(Math.floor(t.x), Math.floor(t.y), Math.floor(t.z));
 			} else {
-				const [dx, dz] = DIRS[dirIdx++ % DIRS.length];
-				locked = vec3(fx + dx * 3, fy, fz + dz * 3);
+				const h = farLandHeading();
+				locked = vec3(fx + Math.round(h.x * 6), fy, fz + Math.round(h.z * 6));
 			}
 			lockUntil = Date.now() + 3000;
 		}
@@ -2394,8 +2492,9 @@ const escapeWaterInner = async (
 			// it just slow open water? Commit toward the exit (nearest dry target, else
 			// the retreat); in a flooded tunnel that's the dead-end-free direction.
 			const exit = dryTargets()[0] ?? lastSafe;
-			const ux = exit ? Math.sign(exit.x - fx) : (escapeDir?.[0] ?? 0);
-			const uz = exit ? Math.sign(exit.z - fz) : (escapeDir?.[1] ?? 0);
+			const far = exit ? null : farLandHeading();
+			const ux = exit ? Math.sign(exit.x - fx) : far ? headingSign(far.x) : (escapeDir?.[0] ?? 0);
+			const uz = exit ? Math.sign(exit.z - fz) : far ? headingSign(far.z) : (escapeDir?.[1] ?? 0);
 			const walled =
 				diggable(B(fx + ux, fy, fz + uz)) ||
 				diggable(B(fx + ux, fy + 1, fz + uz));
@@ -2651,12 +2750,16 @@ export const attachSafety = (bot: Bot): void => {
 		// Remember the last known-safe DRY footing to retreat toward — used by both
 		// the lava and drowning escapes. Must exclude water, or the drowning retreat
 		// target is itself underwater.
+		// !isInWaterTrap: standing on a seafloor bump with the head just above the
+		// surface passed the old test, so lastSafe became a submerged spot the
+		// escape then swam BACK to (race 592-595 ocean spawn).
 		if (
 			!escaping &&
 			!drowning &&
 			bot.entity.onGround &&
 			!lavaAround(bot) &&
-			!headUnderwater
+			!headUnderwater &&
+			!isInWaterTrap(bot)
 		) {
 			lastSafe = vec3(Math.floor(hp.x), Math.floor(hp.y), Math.floor(hp.z));
 		}
@@ -2730,9 +2833,13 @@ export const attachSafety = (bot: Bot): void => {
 			} catch {
 				/* pathfinder may be idle */
 			}
-			escapeWater(bot, lastSafe, { final: finalBackup }).finally(() => {
-				drowning = false;
-			});
+			// .catch: the shared escape promise rejects if the step that started it is
+			// preempted (taskScope) — must not surface as an unhandled rejection.
+			escapeWater(bot, lastSafe, { final: finalBackup })
+				.catch(() => {})
+				.finally(() => {
+					drowning = false;
+				});
 		}
 	}, 100);
 	bot.on("end", () => clearInterval(guard));

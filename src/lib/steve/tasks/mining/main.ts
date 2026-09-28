@@ -24,6 +24,7 @@ import {
 	returnToSurface,
 	sleep,
 	success,
+	throwIfPreempted,
 } from "../../lib/bot-utils.ts";
 import { logEvent } from "../../lib/logger.ts";
 import type { Block, StepResult } from "../../types.ts";
@@ -34,6 +35,7 @@ const safeDig = async (
 	block: Block,
 	timeout = 8000,
 ): Promise<void> => {
+	throwIfPreempted();
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	try {
 		await Promise.race([
@@ -1151,6 +1153,9 @@ export const mineBlock = async (
 		mined < targetCount * 3 &&
 		Date.now() < deadline
 	) {
+		// Displaced by a preempt/timeout/death → unwind here even if a catch below
+		// swallowed the primitive's throw on the previous iteration.
+		throwIfPreempted();
 		// In the water trap → bail so escape_water (priority 0) takes over cleanly.
 		if (isInWaterTrap(bot))
 			return { success: false, message: "in water — yielding to escape_water" };

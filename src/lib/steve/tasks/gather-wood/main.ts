@@ -13,6 +13,7 @@ import {
 	goTo,
 	returnToSurface,
 	sleep,
+	throwIfPreempted,
 } from "../../lib/bot-utils.ts";
 import { logEvent } from "../../lib/logger.ts";
 import type { StepResult } from "../../types.ts";
@@ -125,6 +126,48 @@ export const gatherWood = async (
 	// Key by X,Z only — blacklist entire tree column, not individual blocks
 	const posKey = (p: Vec3) => `${Math.floor(p.x)},${Math.floor(p.z)}`;
 
+	// A tree whose trunk stands IN water (base block or its 4 neighbours are water)
+	// can only be chopped from the pond — the bot walks in, the drown guard preempts,
+	// it escapes, walks back in (race 582: 5 preempts on one shoreline oak). Skip it.
+	const trunkInWater = (p: Vec3): boolean => {
+		let y = Math.floor(p.y);
+		const x = Math.floor(p.x);
+		const z = Math.floor(p.z);
+		// Walk down the log column to the trunk base.
+		while (y > 0 && isLogName(getBlock(bot, vec3(x, y - 1, z))?.name ?? "")) y--;
+		const cells: [number, number, number][] = [
+			[x, y - 1, z],
+			[x + 1, y, z],
+			[x - 1, y, z],
+			[x, y, z + 1],
+			[x, y, z - 1],
+			[x + 1, y - 1, z],
+			[x - 1, y - 1, z],
+			[x, y - 1, z + 1],
+			[x, y - 1, z - 1],
+		];
+		return cells.some(([cx, cy, cz]) =>
+			getBlock(bot, vec3(cx, cy, cz))?.name.includes("water"),
+		);
+	};
+
+	// How far a log sits above the ground under it (logs and leaves don't count as
+	// ground). Standing on that ground the bot can dig up to ~6 blocks up its own
+	// column; anything higher needs pillaring, which the wood stage can't do.
+	const logHeightAboveGround = (p: Vec3): number => {
+		const x = Math.floor(p.x);
+		const z = Math.floor(p.z);
+		const top = Math.floor(p.y);
+		for (let y = top - 1; y >= top - 12; y--) {
+			const b = getBlock(bot, vec3(x, y, z));
+			if (!b) return 99;
+			const n = b.name;
+			if (n === "air" || n === "cave_air" || isLogName(n) || isLeafName(n)) continue;
+			return top - y;
+		}
+		return 99;
+	};
+
 	// Find the closest reachable log block
 	const findClosestLog = (): { pos: Vec3; name: string } | null => {
 		for (const radius of [16, 32, 48, 64]) {
@@ -144,7 +187,17 @@ export const gatherWood = async (
 
 			const reachable = positions
 				.filter((p) => !unreachable.has(posKey(p)))
-				.sort((a, b) => distance(botPos(), a) - distance(botPos(), b));
+				.filter((p) => !trunkInWater(p))
+				.filter((p) => logHeightAboveGround(p) <= 6)
+				// Nearest first, but a log high in a canopy costs extra: acacia/jungle
+				// branch logs 5+ blocks up were picked by raw 3D distance, the walk-to
+				// failed (nothing to stand on), and the bot burned 11s + a blacklist per
+				// log before hopping away (race 586: 3 min on one savanna tree).
+				.sort(
+					(a, b) =>
+						distance(botPos(), a) + logHeightAboveGround(a) * 2 -
+						(distance(botPos(), b) + logHeightAboveGround(b) * 2),
+				);
 
 			for (const pos of reachable) {
 				const block = getBlock(bot, pos);
@@ -278,6 +331,7 @@ export const gatherWood = async (
 
 		logEvent("wood", "dig_start", `${block.name} dist=${dist.toFixed(1)}`, pos);
 		const logsBefore = countLogs();
+		throwIfPreempted();
 
 		try {
 			await Promise.race([
@@ -375,6 +429,7 @@ export const gatherWood = async (
 		blocksDug < targetCount * 3
 	) {
 		attempts++;
+		throwIfPreempted(); // displaced by a preempt/timeout/death → unwind
 
 		const target = findClosestLog();
 		if (!target) {

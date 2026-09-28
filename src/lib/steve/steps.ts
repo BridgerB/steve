@@ -58,6 +58,12 @@ export const steps: readonly Step[] = [
 		isComplete: (s) =>
 			s.inventory.logs >= 5 ||
 			s.inventory.planks >= 20 ||
+			// With a table already placed, 12 planks covers the whole early tool chain
+			// (sticks 2 + wooden pick 3 + spare table 4) — the same reserve Craft
+			// Planks targets. Demanding 20 sent a bot with 16 planks back to a savanna
+			// tree whose only logs left were canopy branches it couldn't reach (race
+			// 586: 3+ min blacklisting logs one at a time while holding a full kit).
+			(s.equipment.hasCraftingTable && s.inventory.planks >= 12) ||
 			getPickaxeTier(s.equipment.pickaxe) >= 3 ||
 			// Past the wood phase (iron in hand / a furnace built) → stop re-gathering,
 			// BUT only while we can still actually craft: a reachable crafting table, or
