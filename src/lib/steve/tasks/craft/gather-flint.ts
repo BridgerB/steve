@@ -19,6 +19,7 @@ import {
 	findBlocks,
 	findItem,
 	getBlock,
+	getRememberedResource,
 	goTo,
 	moveCloser,
 	throwIfPreempted,
@@ -285,6 +286,15 @@ export const gatherFlint = async (
 
 		// Nothing visible → keep roaming to fresh terrain until the deadline; never
 		// give up early while budget remains (a second pocket is usually reachable).
+		// Remembered gravel (blockSeen while mining/caving) before a blind roam:
+		// it is usually in the shaft or cave the bot just came out of.
+		if (!seed) {
+			const rem = getRememberedResource(bot, "gravel", true);
+			if (rem && !doneSeeds.has(key(vec3(rem.x, rem.y, rem.z))) && distance(bot.entity.position, vec3(rem.x, rem.y, rem.z)) <= 48) {
+				seed = vec3(rem.x, rem.y, rem.z);
+				logEvent("flint", "seed_memory", key(seed), seed);
+			}
+		}
 		if (!seed) {
 			seed = (await roam(bot, doneSeeds)) ?? undefined;
 			if (!seed) continue;
