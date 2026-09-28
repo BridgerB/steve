@@ -11,7 +11,7 @@
  */
 
 import type { Bot } from "typecraft";
-import { createBot as createMcBot, createWebViewer } from "typecraft";
+import { createBot as createMcBot, createWebViewer, forwardBotToRelay } from "typecraft";
 import {
 	attachSafety,
 	equipBestTool,
@@ -97,9 +97,20 @@ export const startBot = async (): Promise<Bot> => {
 		return origDig(...args);
 	}) as typeof bot.dig;
 
-	// Start web viewer if port assigned (first 4 bots get viewers)
+	// Live 3D feed. On Cloudflare (STEVE_RELAY_URL set) forward the stream to the
+	// relay Worker's Durable Object; otherwise fall back to a local WS viewer
+	// server (STEVE_VIEWER_PORT) for local dev.
+	const relayUrl = process.env.STEVE_RELAY_URL;
 	const viewerPort = parseInt(process.env.STEVE_VIEWER_PORT ?? "0", 10);
-	if (viewerPort > 0) {
+	if (relayUrl) {
+		bot.once("spawn", () => {
+			forwardBotToRelay(bot, {
+				url: relayUrl,
+				id: process.env.MC_USERNAME ?? bot.username,
+				viewDistance: 4,
+			});
+		});
+	} else if (viewerPort > 0) {
 		bot.once("spawn", () => {
 			createWebViewer(bot, { port: viewerPort, viewDistance: 4 });
 		});

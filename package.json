@@ -20,7 +20,8 @@
 		"db:migrate": "drizzle-kit migrate",
 		"db:studio": "drizzle-kit studio",
 		"db:apply:local": "wrangler d1 migrations apply steve --local",
-		"db:apply:remote": "wrangler d1 migrations apply steve --remote"
+		"db:apply:remote": "wrangler d1 migrations apply steve --remote",
+		"sync-assets": "node --env-file=.env --import ./typecraft-resolve.mjs scripts/build-assets.ts"
 	},
 	"devDependencies": {
 		"@playwright/test": "^1.60.0",
@@ -30,6 +31,7 @@
 		"@types/node": "^24",
 		"@types/ws": "^8.18.1",
 		"@vitest/browser-playwright": "^4.1.8",
+		"buffer": "^6.0.3",
 		"drizzle-kit": "^0.31.10",
 		"drizzle-orm": "^0.45.2",
 		"esbuild": "^0.27.7",

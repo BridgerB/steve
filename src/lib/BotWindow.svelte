@@ -29,6 +29,7 @@
 		index,
 		name,
 		step,
+		wsUrl,
 		onState,
 		onPose,
 		w = '300px',
@@ -37,6 +38,8 @@
 		index: number;
 		name: string;
 		step?: string;
+		/** Full relay viewer WebSocket URL (e.g. wss://…/viewer/<botId>). */
+		wsUrl?: string;
 		onState?: (s: LiveState) => void;
 		onPose?: (p: Pose) => void;
 		w?: string;
@@ -61,6 +64,7 @@
 			wsUrl: string,
 			opts?: {
 				workerUrl?: string;
+				assetsUrl?: string;
 				onState?: (s: LiveState) => void;
 				onPose?: (p: Pose) => void;
 				onSwing?: () => void;
@@ -76,9 +80,14 @@
 				// shared across all windows; each call mounts an independent viewer.
 				const url = '/web/viewer.js';
 				const mod = (await import(/* @vite-ignore */ url)) as ViewerModule;
-				// /viewer/N is an SSE route served by the SvelteKit server itself.
-				dispose = mod.mountViewer(canvas, `/viewer/${index}`, {
+				if (!wsUrl) {
+					status = 'no live feed';
+					return;
+				}
+				// wsUrl is the relay Durable Object viewer WebSocket for this bot.
+				dispose = mod.mountViewer(canvas, wsUrl, {
 					workerUrl: '/web/worker.js',
+					assetsUrl: '/web/assets.json',
 					onState: (s) => {
 						win = s.window;
 						held = s.held;

@@ -11,6 +11,9 @@
 	"observability": {
 		"enabled": true
 	},
+	"vars": {
+		"RELAY_URL": "wss://steve-relay.bridgerb.workers.dev"
+	},
 	"d1_databases": [
 		{
 			"binding": "DB",

@@ -361,6 +361,7 @@
 					index={0}
 					name={bot.id}
 					step={currentStep}
+					wsUrl={`${data.relayUrl}/viewer/${bot.id}`}
 					onState={(s) => (live = s)}
 					onPose={(p) => (liveYaw = p.yaw)}
 					w="100%"

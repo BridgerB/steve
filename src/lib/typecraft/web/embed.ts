@@ -202,6 +202,8 @@ export type LiveState = {
 
 export type MountOptions = {
 	workerUrl?: string;
+	/** Where to fetch the (static) assets blob. Default /web/assets.json. */
+	assetsUrl?: string;
 	/** Live dashboard state pushed ~2×/s (vitals, inventory, run status). */
 	onState?: (state: LiveState) => void;
 	/** Bot pose on every move (fast) — for a snappy compass etc. */
@@ -227,7 +229,10 @@ export function mountViewer(
 	let worldHeight = 384;
 	let chunkCount = 0;
 	const pendingMessages: ServerMessage[] = [];
-	let es: EventSource | null = null;
+	const assetsUrl = opts.assetsUrl ?? "/web/assets.json";
+	let ws: WebSocket | null = null;
+	let assetsMsg: Extract<ServerMessage, { type: "assets" }> | null = null;
+	let retryTimer: ReturnType<typeof setTimeout> | null = null;
 	let closed = false;
 	let raf = 0;
 
@@ -287,20 +292,56 @@ export function mountViewer(
 		}
 	};
 
+	// Apply the (statically fetched) assets once the viewer exists. Idempotent.
+	const applyAssets = async (): Promise<void> => {
+		if (!viewer || !assetsMsg || assetsReady) return;
+		const msg = assetsMsg;
+		try {
+			const images = await decodeTextures(msg.textureNames, msg.textureData);
+			const atlas = createTextureAtlas(
+				msg.textureNames,
+				(name: string) => images.get(name.replace(".png", ""))!,
+			);
+			const blockStates = prepareBlockStates(
+				msg.blockStates,
+				msg.blockModels as Parameters<typeof prepareBlockStates>[1],
+				atlas.uvMap,
+			);
+			for (const worker of viewer.worldRenderer.workers) {
+				worker.postMessage({ type: "registryData", blocks: msg.blocks, biomes: msg.biomes });
+			}
+			setViewerAssets(viewer, atlas, blockStates, deserializeTints(msg.tints));
+			setEntityModels(msg.entityModels as Record<string, EntityModelDef>);
+			assetsReady = true;
+			for (const queued of pendingMessages) processMessage(queued);
+			pendingMessages.length = 0;
+		} catch (err) {
+			console.error("[viewer] asset error:", err);
+		}
+	};
+
+	// Fetch the big assets blob statically (it can't stream through the relay's
+	// 1MB-capped WebSocket), then apply it once the viewer is up.
+	fetch(assetsUrl)
+		.then((r) => r.json())
+		.then((m) => {
+			assetsMsg = m as Extract<ServerMessage, { type: "assets" }>;
+			void applyAssets();
+		})
+		.catch((err) => console.error("[viewer] assets fetch failed:", err));
+
 	const connect = () => {
 		if (closed) return;
-		// One-directional SSE stream (server → browser). EventSource auto-reconnects;
-		// the server replays init/assets/chunks on each (re)open, so reset on open.
-		es = new EventSource(wsUrl);
+		// Live WebSocket relay (Durable Object). On (re)connect the relay replays
+		// init/chunks/entities, so reset chunk/queue state on open.
+		ws = new WebSocket(wsUrl);
 
-		es.onopen = () => {
-			assetsReady = false;
+		ws.onopen = () => {
 			chunkCount = 0;
 			pendingMessages.length = 0;
-			if (viewer) clearViewerEntities(viewer);
 		};
 
-		es.onmessage = async (event) => {
+		ws.onmessage = (event) => {
 			const msg: ServerMessage = JSON.parse(event.data as string);
 			if ((msg as { type: string }).type === "state") {
 				opts.onState?.(msg as unknown as LiveState);
@@ -317,30 +358,9 @@ export function mountViewer(
 					sizeCanvas();
 					viewer = createViewer(canvas, { workerUrl });
 				}
+				void applyAssets();
 			} else if (msg.type === "assets") {
-				if (!viewer) return;
-				try {
-					const images = await decodeTextures(msg.textureNames, msg.textureData);
-					const atlas = createTextureAtlas(
-						msg.textureNames,
-						(name: string) => images.get(name.replace(".png", ""))!,
-					);
-					const blockStates = prepareBlockStates(
-						msg.blockStates,
-						msg.blockModels as Parameters<typeof prepareBlockStates>[1],
-						atlas.uvMap,
-					);
-					for (const worker of viewer.worldRenderer.workers) {
-						worker.postMessage({ type: "registryData", blocks: msg.blocks, biomes: msg.biomes });
-					}
-					setViewerAssets(viewer, atlas, blockStates, deserializeTints(msg.tints));
-					setEntityModels(msg.entityModels as Record<string, EntityModelDef>);
-					assetsReady = true;
-					for (const queued of pendingMessages) processMessage(queued);
-					pendingMessages.length = 0;
-				} catch (err) {
-					console.error("[viewer] asset error:", err);
-				}
+				// The relay never forwards assets (served statically); ignore if it does.
 			} else if (!assetsReady) {
 				pendingMessages.push(msg);
 			} else {
@@ -348,8 +368,16 @@ export function mountViewer(
 			}
 		};
 
-		es.onerror = () => {
-			// EventSource reconnects on its own; nothing to do.
+		ws.onclose = () => {
+			if (closed) return;
+			retryTimer = setTimeout(connect, 2000); // WebSocket doesn't auto-reconnect
+		};
+		ws.onerror = () => {
+			try {
+				ws?.close();
+			} catch {
+				/* ignore */
+			}
 		};
 	};
 
@@ -370,9 +398,10 @@ export function mountViewer(
 	return () => {
 		closed = true;
 		cancelAnimationFrame(raf);
+		if (retryTimer) clearTimeout(retryTimer);
 		ro.disconnect();
 		try {
-			es?.close();
+			ws?.close();
 		} catch (_) {
 			/* ignore */
 		}

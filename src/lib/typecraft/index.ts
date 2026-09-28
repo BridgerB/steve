@@ -454,6 +454,7 @@ export {
 export {
 	closeWebViewer,
 	createWebViewer,
+	forwardBotToRelay,
 	type WebViewer,
 	type WebViewerOptions,
 } from "./web/index.ts";
