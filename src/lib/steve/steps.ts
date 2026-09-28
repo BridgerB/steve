@@ -274,7 +274,7 @@ export const steps: readonly Step[] = [
 		name: "Mine Iron Ore",
 		priority: 11,
 		canExecute: (s) => getPickaxeTier(s.equipment.pickaxe) >= 2,
-		// 8 is enough for the cast kit: 2 buckets (6) + flint&steel (1). No iron
+		// 7 is enough for the cast kit: 2 buckets (6) + flint&steel (1). No iron
 		// pickaxe needed (obsidian is cast, not mined), so we don't need 11.
 		// Count iron already INVESTED in the kit (each bucket = 3 iron, flint&steel = 1):
 		// otherwise, after crafting buckets the loose iron drops below 8 and the bot
@@ -285,7 +285,7 @@ export const steps: readonly Step[] = [
 				s.inventory.ironIngots +
 				(s.inventory.buckets + s.inventory.waterBuckets) * 3 +
 				(s.inventory.flintAndSteel >= 1 ? 1 : 0) >=
-			8,
+			7,
 		execute: async (bot, _state) => {
 			const { mineBlock } = await import("./tasks/mining/main.ts");
 			// Only the iron still MISSING from the kit — the band loop otherwise mines
@@ -294,7 +294,9 @@ export const steps: readonly Step[] = [
 			const kit =
 				(_state.inventory.buckets + _state.inventory.waterBuckets) * 3 +
 				(_state.inventory.flintAndSteel >= 1 ? 1 : 0);
-			const need = 8 - kit - _state.inventory.ironIngots;
+			// 7 = 2 buckets (6) + flint&steel (1). race39 712 sat 20 min in a flooded
+			// band hunting an 8th ore it never needed.
+			const need = 7 - kit - _state.inventory.ironIngots;
 			if (need <= 0) return { success: true, message: "Iron kit already complete" };
 			return mineBlock(bot, "iron_ore", Math.max(1, need));
 		},

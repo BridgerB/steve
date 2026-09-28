@@ -660,6 +660,14 @@ export const initDigging = (bot: Bot, _options: BotOptions): void => {
 			}
 
 			if (!nearest) {
+				// The drop's spawn packet lands a few ticks after the dig completes:
+				// returning at once here logged a "pickup_miss" that the next dig then
+				// silently collected (race40 716/717: miss logged in the same second as
+				// dig_done, pickup_ok 1s later). Give the entity ~700ms to appear.
+				if (Date.now() - startTime < 700) {
+					await new Promise((r) => setTimeout(r, 100));
+					continue;
+				}
 				bot.emit("debug", "collect", {
 					event: "no_items",
 					entityCount: Object.keys(bot.entities).length,

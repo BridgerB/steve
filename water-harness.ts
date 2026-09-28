@@ -97,6 +97,20 @@ const arenas: Record<string, Arena> = {
 		],
 		dest: [BX, 60, BZ],
 	},
+	// race39 715's killer: a 7-deep pond whose bank LEDGE overhangs the water. The
+	// bot scooped from the ledge, fell in under it, pillared up to the ledge's
+	// underside, and drowned there. Water BX-3..BX+3 y56-62; a 3-thick dirt ledge
+	// covers columns BX-3..BX+1 at y63-65; BX+2..BX+3 stay open sky. Bot starts
+	// under the ledge. PASS = dig up through it or swim to the open side and climb.
+	overhang: {
+		build: [
+			`fill ${BX - 6} 50 ${BZ - 6} ${BX + 6} 66 ${BZ + 6} dirt`,
+			`fill ${BX - 3} 56 ${BZ - 3} ${BX + 3} 66 ${BZ + 3} air`,
+			`fill ${BX - 3} 56 ${BZ - 3} ${BX + 3} 62 ${BZ + 3} water`,
+			`fill ${BX - 3} 63 ${BZ - 3} ${BX + 1} 65 ${BZ + 3} dirt`,
+		],
+		dest: [BX - 1, 57, BZ],
+	},
 	// A REAL spot in the live world where a race bot drowned: no build, just tp
 	// there and run the escape. SITE="x y z" (feet position in the water).
 	site: {
@@ -107,7 +121,7 @@ const arenas: Record<string, Arena> = {
 
 const arena = arenas[MODE];
 if (!arena) {
-	console.log(`unknown mode ${MODE} — use tunnel|capped|deep|pocket|lakeedge|pond3`);
+	console.log(`unknown mode ${MODE} — use tunnel|capped|deep|pocket|pocket3|lakeedge|pond3|overhang|site`);
 	process.exit(1);
 }
 

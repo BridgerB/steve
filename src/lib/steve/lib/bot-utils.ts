@@ -2814,7 +2814,12 @@ const escapeWaterInner = async (
 			// Handle it HERE, before the press/jump below: pressing lifts the bot off
 			// the footing it just built, and the later stall branch then saw it
 			// floating again (harness 'capped': built a floor, drowned on it).
-			if (bot.entity.onGround) {
+			// Standing on the pillar we just built counts as landed even when the
+			// water physics never reports onGround: race39 715 sat on its +2 pillar at
+			// y60 under a 1-thick bank ledge, "sank" to a floor it was already on,
+			// never dug, and drowned after 106s.
+			const footing = isStandableGround(B(fx, fy - 1, fz)) && p.y - fy < 0.2;
+			if (bot.entity.onGround || footing) {
 				const ceil = reachableCeiling();
 				if (ceil) {
 					await digAt(ceil);
@@ -2829,6 +2834,14 @@ const escapeWaterInner = async (
 				const built = await pillarInWater(bot, 1);
 				if (built > 0) {
 					logEvent("nav", "drown_pillar", "+1 floor built off the wall", bot.entity.position);
+				} else if (reachableCeiling()) {
+					// Can't build a floor (the cap blocks the jump) but the cap itself is
+					// within reach: open it now instead of sinking away from it.
+					const ceil = reachableCeiling();
+					if (ceil) {
+						await digAt(ceil);
+						logEvent("nav", "drown_dig_up", `${ceil.name} (floating)`, ceil.position);
+					}
 				} else {
 					if (!sinkingSince) {
 						sinkingSince = Date.now();
