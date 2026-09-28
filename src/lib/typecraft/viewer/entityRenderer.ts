@@ -526,32 +526,27 @@ export const addEntity = (
 		geoData = er.geoData;
 		scale = 1.8 / 32;
 	} else {
-		const model = getEntityModel(entityName);
-		if (model) {
-			geoData = buildEntityGeoData(
-				model.bones,
-				model.texturewidth,
-				model.textureheight,
-			);
-			scale = 1 / 16;
-		} else {
-			// Fallback: colored box for unknown entities
-			const box = MeshBuilder.CreateBox(
-				`box-${id}`,
-				{ size: 0.5, sideOrientation: Mesh.BACKSIDE },
-				er.scene,
-			);
-			const boxMat = new StandardMaterial(`boxMat-${id}`, er.scene);
-			boxMat.diffuseColor = new Color3(1, 0.4, 0);
-			boxMat.specularColor = Color3.Black();
-			box.material = boxMat;
-			box.position.y = 0.25;
-			box.parent = node;
-			node.position.set(x, y, z);
-			node.rotation.y = yaw;
-			er.entities.set(id, node);
-			return;
-		}
+		// Non-player entities: a small neutral box. The geometry models exist but
+		// no mob/item textures are served to the web viewer, so a modelled entity
+		// rendered as a flat untextured shape — a dropped item at the bot's feet
+		// filled the whole first-person view with purple. Items/orbs are tiny.
+		const tiny = entityName === "item" || entityName === "experience_orb";
+		const size = tiny ? 0.25 : 0.6;
+		const box = MeshBuilder.CreateBox(
+			`box-${id}`,
+			{ size, sideOrientation: Mesh.BACKSIDE },
+			er.scene,
+		);
+		const boxMat = new StandardMaterial(`boxMat-${id}`, er.scene);
+		boxMat.diffuseColor = tiny ? new Color3(0.75, 0.7, 0.55) : new Color3(0.55, 0.6, 0.5);
+		boxMat.specularColor = Color3.Black();
+		box.material = boxMat;
+		box.position.y = size / 2;
+		box.parent = node;
+		node.position.set(x, y, z);
+		node.rotation.y = yaw;
+		er.entities.set(id, node);
+		return;
 	}
 
 	const material = skinUrl
