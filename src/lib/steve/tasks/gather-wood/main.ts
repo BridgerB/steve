@@ -404,14 +404,31 @@ export const gatherWood = async (
 	const ceiling = [2, 3, 4, 5, 6, 7, 8].some((dy) => isEarth(0, dy, 0));
 	const deep = localSurface - p0.y >= 6 && ceiling;
 	if (boxed || deep) {
-		logEvent("wood", "underground", `boxed=${boxed} deep=${deep} y=${Math.floor(p0.y)} surface=${localSurface}`);
-		let reached = await returnToSurface(bot);
+		// The pit's own column tops out at our feet, so its "surface" IS our y; the
+		// rim is the neighbours' surface. And never hand a sealed pit to the
+		// pathfinder: A* from a boxed cell is an exhaustive synchronous search that
+		// froze the process ~20s and got the bot kicked (race 635, 3× in a row).
+		const rim = Math.max(
+			localSurface,
+			...[[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dz]) =>
+				surfaceYAt(bot, Math.floor(p0.x) + dx!, Math.floor(p0.z) + dz!),
+			),
+		);
+		logEvent("wood", "underground", `boxed=${boxed} deep=${deep} y=${Math.floor(p0.y)} surface=${localSurface} rim=${rim}`);
+		let reached = false;
+		if (boxed) {
+			const { pillarUp } = await import("../portal/cast.ts");
+			reached = await pillarUp(bot, rim);
+			bot.setControlState("sneak", false);
+		} else {
+			reached = await returnToSurface(bot);
+		}
 		if (!reached) {
 			// The pathfinder can't climb the staircase back up (deep mines defeat
 			// it) — so dig/pillar straight up to the surface instead. Digging the
 			// ceiling yields the cobble it re-places, so it's self-sustaining.
 			const { pillarUp } = await import("../portal/cast.ts");
-			reached = await pillarUp(bot, localSurface); // straight up THIS column
+			reached = await pillarUp(bot, rim); // straight up THIS column to the rim
 			bot.setControlState("sneak", false); // pillarUp leaves it on for the cast
 		}
 		if (!reached) {
@@ -555,7 +572,13 @@ export const gatherWood = async (
 			// "boxed" test: race 624 blacklisted tree after tree from y62 with the
 			// surface at y66). Pillar straight up before blaming the tree.
 			const here = botPos();
-			const surf = surfaceYAt(bot, Math.floor(here.x), Math.floor(here.z));
+			const hx = Math.floor(here.x);
+			const hz = Math.floor(here.z);
+			// Rim = highest surface of this column and its 4 neighbours (in a pit the
+			// own column tops out at our feet, which would read as "on the surface").
+			const surf = Math.max(
+				...[[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dz]) => surfaceYAt(bot, hx + dx!, hz + dz!)),
+			);
 			if (here.y < surf - 1 && climbOuts < 3) {
 				climbOuts++;
 				logEvent("wood", "climb_out", `nav_stuck at y=${Math.floor(here.y)}, surface y=${surf}`, here);

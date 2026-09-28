@@ -1069,7 +1069,11 @@ export const mineBlock = async (
 		return false;
 	};
 	const findDryTarget = (radius: number): Block | null => {
-		const positions = findBlocks(bot, isTarget, radius, 48);
+		// Keep this scan small: findBlocks walks the whole radius when there are few
+		// matches, synchronously. radius 64 / count 48 on a dirt plateau scanned ~2M
+		// blocks per call, starved the keepalive and got the bot kicked every 30s
+		// (race 635: EPIPE → reconnect → EPIPE). Stone is dug down to anyway.
+		const positions = findBlocks(bot, isTarget, Math.min(radius, 24), 12);
 		// Stone: dry candidates only — the wet fallback is exactly the pond trap, and
 		// digDownToStone below is the better fallback. Ores keep the nearest match.
 		const dry = positions.find((p) => !nearWater(p)) ?? (isStone ? undefined : positions[0]);
