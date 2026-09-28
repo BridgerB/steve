@@ -128,6 +128,19 @@ export const startBot = async (): Promise<Bot> => {
 	// same no-X-ray sightings. (Deliberately excludes "water"; see registerBlockMemory.)
 	registerBlockMemory(bot);
 
+	// Event-loop watchdog: a synchronous scan that blocks the loop for seconds
+	// starves the keepalive and gets the bot kicked. Record the stall (and where
+	// the bot was) so the culprit is read from the DB, not guessed.
+	{
+		let last = Date.now();
+		setInterval(() => {
+			const now = Date.now();
+			const drift = now - last - 1000;
+			last = now;
+			if (drift > 1500) logEvent("perf", "event_loop_blocked", `${drift}ms`, bot.entity?.position);
+		}, 1000);
+	}
+
 	bot.once("spawn", async () => {
 		log("Spawned into the world");
 		logEvent(

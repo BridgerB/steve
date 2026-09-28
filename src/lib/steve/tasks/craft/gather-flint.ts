@@ -20,6 +20,7 @@ import {
 	getBlock,
 	goTo,
 	moveCloser,
+	throwIfPreempted,
 } from "../../lib/bot-utils.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -75,6 +76,7 @@ const harvestPocket = async (
 	const seen = new Set<string>([key(seed)]);
 	const queue: Vec3[] = [seed];
 	while (queue.length && !findItem(bot, "flint") && Date.now() < deadlineMs) {
+		throwIfPreempted();
 		// Mine the nearest gravel next so we work our way through the pocket.
 		queue.sort(
 			(a, b) =>
@@ -104,6 +106,7 @@ const roam = async (bot: Bot, seen: Set<string>): Promise<Vec3 | null> => {
 	const base = Math.random() * Math.PI * 2;
 	const high = bot.entity.position.y > 80;
 	for (let leg = 0; leg < 3; leg++) {
+		throwIfPreempted();
 		const p = bot.entity.position;
 		const a = base + (Math.random() - 0.5);
 		const dy = high ? -18 : 0;
@@ -130,6 +133,11 @@ export const gatherFlint = async (
 ): Promise<boolean> => {
 	const doneSeeds = new Set<string>();
 	while (!findItem(bot, "flint") && Date.now() < deadlineMs) {
+		// Preempted (water escape took over)? Stop NOW. `approach` swallows goTo's
+		// preempt throw, so without this the loop spun a radius-64 gravel scan
+		// every iteration and starved the keepalive: race30 679 was kicked twice
+		// at the river bank, 90s frozen each time, right after filling its bucket.
+		throwIfPreempted();
 		if ((bot.health ?? 20) < 6) break; // don't die for a flint
 		let seed = findBlocks(bot, "gravel", 64, 40)
 			.filter((p) => !doneSeeds.has(key(p)))
