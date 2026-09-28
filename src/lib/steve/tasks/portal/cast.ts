@@ -1681,18 +1681,42 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 	// staging-recovery spot (standZ+3 = bz+4) and the stand height for the top row
 	// (feet = by+6). In open/surface terrain the extra space is already air; in a
 	// real cleared cave it has to be dug, or the recovery hits rock and stalls.
-	for (let y = 0; y <= 6; y++) {
-		for (let x = -1; x <= 4; x++) {
-			for (let z = -1; z <= 5; z++) {
-				if (Date.now() > deadline)
-					return { success: false, message: "Site prep timed out" };
-				const c = vec3(bx + x, by + y, bz + z);
-				const b = getBlock(bot, c);
-				if (b && isSolid(b.name) && b.name !== "obsidian" && !lavaTouching(c)) {
-					await digAt(bot, c);
-				}
-			}
+	// Walk within reach of each cell before digging it. bot.dig on a cell the
+	// server considers out of reach never acks, so digAt burns its 6s cap per
+	// cell — and from the anchor most of the 6x7x6 box (294 cells) is out of
+	// reach: race53 768 cleared 36 cells in 3.5 min and the 480s step timed out
+	// with a lava bucket and flint&steel in hand. Clear the walkable 3-high slab
+	// first (x/z outer, y inner) so the pathfinder can bring the bot near the far
+	// columns, then the upper rows from underneath.
+	{
+		const cells: Vec3[] = [];
+		for (const [y0, y1] of [
+			[0, 2],
+			[3, 6],
+		] as const) {
+			for (let z = -1; z <= 5; z++)
+				for (let x = -1; x <= 4; x++)
+					for (let y = y0; y <= y1; y++) cells.push(vec3(bx + x, by + y, bz + z));
 		}
+		let cleared = 0;
+		let skipped = 0;
+		for (const c of cells) {
+			if (Date.now() > deadline) return { success: false, message: "Site prep timed out" };
+			const b = getBlock(bot, c);
+			if (!(b && isSolid(b.name) && b.name !== "obsidian" && !lavaTouching(c))) continue;
+			const centre = offset(c, 0.5, 0.5, 0.5);
+			const eye = () => offset(bot.entity.position, 0, 1.62, 0);
+			if (distance(eye(), centre) > 4.3) {
+				await goTo(bot, vec3(c.x, by, c.z), { range: 1.5, timeout: 6000 }).catch(() => {});
+			}
+			if (distance(eye(), centre) > 5.2) {
+				skipped++;
+				continue;
+			}
+			await digAt(bot, c);
+			cleared++;
+		}
+		logEvent("cast", "chamber", `cleared ${cleared} skipped ${skipped} of ${cells.length}`);
 	}
 	for (let x = -1; x <= 4; x++) {
 		for (let z = -1; z <= 5; z++) {
