@@ -231,7 +231,13 @@ export const gatherWood = async (
 				.filter((p) => !unreachable.has(posKey(p)))
 				.filter((p) => !wetTrees.has(posKey(p)))
 				.filter((p) => !trunkInWater(p))
-				.filter((p) => logHeightAboveGround(p) <= 6);
+				.filter((p) => logHeightAboveGround(p) <= 6)
+				// A nearby log BELOW our feet is a trunk base in a dip: its drop lands
+				// a level down where the pickup box (feet-0.5) never reaches, and the
+				// bot digs the whole trunk from the rim collecting nothing (race57 786:
+				// 5 misses in a row standing still at y70 over logs at y69). Leave it;
+				// the logs at and above feet level drop onto the stub at our level.
+				.filter((p) => !(p.y < Math.floor(botPos().y) && Math.hypot(p.x - botPos().x, p.z - botPos().z) <= 5));
 			// Prefer trees we can reach without swimming; only if EVERY tree is across
 			// water do we take the swim (a real player would too).
 			const dry = candidates.filter((p) => !lineCrossesWater(p));
