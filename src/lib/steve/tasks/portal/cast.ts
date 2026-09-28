@@ -24,6 +24,7 @@ import {
 	walkToXZ,
 } from "../../lib/bot-utils.ts";
 import { logEvent } from "../../lib/logger.ts";
+import { ensurePickaxe } from "../mining/main.ts";
 import type { Block, StepResult } from "../../types.ts";
 
 // Per-bot: how many deep-lava descents ended in water after the surface walk to
@@ -1681,42 +1682,64 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 	// staging-recovery spot (standZ+3 = bz+4) and the stand height for the top row
 	// (feet = by+6). In open/surface terrain the extra space is already air; in a
 	// real cleared cave it has to be dug, or the recovery hits rock and stalls.
-	// Walk within reach of each cell before digging it. bot.dig on a cell the
-	// server considers out of reach never acks, so digAt burns its 6s cap per
-	// cell — and from the anchor most of the 6x7x6 box (294 cells) is out of
-	// reach: race53 768 cleared 36 cells in 3.5 min and the 480s step timed out
-	// with a lava bucket and flint&steel in hand. Clear the walkable 3-high slab
-	// first (x/z outer, y inner) so the pathfinder can bring the bot near the far
-	// columns, then the upper rows from underneath.
+	// Snake through the box column by column and dig each column from the
+	// ADJACENT column the bot already stands in, so every cell is in reach and
+	// nothing is ever pathfound: v1 walked to each cell with goTo and burned a
+	// 6s timeout on every column still inside solid rock (race54 774: 91 cleared,
+	// 91 skipped, two 480s timeouts, then died inWall at the anchor — a gravel
+	// column dug from directly underneath dropped onto its head). Columns are
+	// dug top-down from the neighbour so a falling column lands in the dug
+	// cells, not on the bot, and gets re-dug on the second pass. The pick is
+	// checked every cell (294 cells outlast a stone pick's 131 uses).
 	{
-		const cells: Vec3[] = [];
-		for (const [y0, y1] of [
-			[0, 2],
-			[3, 6],
-		] as const) {
-			for (let z = -1; z <= 5; z++)
-				for (let x = -1; x <= 4; x++)
-					for (let y = y0; y <= y1; y++) cells.push(vec3(bx + x, by + y, bz + z));
+		const cols: [number, number][] = [];
+		for (let z = -1; z <= 5; z++) {
+			const xs = (z + 1) % 2 === 0 ? [-1, 0, 1, 2, 3, 4] : [4, 3, 2, 1, 0, -1];
+			for (const x of xs) cols.push([x, z]);
 		}
 		let cleared = 0;
 		let skipped = 0;
-		for (const c of cells) {
+		const eye = () => offset(bot.entity.position, 0, 1.62, 0);
+		const needsDig = (p: Vec3): boolean => {
+			const b = getBlock(bot, p);
+			return !!b && isSolid(b.name) && b.name !== "obsidian" && !lavaTouching(p);
+		};
+		// "done" | "skip" | "nopick"
+		const digCell = async (p: Vec3): Promise<"done" | "skip" | "nopick"> => {
+			if (!needsDig(p)) return "done";
+			if (distance(eye(), offset(p, 0.5, 0.5, 0.5)) > 5.2) return "skip";
+			if (!/(stone|iron|diamond|netherite)_pickaxe$/.test(bot.heldItem?.name ?? "")) {
+				if (!(await ensurePickaxe(bot))) return "nopick";
+			}
+			await digAt(bot, p);
+			return needsDig(p) ? "skip" : "done";
+		};
+		for (const [x, z] of cols) {
 			if (Date.now() > deadline) return { success: false, message: "Site prep timed out" };
-			const b = getBlock(bot, c);
-			if (!(b && isSolid(b.name) && b.name !== "obsidian" && !lavaTouching(c))) continue;
-			const centre = offset(c, 0.5, 0.5, 0.5);
-			const eye = () => offset(bot.entity.position, 0, 1.62, 0);
-			if (distance(eye(), centre) > 4.3) {
-				await goTo(bot, vec3(c.x, by, c.z), { range: 1.5, timeout: 6000 }).catch(() => {});
+			let colSkipped = 0;
+			for (let pass = 0; pass < 2; pass++) {
+				colSkipped = 0;
+				for (let y = 6; y >= 0; y--) {
+					const p = vec3(bx + x, by + y, bz + z);
+					const was = needsDig(p);
+					const r = await digCell(p);
+					if (r === "nopick") {
+						logEvent("cast", "chamber_no_pick", `cleared ${cleared} skipped ${skipped} — held=${bot.heldItem?.name ?? "nothing"}`);
+						return { success: false, message: "Pickaxe worn out during site prep" };
+					}
+					if (r === "skip") colSkipped++;
+					else if (was) cleared++;
+				}
+				if (colSkipped === 0) break;
 			}
-			if (distance(eye(), centre) > 5.2) {
-				skipped++;
-				continue;
-			}
-			await digAt(bot, c);
-			cleared++;
+			skipped += colSkipped;
+			// Step into the column so the next one is adjacent; lay its floor first
+			// if the cave has none (walking onto air drops the bot out of the box).
+			const floor = vec3(bx + x, by - 1, bz + z);
+			if (!isSolid(getBlock(bot, floor)?.name) && !lavaTouching(floor)) await ensureSolid(bot, floor);
+			if (colSkipped === 0) await walkToXZ(bot, bx + x + 0.5, bz + z + 0.5, { targetDist: 0.4, maxTime: 1500 });
 		}
-		logEvent("cast", "chamber", `cleared ${cleared} skipped ${skipped} of ${cells.length}`);
+		logEvent("cast", "chamber", `cleared ${cleared} skipped ${skipped} of ${cols.length * 7}`);
 	}
 	for (let x = -1; x <= 4; x++) {
 		for (let z = -1; z <= 5; z++) {

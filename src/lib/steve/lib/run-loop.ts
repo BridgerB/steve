@@ -116,7 +116,7 @@ const DEADLOCK_IDS = [
 // cancelled (taskScope), so a longer budget is safe.
 const stepTimeoutMs = (stepId: string): number =>
 	stepId === "build_nether_portal"
-		? 480000
+		? 900000 // the 294-cell site chamber alone is ~6 min of stone-pick digging (race54)
 		: stepId === "mine_iron" || stepId === "mine_coal"
 			? 300000
 			: stepId === "gather_wood"

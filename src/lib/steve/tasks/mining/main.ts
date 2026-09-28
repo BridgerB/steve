@@ -177,7 +177,7 @@ const invCount = (bot: Bot, sub: string): number =>
  * pickaxes, craft a fresh stone one from cobblestone + sticks, so a deep mine
  * stays self-sustaining.
  */
-const ensurePickaxe = async (bot: Bot): Promise<boolean> => {
+export const ensurePickaxe = async (bot: Bot): Promise<boolean> => {
 	const findPick = () =>
 		bot.inventory.slots.find((s) => s && STONE_PLUS_PICKS.has(s.name));
 	let pick = findPick();
