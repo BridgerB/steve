@@ -1350,27 +1350,59 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 	//     toward it for 84s, then anchored a lava-less site on the surface). Dig straight
 	//     down 4 blocks to the side of it, to one above its level, then tunnel in and open
 	//     the wall ABOVE the pool (lava can't flow up), so the scoop below has a source.
-	if (!lavaAdjacent() && Math.abs(bot.entity.position.y - lava.y) > 4) {
+	if (!lavaAdjacent()) {
 		const { digDownVertical, tunnelToward } = await import("../mining/main.ts");
+		// Never start a descent from the pond we just scooped from: digDownVertical
+		// stops at once ("stopped=in water") and the step ping-pongs with
+		// escape_water (race42 727: 5 rounds in 30s).
+		if (bot.entity.isInWater) return { success: false, message: "in water — yielding to escape_water" };
 		const p = bot.entity.position;
-		const ax = Math.abs(p.x - lava.x) >= Math.abs(p.z - lava.z);
-		const sx = ax ? Math.sign(p.x - lava.x) || 1 : 0;
-		const sz = ax ? 0 : Math.sign(p.z - lava.z) || 1;
-		const cx = lava.x + sx * 4;
-		const cz = lava.z + sz * 4;
-		logEvent(
-			"cast",
-			"lava_descend",
-			`lava ${lava.x},${lava.y},${lava.z} is ${Math.round(p.y - lava.y)} below — dig down at ${cx},${cz}`,
-		);
-		await goTo(bot, vec3(cx, surfaceYAt(bot, cx, cz), cz), { range: 1.5, timeout: 30000 }).catch(
-			() => {},
-		);
-		const r = await digDownVertical(bot, lava.y + 1, Math.min(deadline, Date.now() + 300000));
-		logEvent("cast", "lava_descended", `y=${r.y} stopped=${r.stopped ?? "none"}`);
-		for (let i = 0; i < 8 && !lavaAdjacent(); i++) {
-			if ((await tunnelToward(bot, -sx, -sz, 1)) === 0) break;
+		if (p.y - lava.y > 4) {
+			// Best-effort walk to a column 4 beside the pool; when the surface path
+			// fails (727: goTo returned in 3s from 55 blocks away) we dig down right
+			// here and TUNNEL the rest — a straight deep tunnel is far more reliable
+			// than surface pathing across a forest.
+			const ax = Math.abs(p.x - lava.x) >= Math.abs(p.z - lava.z);
+			const sx = ax ? Math.sign(p.x - lava.x) || 1 : 0;
+			const sz = ax ? 0 : Math.sign(p.z - lava.z) || 1;
+			const cx = lava.x + sx * 4;
+			const cz = lava.z + sz * 4;
+			logEvent(
+				"cast",
+				"lava_descend",
+				`lava ${lava.x},${lava.y},${lava.z} is ${Math.round(p.y - lava.y)} below — dig down near ${cx},${cz}`,
+			);
+			await goTo(bot, vec3(cx, surfaceYAt(bot, cx, cz), cz), { range: 1.5, timeout: 20000 }).catch(
+				() => {},
+			);
+			if (bot.entity.isInWater) return { success: false, message: "in water — yielding to escape_water" };
+			const r = await digDownVertical(bot, lava.y + 1, Math.min(deadline, Date.now() + 300000));
+			const dp = bot.entity.position;
+			logEvent(
+				"cast",
+				"lava_descended",
+				`y=${r.y} stopped=${r.stopped ?? "none"} at ${Math.floor(dp.x)},${Math.floor(dp.z)} (lava ${Math.round(Math.hypot(dp.x - lava.x, dp.z - lava.z))} away)`,
+			);
 		}
+		// Tunnel toward the pool, x leg then z leg, stopping 1 short on each axis so
+		// the exposure step below opens the last wall deliberately.
+		for (const axis of ["x", "z"] as const) {
+			if (lavaAdjacent()) break;
+			const q = bot.entity.position;
+			const off = axis === "x" ? lava.x - Math.floor(q.x) : lava.z - Math.floor(q.z);
+			const n = Math.abs(off) - 1;
+			if (n <= 0) continue;
+			const moved = await tunnelToward(bot, axis === "x" ? Math.sign(off) : 0, axis === "z" ? Math.sign(off) : 0, n);
+			logEvent("cast", "lava_tunnel", `${axis} ${moved}/${n} cells`, bot.entity.position);
+			if (moved < n) break; // liquid / cave / refused dig ahead — expose from here
+		}
+		// Direction of the remaining offset, for the exposure digs.
+		const q2 = bot.entity.position;
+		const rdx = lava.x - Math.floor(q2.x);
+		const rdz = lava.z - Math.floor(q2.z);
+		const ax2 = Math.abs(rdx) >= Math.abs(rdz);
+		const sx = ax2 ? -(Math.sign(rdx) || 1) : 0;
+		const sz = ax2 ? 0 : -(Math.sign(rdz) || 1);
 		// tunnelToward refuses the dig that would expose lava — do that one deliberately:
 		// open the cells ahead at feet/head level (above the pool) and, if still nothing,
 		// the floor cell ahead (the pool is below it). Never a cell with lava BESIDE it.

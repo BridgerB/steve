@@ -49,6 +49,12 @@ const wet = (bot: Bot, p: Vec3): boolean =>
 			[0, -1, 0],
 		] as const
 	).some((o) => (getBlock(bot, vec3(p.x + o[0], p.y + o[1], p.z + o[2]))?.name ?? "").includes("water"));
+// Gravel on a pond FLOOR under 2+ blocks of water passes the 6-neighbour `wet`
+// test when it sits under more gravel; the approach then walks the bot into the
+// pond (race42 725: 8 seed_unreachable + Get Out Of Water cycles in 60s at
+// seeds 6-8 blocks below it). Reject anything with water in the 4 blocks above.
+const underWater = (bot: Bot, p: Vec3): boolean =>
+	[1, 2, 3, 4].some((dy) => (getBlock(bot, vec3(p.x, p.y + dy, p.z))?.name ?? "").includes("water"));
 const NEIGHBORS = [
 	[1, 0, 0],
 	[-1, 0, 0],
@@ -177,7 +183,7 @@ const roam = async (bot: Bot, seen: Set<string>): Promise<Vec3 | null> => {
 			}
 		}
 		const s = findBlocks(bot, "gravel", 64, 40)
-			.filter((q) => !seen.has(key(q)) && !wet(bot, q))
+			.filter((q) => !seen.has(key(q)) && !wet(bot, q) && !underWater(bot, q))
 			.map((q) => ({ q, d: distance(bot.entity.position, q) }))
 			.sort((x, y) => x.d - y.d)[0]?.q;
 		if (s) return s;
@@ -210,7 +216,7 @@ export const gatherFlint = async (
 		throwIfPreempted();
 		if ((bot.health ?? 20) < 6) break; // don't die for a flint
 		let seed = findBlocks(bot, "gravel", 64, 40)
-			.filter((p) => !doneSeeds.has(key(p)) && !wet(bot, p))
+			.filter((p) => !doneSeeds.has(key(p)) && !wet(bot, p) && !underWater(bot, p))
 			.map((p) => ({ p, d: distance(bot.entity.position, p) }))
 			.sort((a, b) => a.d - b.d)[0]?.p;
 
