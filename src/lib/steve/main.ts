@@ -482,9 +482,29 @@ const runRace = async (count: number, timeoutMs: number) => {
 	const FX = -3936 + ((raceNum % GRID) - Math.floor(GRID / 2)) * STEP;
 	const FZ =
 		3968 + ((Math.floor(raceNum / GRID) % GRID) - Math.floor(GRID / 2)) * STEP;
+	// The grid cell may be open ocean (race 588-595 dropped every bot into the sea
+	// for 5+ min). Ask the server for the nearest forest to the cell and start
+	// there — land AND trees, like a normal survival spawn. (spreadplayers was
+	// tried first: it fails outright over water and its wide-range search stalls
+	// the RCON connection.)
+	let baseX = FX;
+	let baseZ = FZ;
+	try {
+		const reply = await rcon(`execute positioned ${FX} 64 ${FZ} run locate biome minecraft:forest`);
+		const m = /\[(-?\d+), (?:~|-?\d+), (-?\d+)\]/.exec(reply);
+		if (m) {
+			baseX = parseInt(m[1]!, 10);
+			baseZ = parseInt(m[2]!, 10);
+			console.log(`  spawn: nearest forest to grid cell (${FX},${FZ}) is (${baseX},${baseZ})`);
+		} else {
+			console.log(`  spawn: locate biome gave no coords (${reply.slice(0, 80)}) — using grid cell`);
+		}
+	} catch (e) {
+		console.log(`  spawn: locate biome failed (${e instanceof Error ? e.message : e}) — using grid cell`);
+	}
 	const spawns: { x: number; z: number }[] = [];
 	for (let i = 0; i < count; i++) {
-		spawns.push({ x: FX + ((i % 5) - 2) * 24, z: FZ + Math.floor(i / 5) * 26 });
+		spawns.push({ x: baseX + ((i % 5) - 2) * 24, z: baseZ + Math.floor(i / 5) * 26 });
 	}
 
 	// Spawn all bot processes first, then teleport them
