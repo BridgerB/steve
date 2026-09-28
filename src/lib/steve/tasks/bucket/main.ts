@@ -306,7 +306,38 @@ export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 	// higher than the pond that is a step off the ledge into the pond →
 	// escape_water preempts → resume_found picks the same pond → repeat (race38
 	// 708 looped Fill Water ⇄ Get Out Of Water 5× in 2 min with a bucket in hand).
-	const stand = shoreStand(bot, waterPos);
+	let stand = shoreStand(bot, waterPos);
+	// The picked block is mid-pond (no dry stand within 2): retarget to the nearest
+	// water block of the same pool that HAS a shore stand. race40 716 walked onto
+	// the water 6× in 45s ("shore_stand none — approaching above the water") before
+	// the blacklist happened to hand it a shoreline block.
+	if (!stand) {
+		let best: { p: Vec3; s: Vec3; d: number } | null = null;
+		for (let dx = -7; dx <= 7; dx++) {
+			for (let dz = -7; dz <= 7; dz++) {
+				for (let dy = -1; dy <= 1; dy++) {
+					if (dx === 0 && dz === 0 && dy === 0) continue;
+					const p = vec3(waterPos.x + dx, waterPos.y + dy, waterPos.z + dz);
+					if (!(bot.blockAt(p)?.name ?? "").includes("water")) continue;
+					if (failedWater.get(bot)?.has(waterKey(p))) continue;
+					const sp = shoreStand(bot, p);
+					if (!sp) continue;
+					const d = distance(bot.entity.position, vec3(sp.x + 0.5, sp.y, sp.z + 0.5));
+					if (!best || d < best.d) best = { p, s: sp, d };
+				}
+			}
+		}
+		if (best) {
+			logEvent(
+				"bucket",
+				"shore_retarget",
+				`${waterKey(waterPos)} → ${waterKey(best.p)} stand ${best.s.x},${best.s.y},${best.s.z}`,
+			);
+			waterPos = best.p;
+			lastFound.set(bot, waterPos);
+			stand = best.s;
+		}
+	}
 	if (stand) {
 		logEvent("bucket", "shore_stand", `${stand.x},${stand.y},${stand.z} for water ${waterPos.x},${waterPos.y},${waterPos.z}`);
 		const standC = vec3(stand.x + 0.5, stand.y, stand.z + 0.5);
