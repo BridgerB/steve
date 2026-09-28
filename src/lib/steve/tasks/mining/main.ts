@@ -1401,14 +1401,21 @@ export const mineBlock = async (
 			}
 			if (!below) return null;
 			if (isTarget(below.name)) return below;
-			if (isLiquid(below) || below.name === "bedrock") return null;
-			if (!dropColumnSafe(bot, fx, fy - 2, fz)) return null;
-			if (digExposesWater(bot, below.position) || digExposesLava(bot, below.position)) return null;
+			// Breadcrumbs: race57 786 stopped after 3 dirt blocks at y67 with no
+			// event and then explored from inside its own pit ('Could not find
+			// stone' ×2, explore_stuck ×6) — which guard fired was invisible.
+			const stop = (why: string): null => {
+				logEvent(mineCat(blockType), "dig_down_stop", `${why} at y=${fy - 1} (${below?.name})`);
+				return null;
+			};
+			if (isLiquid(below) || below.name === "bedrock") return stop("liquid/bedrock");
+			if (!dropColumnSafe(bot, fx, fy - 2, fz)) return stop("column unsafe");
+			if (digExposesWater(bot, below.position) || digExposesLava(bot, below.position)) return stop("exposes liquid");
 			try {
 				await bot.lookAt(offset(below.position, 0.5, 0.5, 0.5));
 				await safeDig(bot, below);
-			} catch {
-				return null;
+			} catch (e) {
+				return stop(`dig failed: ${String((e as Error)?.message ?? e).slice(0, 40)}`);
 			}
 			await sleep(700); // drop onto the next block and settle
 			logEvent(mineCat(blockType), "dig_down", `${below.name} y=${fy - 1}`);
@@ -1445,6 +1452,16 @@ export const mineBlock = async (
 	if (!startBlock) {
 		for (let attempt = 0; attempt < 3; attempt++) {
 			logEvent(mineCat(blockType),"exploring", `${blockType} attempt ${attempt + 1}/3`);
+			// At a lake shore the dig-down stops on water and every random explore
+			// leg walks into the lake (race57 785: 6 Mine Cobblestone restarts and
+			// 4 escape_water preempts in 3 min with a full water bucket). Move to
+			// high dry ground first and dig down there.
+			const wetHere = bot.findBlocks({ matching: (n: string) => n === "water", maxDistance: 6, count: 1 }).length > 0;
+			if (isStone && wetHere && (await relocateToHighGround(bot))) {
+				startBlock = await digDownToStone();
+				if (startBlock) break;
+				continue;
+			}
 			await exploreRandom(bot, 40);
 			// Check memory again — blockSeen may have fired during exploration
 			const newRemembered = getRememberedResource(bot, blockType);
