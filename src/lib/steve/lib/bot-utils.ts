@@ -960,10 +960,13 @@ export const digStaircaseUp = async (
 		// (race43 731: 3+ min on its own table at y33 with a full iron kit). Sneak
 		// while placing — the server then places instead of interacting.
 		const sneakPlace = /crafting_table|furnace|smoker|chest|barrel|anvil|bed|trapdoor|door|gate|lever|button/.test(floorRef.name);
-		if (sneakPlace) {
-			logEvent("nav", "pillar_sneak", `on ${floorRef.name} at y=${fy}`, bot.entity.position);
-			bot.setControlState("sneak", true);
-		}
+		if (sneakPlace) logEvent("nav", "pillar_sneak", `on ${floorRef.name} at y=${fy}`, bot.entity.position);
+		// Centre in the cell and sneak for EVERY pillar step, like cast.ts pillarUp
+		// (the climber that works): from a cell edge the block lands in the wrong
+		// column or inside our own hitbox and never registers — race47 746 logged
+		// pillar_stuck ×15 at y19 and 747 ×2 at y25, both on plain rock.
+		await walkToXZ(bot, fx + 0.5, fz + 0.5, { targetDist: 0.15, maxTime: 900 });
+		bot.setControlState("sneak", true);
 		await bot.lookAt(vec3(fx + 0.5, fy - 0.5, fz + 0.5), true);
 		bot.setControlState("jump", true);
 		for (let k = 0; k < 14; k++) {
@@ -985,7 +988,7 @@ export const digStaircaseUp = async (
 			if (solid(B(fx, fy, fz))) break; // a block landed under us — risen a level
 		}
 		bot.setControlState("jump", false);
-		if (sneakPlace) bot.setControlState("sneak", false);
+		bot.setControlState("sneak", false);
 		await sleep(350);
 
 		// Count a level GAINED only when a block actually landed under us: the old
@@ -1146,6 +1149,16 @@ export const returnToSurface = async (bot: Bot): Promise<boolean> => {
 		);
 		// ~3.5s per level with a stone pick; a cavern-floor mine can be 20 below.
 		await digStaircaseUp(bot, entry.y, Date.now() + 100000);
+		// The staircase climber gave up (pillar_stuck / wet ceiling) well short of
+		// the entry: the cast pillar is the proven fallback (race47 747 rose 19
+		// levels on it right after pillar_stuck) — the mining boxed branch already
+		// used it; the bucket/wood climbs did not and looped 'still_underground'.
+		if (!atEntry() && !bot.entity.isInWater && Math.floor(bot.entity.position.y) < entry.y - 8) {
+			logEvent("nav", "pillar_fallback", `y=${Math.floor(bot.entity.position.y)} → ${entry.y}`, bot.entity.position);
+			const { pillarUp } = await import("../tasks/portal/cast.ts");
+			await pillarUp(bot, entry.y).catch(() => false);
+			bot.setControlState("sneak", false);
+		}
 	}
 	// The recorded entry can be the BOTTOM of a dig-down hole (Mine Cobblestone sinks
 	// the bot 6 blocks into a 1-wide shaft before Mine Iron records the entry), so
