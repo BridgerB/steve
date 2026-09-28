@@ -28,7 +28,14 @@
 	// The bot the viewer is attached to. When the poll brings a new race (new bot
 	// id), drop the previous bot's live state so the panel doesn't show its last
 	// position/ladder under the new name until the new socket delivers.
-	const liveBotId = $derived(race.bots[0]?.id ?? '');
+	// Follow the LEADER (most steps done; ties → earliest bot), not always bots[0]:
+	// the bot that is furthest along is the one worth watching.
+	const leader = $derived.by(() => {
+		let best = race.bots[0];
+		for (const b of race.bots) if (b.done.length > (best?.done.length ?? -1)) best = b;
+		return best;
+	});
+	const liveBotId = $derived(leader?.id ?? '');
 	$effect(() => {
 		liveBotId;
 		live = null;
@@ -36,7 +43,7 @@
 	// Merge the live stream over the server snapshot: fast-changing fields come live;
 	// historical bits (split times, event log) still come from the snapshot.
 	const bot = $derived.by(() => {
-		const s = race.bots[0];
+		const s = leader;
 		if (!s || !live) return s;
 		return {
 			...s,
