@@ -122,7 +122,9 @@ const stepTimeoutMs = (stepId: string): number =>
 			: stepId === "gather_wood"
 				? 210000
 				: stepId === "get_water_buckets"
-					? 240000 // a dry-hills hunt (explore rounds + long_hunt legs) needs >120s
+					? 360000 // a dry-hills hunt needs >120s; a mountain mine adds a 50-level
+					// staircase climb first (race49 753/754: timed out at 240s mid-climb, then
+					// lost the climb to a Mine Cobblestone detour before re-entering)
 					: 120000;
 
 const completedFrom = (state: GameState): Set<string> =>
