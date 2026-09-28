@@ -359,7 +359,7 @@ const exposedFluidSources = (
 		// spawn) crowd out the exposed surface pool we actually want, so grab plenty.
 		count: 1024,
 	});
-	if (positions.length === 0) return null;
+	if (positions.length === 0) return [];
 	// findBlocks (exposed:false) sees fluid THROUGH solid rock. Only EXPOSED sources (with
 	// an air neighbour) are reachable/scoopable — targeting encased lava was clearing a cast
 	// site next to lava the bot could never bucket ("pool unreachable"). Require an air
