@@ -1306,12 +1306,18 @@ export const mineBlock = async (
 					if (isWater(bot.blockAt(vec3(p.x + dx, p.y + dy, p.z + dz)) as Block | null)) return true;
 		return false;
 	};
+	// Targets the pathfinder could not get within reach of, twice: a stone up a
+	// lakeside cliff was re-picked 10× in 40s (race43 729, "nav_short still 7.0
+	// away" each time) until the bot walked into the lake.
+	const navMiss = new Map<string, number>();
 	const findDryTarget = (radius: number): Block | null => {
 		// Keep this scan small: findBlocks walks the whole radius when there are few
 		// matches, synchronously. radius 64 / count 48 on a dirt plateau scanned ~2M
 		// blocks per call, starved the keepalive and got the bot kicked every 30s
 		// (race 635: EPIPE → reconnect → EPIPE). Stone is dug down to anyway.
-		const positions = findBlocks(bot, isTarget, Math.min(radius, 24), 12);
+		const positions = findBlocks(bot, isTarget, Math.min(radius, 24), 12).filter(
+			(p) => (navMiss.get(`${p.x},${p.y},${p.z}`) ?? 0) < 2,
+		);
 		// Stone: dry candidates only — the wet fallback is exactly the pond trap, and
 		// digDownToStone below is the better fallback. Ores keep the nearest match.
 		const dry = positions.find((p) => !nearWater(p)) ?? (isStone ? undefined : positions[0]);
@@ -1647,7 +1653,9 @@ export const mineBlock = async (
 				continue;
 			}
 			if (distance(bot.entity.position, block.position) > 5.5) {
-				logEvent(mineCat(blockType), "nav_short", `still ${distance(bot.entity.position, block.position).toFixed(1)} away`);
+				const k = `${block.position.x},${block.position.y},${block.position.z}`;
+				navMiss.set(k, (navMiss.get(k) ?? 0) + 1);
+				logEvent(mineCat(blockType), "nav_short", `still ${distance(bot.entity.position, block.position).toFixed(1)} away (miss ${navMiss.get(k)})`);
 				continue;
 			}
 		}
