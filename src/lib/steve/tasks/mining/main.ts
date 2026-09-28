@@ -860,6 +860,14 @@ export const digDownVertical = async (
 		// Dig only while standing on solid ground (see 5× airborne penalty above).
 		for (let w = 0; w < 12 && !bot.entity.onGround; w++) await sleep(50);
 
+		// Stand in the CENTRE of the cell. On a cell edge the 0.6-wide hitbox still
+		// rests on the neighbour after the block underfoot is dug, so the bot never
+		// drops in: "air below, on ground" for the whole 60s descent budget
+		// ("Stuck descending", once per race: 658 y66, 665 y60, 670 y53).
+		{
+			const c = bot.entity.position;
+			await walkToXZ(bot, Math.floor(c.x) + 0.5, Math.floor(c.z) + 0.5, { targetDist: 0.2, maxTime: 1200 });
+		}
 		const p = bot.entity.position;
 		const fx = Math.floor(p.x);
 		const fy = Math.floor(p.y);
