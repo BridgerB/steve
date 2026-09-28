@@ -1117,11 +1117,21 @@ export const mineBlock = async (
 	let bestCount = 0;
 	for (const [dx, dz] of dirs) {
 		let count = 0;
+		// A direction that runs into liquid is not a mining direction. Picking the
+		// pond side (dx toward the water we just escaped) walked the bot straight
+		// back in every attempt at the shoreline.
+		let liquidAhead = false;
 		for (let i = 1; i <= 8; i++) {
 			const b = bot.blockAt(offset(p, dx * i, 0, dz * i)) as Block | null;
 			const bBelow = bot.blockAt(offset(p, dx * i, -1, dz * i)) as Block | null;
+			const bBelow2 = bot.blockAt(offset(p, dx * i, -2, dz * i)) as Block | null;
+			if (isLiquid(b) || isLiquid(bBelow) || isLiquid(bBelow2)) {
+				liquidAhead = true;
+				break;
+			}
 			if ((b && isTarget(b.name)) || (bBelow && isTarget(bBelow.name))) count++;
 		}
+		if (liquidAhead) continue;
 		if (count > bestCount) {
 			bestCount = count;
 			bestDir = [dx, dz];
@@ -1191,11 +1201,22 @@ export const mineBlock = async (
 		] as (Block | null)[];
 
 		let block: Block | null = null;
-		for (const b of candidates) {
-			if (b && isTarget(b.name)) {
-				block = b;
-				break;
+		for (const [ci, b] of candidates.entries()) {
+			if (!b || !isTarget(b.name)) continue;
+			// The two DOWNWARD candidates drop the bot onto whatever is under them.
+			// Race 581 dug "straight below" twice at one XZ and fell into a lava
+			// pocket (20→0 hp in 3s). Refuse a downward dig unless the landing
+			// column (and its 4 neighbours) is lava-free a few blocks down.
+			const downward = ci <= 1;
+			if (
+				downward &&
+				!dropColumnLavaFree(bot, b.position.x, b.position.y - 1, b.position.z, 4)
+			) {
+				logEvent(mineCat(blockType), "skip_lava_below", `${b.position.x},${b.position.y},${b.position.z}`);
+				continue;
 			}
+			block = b;
+			break;
 		}
 
 		if (!block) {

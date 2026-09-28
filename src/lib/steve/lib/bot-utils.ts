@@ -2054,7 +2054,77 @@ const escapeViaPathfinder = async (bot: Bot): Promise<boolean> => {
 	}
 };
 
-export const escapeWater = async (
+// ONE escape per bot at a time. The escape_water step AND attachSafety's drown
+// guard both call escapeWater; when both ran at once each loop locked its own
+// bank and they alternated the control states every 350ms — the bot thrashed
+// between two targets at the shoreline for minutes (race 580s: "toward
+// -3397,5579" / "toward -3397,5581" interleaved). A second caller now just
+// awaits the escape already in flight.
+const escapeInFlight = new WeakMap<Bot, Promise<boolean>>();
+
+export const escapeWater = (
+	bot: Bot,
+	lastSafe?: Vec3,
+	opts: { final?: boolean } = {},
+): Promise<boolean> => {
+	const running = escapeInFlight.get(bot);
+	if (running) return running;
+	const p = escapeWaterInner(bot, lastSafe, opts)
+		.then(async (ok) => {
+			if (ok) await settleInland(bot);
+			return ok;
+		})
+		.finally(() => escapeInFlight.delete(bot));
+	escapeInFlight.set(bot, p);
+	return p;
+};
+
+/** After an escape lands on the shore lip, walk a few blocks INLAND — to a
+ *  standing spot with no water within 2 blocks. Returning the instant we touch
+ *  the bank left the bot at the water's edge, and the resumed step (mine a
+ *  direction / walk to a shoreline tree) stepped straight back in: escape →
+ *  step → preempt → escape, 100+ s at one pond. Best-effort, short budget. */
+const settleInland = async (bot: Bot): Promise<void> => {
+	const p = bot.entity?.position;
+	if (!p) return;
+	const cx = Math.floor(p.x);
+	const cy = Math.floor(p.y);
+	const cz = Math.floor(p.z);
+	const wet = (x: number, y: number, z: number): boolean =>
+		!!getBlock(bot, vec3(x, y, z))?.name.includes("water");
+	const dryAround = (x: number, y: number, z: number): boolean => {
+		for (let dx = -2; dx <= 2; dx++)
+			for (let dz = -2; dz <= 2; dz++)
+				for (let dy = -2; dy <= 0; dy++) if (wet(x + dx, y + dy, z + dz)) return false;
+		return true;
+	};
+	if (dryAround(cx, cy, cz)) return;
+	let best: { v: Vec3; d: number } | null = null;
+	for (let dx = -8; dx <= 8; dx++) {
+		for (let dz = -8; dz <= 8; dz++) {
+			for (let y = cy + 3; y >= cy - 3; y--) {
+				const g = getBlock(bot, vec3(cx + dx, y, cz + dz));
+				if (!isStandableGround(g) || g?.name.includes("water")) continue;
+				if (!isPassableBlock(getBlock(bot, vec3(cx + dx, y + 1, cz + dz)))) break;
+				if (!isPassableBlock(getBlock(bot, vec3(cx + dx, y + 2, cz + dz)))) break;
+				if (!dryAround(cx + dx, y + 1, cz + dz)) break;
+				const d = Math.abs(dx) + Math.abs(dz) + Math.abs(y + 1 - cy);
+				if (!best || d < best.d) best = { v: vec3(cx + dx, y + 1, cz + dz), d };
+				break;
+			}
+		}
+	}
+	if (!best) return;
+	try {
+		await goTo(bot, best.v, { range: 0, timeout: 6000 });
+		bot.clearControlStates();
+		logEvent("nav", "settled_inland", `to ${best.v.x},${best.v.y},${best.v.z}`);
+	} catch {
+		/* best-effort */
+	}
+};
+
+const escapeWaterInner = async (
 	bot: Bot,
 	lastSafe?: Vec3,
 	opts: { final?: boolean } = {},
@@ -2628,6 +2698,12 @@ export const attachSafety = (bot: Bot): void => {
 			if (!inWaterSince) inWaterSince = Date.now();
 		} else {
 			inWaterSince = 0;
+			// Out of the trap entirely → the drown clock resets too. The 1.2s
+			// "brief surfacing" grace above kept submergedSince alive after a
+			// successful escape, so the guard re-fired ON DRY LAND
+			// ("inWater=0ms submerged=3045ms") and yanked the bot back into an escape.
+			submergedSince = 0;
+			lastWetTime = 0;
 		}
 
 		// Engage the water escape almost immediately: any time the bot has been in
