@@ -343,7 +343,7 @@ const branchMineOre = async (
 	level: number,
 	dropItem: string,
 	deadline: number,
-): Promise<{ mined: number; dug: number; lostDrops: boolean }> => {
+): Promise<{ mined: number; dug: number; lostDrops: boolean; noOre?: boolean }> => {
 	let mined = 0;
 	let dug = 0;
 	let dir = pickDigDir(bot);
@@ -534,9 +534,18 @@ const branchMineOre = async (
 		// cavern (goTo keeps failing) or its drops fall into lava. Bail so mineDeepOre
 		// relocates to fresh solid rock. Time-based so it survives the ~2min process
 		// reconnects that reset the per-bot stuck counter.
-		if (Date.now() - lastCollectAt > 50000) {
-			logEvent(mineCat(blockType), "drops_lost", `50s no collection at y=${floorY(bot)} — relocating`);
+		// Only a real loss counts as lost drops: ore WAS broken and nothing landed in
+		// the pack. With mined=0 the tunnel simply hasn't hit a vein yet — race 628
+		// was declared "drops_lost" after 50s of clean strip-mining, pillared 14
+		// blocks up out of the band and started over. Give a barren spot longer,
+		// then report it as barren so the caller relocates sideways, not up.
+		if (mined > 0 && Date.now() - lastCollectAt > 50000) {
+			logEvent(mineCat(blockType), "drops_lost", `50s no collection at y=${floorY(bot)} (mined ${mined}) — relocating`);
 			return { mined, dug, lostDrops: true };
+		}
+		if (mined === 0 && Date.now() - lastCollectAt > 120000) {
+			logEvent(mineCat(blockType), "no_ore", `120s no ore at y=${floorY(bot)} (dug ${dug}) — relocating sideways`);
+			return { mined, dug, lostDrops: false, noOre: true };
 		}
 		await ensurePickaxe(bot);
 		// Grab any ore the tunnel has already exposed in its walls/floor/ceiling.
@@ -897,7 +906,7 @@ const mineDeepOre = async (
 
 	// At the band — branch-mine until enough of the DROP is actually in the pack.
 	const before = invCount(bot, dropItem);
-	const { dug, lostDrops } = await branchMineOre(
+	const { dug, lostDrops, noOre } = await branchMineOre(
 		bot,
 		blockType,
 		isTarget,
@@ -944,7 +953,7 @@ const mineDeepOre = async (
 			? { x: anc.x, z: anc.z, n: stuckN, iron: anc.iron }
 			: { x: cur.x, z: cur.z, n: 0, iron: have },
 	);
-	if ((stuckN >= 3 || lostDrops) && have < targetCount) {
+	if ((stuckN >= 3 || lostDrops || noOre) && have < targetCount) {
 		mineStuckState.set(bot, { x: cur.x, z: cur.z, n: 0, iron: have });
 		const fx = Math.floor(cur.x);
 		const fz = Math.floor(cur.z);
@@ -973,8 +982,10 @@ const mineDeepOre = async (
 		// AWAY from the ore band, so there we relocate HORIZONTALLY at the current level
 		// instead. Pillar target is capped underground so it never reaches daylight.
 		const feetY = floorY(bot);
-		const deep = feetY < 45;
-		logEvent(mineCat(blockType), "relocate", `lost=${lostDrops} stuck=${stuckN} at ${fx},${fz},y${feetY} deep=${deep} solid=${bestSolid}`);
+		// A barren spot at the right band is relocated SIDEWAYS at this level; the
+		// climb is only for drops lost to lava below.
+		const deep = feetY < 45 && !noOre;
+		logEvent(mineCat(blockType), "relocate", `lost=${lostDrops} noOre=${!!noOre} stuck=${stuckN} at ${fx},${fz},y${feetY} deep=${deep} solid=${bestSolid}`);
 		if (deep) {
 			const climbTo = Math.min(level + 14, 50); // stay underground, never the sky
 			if (climbTo > feetY) {
@@ -984,8 +995,9 @@ const mineDeepOre = async (
 			}
 		}
 		const baseY = Math.floor(bot.entity.position.y);
-		const tx = Math.floor(bot.entity.position.x) + best[0] * 12;
-		const tz = Math.floor(bot.entity.position.z) + best[1] * 12;
+		const hop = noOre ? 20 : 12;
+		const tx = Math.floor(bot.entity.position.x) + best[0] * hop;
+		const tz = Math.floor(bot.entity.position.z) + best[1] * hop;
 		await goTo(bot, vec3(tx, baseY, tz), { range: 3, timeout: 25000 });
 		return { success: true, message: `Relocated toward ${tx},${tz}` };
 	}
@@ -1004,7 +1016,9 @@ export const mineBlock = async (
 	targetCount: number,
 ): Promise<StepResult> => {
 	let mined = 0;
-	const deadline = Date.now() + 110_000; // Return cleanly before 120s step timeout
+	// Return cleanly before the step timeout: deep ores (iron/coal band mining)
+	// have a 300s step budget in run-loop.ts, surface stone 120s.
+	const deadline = Date.now() + (blockType in DEEP_ORE_LEVEL ? 280_000 : 110_000);
 
 	// Equip best pickaxe before mining — prioritize higher tier
 	const pickTier = [
