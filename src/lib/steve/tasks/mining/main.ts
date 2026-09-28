@@ -722,7 +722,7 @@ export const branchMineExplore = async (
 // MOVING it's wedged at a cavern mouth and should relocate to fresh rock.
 /** Cut a straight 1x2 tunnel `n` cells in (dx,dz) at the current level and walk it.
  *  Refuses cells that touch lava/water or have no floor; returns cells advanced. */
-const tunnelToward = async (bot: Bot, dx: number, dz: number, n: number): Promise<number> => {
+export const tunnelToward = async (bot: Bot, dx: number, dz: number, n: number): Promise<number> => {
 	await ensurePickaxe(bot);
 	let moved = 0;
 	for (let i = 0; i < n; i++) {

@@ -19,6 +19,7 @@ import {
 	getRememberedResource,
 	goTo,
 	sleep,
+	surfaceYAt,
 	walkToXZ,
 } from "../../lib/bot-utils.ts";
 import { logEvent } from "../../lib/logger.ts";
@@ -1318,9 +1319,23 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 	}
 	if (!lava) return { success: false, message: "No lava pool found to cast at" };
 
+	// Lava the bot can bucket from where it stands: exposed, within 6 horizontally
+	// and 4 vertically. Anything else is "seen" but not reachable yet.
+	const lavaAdjacent = (): Vec3 | null => {
+		const l = findFluidSource(bot, "lava", 6);
+		const p = bot.entity.position;
+		return l &&
+			Math.abs(l.y + 0.5 - p.y) <= 4 &&
+			Math.hypot(l.x + 0.5 - p.x, l.z + 0.5 - p.z) <= 6
+			? l
+			: null;
+	};
+
 	// WALK to the spotted lava (near/medium/far) so the scoop + site prep are adjacent. Hop
 	// toward it, re-spotting closer each time; the pathfinder routes across the surface fast.
-	for (let hop = 0; hop < 10 && Date.now() < deadline; hop++) {
+	// Not when the lava is far BELOW: 10 hops of a 20s pathfind toward cave lava 80 blocks
+	// down burned 84s and went nowhere (race39 713) — the descent below handles that.
+	for (let hop = 0; hop < 10 && Date.now() < deadline && Math.abs(bot.entity.position.y - lava.y) <= 8; hop++) {
 		const bp = bot.entity.position;
 		if (Math.hypot(bp.x - (lava.x + 0.5), bp.z - (lava.z + 0.5)) <= 6) break;
 		await goTo(bot, vec3(lava.x, lava.y, lava.z), { range: 4, timeout: 20000 }).catch(
@@ -1328,6 +1343,70 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 		);
 		const re = findLava();
 		if (re) lava = re;
+	}
+
+	// 1a. The lava we can see is DEEP (cave lava spotted while mining — race39 713: the
+	//     first bot ever with flint&steel + water bucket saw lava at y-13 from y68, hopped
+	//     toward it for 84s, then anchored a lava-less site on the surface). Dig straight
+	//     down 4 blocks to the side of it, to one above its level, then tunnel in and open
+	//     the wall ABOVE the pool (lava can't flow up), so the scoop below has a source.
+	if (!lavaAdjacent() && Math.abs(bot.entity.position.y - lava.y) > 4) {
+		const { digDownVertical, tunnelToward } = await import("../mining/main.ts");
+		const p = bot.entity.position;
+		const ax = Math.abs(p.x - lava.x) >= Math.abs(p.z - lava.z);
+		const sx = ax ? Math.sign(p.x - lava.x) || 1 : 0;
+		const sz = ax ? 0 : Math.sign(p.z - lava.z) || 1;
+		const cx = lava.x + sx * 4;
+		const cz = lava.z + sz * 4;
+		logEvent(
+			"cast",
+			"lava_descend",
+			`lava ${lava.x},${lava.y},${lava.z} is ${Math.round(p.y - lava.y)} below — dig down at ${cx},${cz}`,
+		);
+		await goTo(bot, vec3(cx, surfaceYAt(bot, cx, cz), cz), { range: 1.5, timeout: 30000 }).catch(
+			() => {},
+		);
+		const r = await digDownVertical(bot, lava.y + 1, Math.min(deadline, Date.now() + 300000));
+		logEvent("cast", "lava_descended", `y=${r.y} stopped=${r.stopped ?? "none"}`);
+		for (let i = 0; i < 8 && !lavaAdjacent(); i++) {
+			if ((await tunnelToward(bot, -sx, -sz, 1)) === 0) break;
+		}
+		// tunnelToward refuses the dig that would expose lava — do that one deliberately:
+		// open the cells ahead at feet/head level (above the pool) and, if still nothing,
+		// the floor cell ahead (the pool is below it). Never a cell with lava BESIDE it.
+		if (!lavaAdjacent()) {
+			const q = bot.entity.position;
+			const fx = Math.floor(q.x);
+			const fy = Math.floor(q.y);
+			const fz = Math.floor(q.z);
+			const lavaBeside = (c: Vec3): boolean =>
+				(
+					[
+						[1, 0],
+						[-1, 0],
+						[0, 1],
+						[0, -1],
+					] as const
+				).some(([ox, oz]) => isLava(getBlock(bot, vec3(c.x + ox, c.y, c.z + oz))?.name));
+			outer: for (let k = 1; k <= 2 && !lavaAdjacent(); k++) {
+				for (const dy of [1, 0, -1]) {
+					const c = vec3(fx - sx * k, fy + dy, fz - sz * k);
+					if (lavaBeside(c)) break outer;
+					if (isSolid(getBlock(bot, c)?.name)) await digAt(bot, c);
+					if (lavaAdjacent()) break outer;
+				}
+			}
+		}
+		const got = lavaAdjacent();
+		const bp = bot.entity.position;
+		logEvent(
+			"cast",
+			got ? "lava_exposed" : "lava_not_exposed",
+			got
+				? `${got.x},${got.y},${got.z}`
+				: `at ${Math.floor(bp.x)},${Math.floor(bp.y)},${Math.floor(bp.z)} for lava ${lava.x},${lava.y},${lava.z}`,
+		);
+		if (got) lava = got;
 	}
 
 	// 1b. Scoop the lava bucket NOW, while we're standing adjacent on solid tunnel floor —
@@ -1357,6 +1436,12 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 			? vec3(lava.x + dx * 5, lava.y, lava.z)
 			: vec3(lava.x, lava.y, lava.z + dz * 5);
 	await goTo(bot, standSpot, { range: 1, timeout: 20000 }).catch(() => {});
+	// Never anchor a site in water: 713's retry stood in a pond, the anchor was logged
+	// there, and the escape/portal steps ping-ponged at the bank.
+	if (bot.entity.isInWater) {
+		logEvent("cast", "site_wet", "anchor spot is in water — abandon this attempt");
+		return { success: false, message: "Cast anchor is in water — retry from dry land" };
+	}
 
 	const bx = Math.floor(bot.entity.position.x);
 	const by = Math.floor(bot.entity.position.y);
