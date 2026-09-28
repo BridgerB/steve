@@ -15,6 +15,7 @@ import { distance, offset, vec3, type Vec3 } from "typecraft";
 import {
 	digExposesLava,
 	digExposesWater,
+	digStaircaseUp,
 	getBlock,
 	getRememberedResource,
 	goTo,
@@ -1335,7 +1336,11 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 	// toward it, re-spotting closer each time; the pathfinder routes across the surface fast.
 	// Not when the lava is far BELOW: 10 hops of a 20s pathfind toward cave lava 80 blocks
 	// down burned 84s and went nowhere (race39 713) — the descent below handles that.
-	for (let hop = 0; hop < 10 && Date.now() < deadline && Math.abs(bot.entity.position.y - lava.y) <= 8; hop++) {
+	// Hops are for lava at our level or ABOVE (a surface pool up a hill — race43 731
+	// saw one 18 above and 65 away and, with the old |dy| test, skipped the walk and
+	// tunnelled 70 blocks underground beneath it instead). Only lava far BELOW goes
+	// straight to the descent.
+	for (let hop = 0; hop < 10 && Date.now() < deadline && bot.entity.position.y - lava.y <= 8; hop++) {
 		const bp = bot.entity.position;
 		if (Math.hypot(bp.x - (lava.x + 0.5), bp.z - (lava.z + 0.5)) <= 6) break;
 		await goTo(bot, vec3(lava.x, lava.y, lava.z), { range: 4, timeout: 20000 }).catch(
@@ -1383,6 +1388,13 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 				"lava_descended",
 				`y=${r.y} stopped=${r.stopped ?? "none"} at ${Math.floor(dp.x)},${Math.floor(dp.z)} (lava ${Math.round(Math.hypot(dp.x - lava.x, dp.z - lava.z))} away)`,
 			);
+		}
+		// Lava still well ABOVE us (a pool up a slope the hops couldn't path to):
+		// climb to one above its level first, then tunnel in at that height so the
+		// exposure opens the pool's top face — never its side (that floods the tunnel).
+		if (lava.y - bot.entity.position.y > 4) {
+			logEvent("cast", "lava_climb", `lava ${lava.y - Math.floor(bot.entity.position.y)} above — staircase to y=${lava.y + 1}`, bot.entity.position);
+			await digStaircaseUp(bot, lava.y + 1, Math.min(deadline, Date.now() + 120000));
 		}
 		// Tunnel toward the pool, x leg then z leg, stopping 1 short on each axis so
 		// the exposure step below opens the last wall deliberately.
