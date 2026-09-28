@@ -410,11 +410,17 @@ export const setViewerPath = (
 		return m;
 	};
 
+	const camPos = viewer.camera.position;
 	const flush = (a: number, b: number, kind: string): void => {
 		if (b - a < 1) return;
+		// Drop waypoints at/next to the camera: a "place" segment that starts in the
+		// bot's own cell (a pillar from where it stands) draws a purple V across the
+		// whole first-person view even with back faces culled (race34 692 at y27).
 		const pts = points
 			.slice(a, b + 1)
-			.map((p) => new Vector3(p.x + 0.5, p.y + 0.45, p.z + 0.5));
+			.map((p) => new Vector3(p.x + 0.5, p.y + 0.45, p.z + 0.5))
+			.filter((v) => Vector3.Distance(v, camPos) >= 2.2);
+		if (pts.length < 2) return;
 		const tube = MeshBuilder.CreateTube(
 			"botPath",
 			{ path: pts, radius: 0.16, tessellation: 6, cap: Mesh.CAP_ALL },

@@ -206,6 +206,7 @@ export const smeltItems = async (
 		// covers 8 iron (~80s) and, if the furnace is slower, we still exit and COLLECT the
 		// partial output, then the step re-enters to finish the rest next tick.
 		const waitDeadline = Date.now() + 90_000;
+		let topups = 0;
 		while (Date.now() < waitDeadline) {
 			await sleep(2500);
 			const out = furnaceWindow.slots[2]?.count ?? 0;
@@ -214,6 +215,16 @@ export const smeltItems = async (
 			if (inLeft === 0) {
 				await sleep(9000); // last item may still be cooking — let it finish
 				break;
+			}
+			// Fuel ran out with input left (a short plank stack burns ~1.5 items per
+			// plank): top it up, else the furnace sits idle and the bot walks off with
+			// raw iron inside (race34 693: 7 raw_iron stranded, +3 ingots; 695: 4, +4).
+			if (!furnaceWindow.slots[1] && topups < 4) {
+				const ok = (await moveToSlot(isCoal, 1)) || (await moveToSlot(isFuelName, 1));
+				if (ok) {
+					topups++;
+					logEvent("smelt", "fuel_topup", `${furnaceWindow.slots[1]?.name} x${furnaceWindow.slots[1]?.count}`);
+				}
 			}
 		}
 
@@ -247,6 +258,10 @@ export const smeltItems = async (
 		if (fuelBack > 0) logEvent("smelt", "fuel_reclaimed", `${fuelBack}`);
 		await sleep(800);
 		took += await takeSlot(2);
+		// Input still queued (out of fuel / out of time): take the raw ore back so
+		// the next Smelt round (or a re-mine) isn't lost inside this furnace.
+		const inBack = await takeSlot(0);
+		if (inBack > 0) logEvent("smelt", "input_reclaimed", `${inBack}`);
 
 		// Never close while carrying an item — it would be dropped on the ground.
 		if (furnaceWindow.selectedItem) {

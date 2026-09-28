@@ -92,7 +92,11 @@ export const steps: readonly Step[] = [
 				// near trees were depleted, oscillated forever chasing far wood (`Gather Wood
 				// timed out 210s`) with 6-8 raw iron it never smelted (race123/299, race124/303
 				// — the deepest wall). Count coal, planks, OR logs as valid fuel.
-				(s.inventory.coal >= 1 ||
+				// … and fuel only matters while there is RAW iron to smelt: a bot with 8
+				// ingots and 6 planks (race34 692, after losing 25 planks to junk buttons)
+				// climbed 57 blocks for firewood it would never burn.
+				(s.inventory.ironOre === 0 ||
+					s.inventory.coal >= 1 ||
 					s.inventory.planks >= 8 ||
 					s.inventory.logs >= 2) &&
 				(s.equipment.hasCraftingTable ||
