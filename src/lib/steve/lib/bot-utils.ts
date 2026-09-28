@@ -3489,13 +3489,21 @@ export const otherBotsNear = (bot: Bot, radius: number): Vec3[] => {
 	// bot.players is keyed by the tab-list username and linked to the entity on
 	// spawn; entity.username itself is null when the entity spawned before the
 	// player_info packet, so don't rely on it.
+	// bot.players is EMPTY on this server (race50: 'players=0 linked=0' on every
+	// descend_start), so go by the entity list: every player entity that is not us.
+	const seen = new Set<number>();
 	for (const pl of Object.values(bot.players)) {
 		if (!pl || pl.username === bot.username) continue;
 		const e = pl.entity;
 		if (!e || e === bot.entity) continue;
+		seen.add(e.id);
 		const p = e.position;
-		if (!p) continue;
-		if (Math.hypot(p.x - me.x, p.z - me.z) <= radius) out.push(p);
+		if (p && Math.hypot(p.x - me.x, p.z - me.z) <= radius) out.push(p);
+	}
+	for (const e of Object.values(bot.entities)) {
+		if (!e || e.type !== "player" || e === bot.entity || e.id === bot.entity?.id || seen.has(e.id)) continue;
+		const p = e.position;
+		if (p && Math.hypot(p.x - me.x, p.z - me.z) <= radius) out.push(p);
 	}
 	return out;
 };

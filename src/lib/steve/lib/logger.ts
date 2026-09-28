@@ -124,12 +124,22 @@ const flushBuffers = (): void => {
 };
 
 /** Log a discrete event */
+// Last step started and last non-perf event, for attributing event-loop stalls
+// (race50: 15-97 s stalls, 400+ per bot, kicked 'Timed out' — the perf event
+// only carried a position, so the blocking scan could not be named).
+let lastStep = "";
+let lastEvent = "";
+export const getLastActivity = (): string => `step=${lastStep} last=${lastEvent}`;
+
 export const logEvent = (
 	category: string,
 	event: string,
 	detail?: string,
 	pos?: { x: number; y: number; z: number },
 ): void => {
+	if (category === "step" && event === "start") lastStep = (detail ?? "").slice(0, 40);
+	else if (category !== "perf" && category !== "step")
+		lastEvent = `${category}/${event} ${(detail ?? "").slice(0, 60)}`;
 	if (!writer) return;
 	// Auto-capture the bot's current pose so every event line carries position +
 	// look direction — makes "is it stuck?" obvious in the debug console.

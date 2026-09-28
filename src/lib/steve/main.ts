@@ -22,6 +22,7 @@ import { type Channel, createChannel } from "./lib/channel.ts";
 import {
 	attachDiagnostics,
 	initLogger,
+	getLastActivity,
 	logEvent,
 	NOISY_DEBUG,
 	registerRace,
@@ -137,7 +138,7 @@ export const startBot = async (): Promise<Bot> => {
 			const now = Date.now();
 			const drift = now - last - 1000;
 			last = now;
-			if (drift > 1500) logEvent("perf", "event_loop_blocked", `${drift}ms`, bot.entity?.position);
+			if (drift > 1500) logEvent("perf", "event_loop_blocked", `${drift}ms ${getLastActivity()}`, bot.entity?.position);
 		}, 1000);
 	}
 
