@@ -560,6 +560,10 @@ const runRace = async (count: number, timeoutMs: number) => {
 				const z = spawns[i]?.z ?? 0;
 				await rcon(`clear ${name}`);
 				await rcon(`tp ${name} ${x} 200 ${z}`);
+				// The race cell IS this bot's world spawn: without this, a death sends
+				// it back to the real world spawn thousands of blocks from its mine,
+				// furnace and table (race 604 drowned and respawned 4000 blocks away).
+				await rcon(`spawnpoint ${name} ${x} 200 ${z}`);
 				// Stagger: the box has only 4 cores, so let each bot's fresh chunk
 				// generation settle before teleporting the next — otherwise 10
 				// simultaneous gens saturate the CPU and the server misses keepalives,

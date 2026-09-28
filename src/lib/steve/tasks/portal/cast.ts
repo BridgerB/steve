@@ -13,6 +13,8 @@
 import type { Bot } from "typecraft";
 import { distance, offset, vec3, type Vec3 } from "typecraft";
 import {
+	digExposesLava,
+	digExposesWater,
 	getBlock,
 	getRememberedResource,
 	goTo,
@@ -276,8 +278,21 @@ export const pillarUp = async (
 			// in this column and otherwise blocks every jump (the stuck-jumping).
 			for (const dy of [2, 3]) {
 				const b = getBlock(bot, vec3(px, f + dy, pz));
+				// Never open the shaft into a liquid. Race 604 pillared out of its mine,
+				// broke into a lake bottom, the 1-wide column flooded and it drowned
+				// (typecraft has no buoyancy — the escape rises ~1 block/s, drowning
+				// costs 2 hp/s). Stop here and let the caller relocate horizontally.
+				if (b && (b.name.includes("water") || b.name.includes("lava"))) {
+					logEvent("cast", "pillar_blocked", `${b.name} at ${px},${f + dy},${pz}`);
+					return false;
+				}
 				if (b && isSolid(b.name) && b.name !== "obsidian") {
-					await digAt(bot, vec3(px, f + dy, pz));
+					const at = vec3(px, f + dy, pz);
+					if (digExposesWater(bot, at) || digExposesLava(bot, at)) {
+						logEvent("cast", "pillar_blocked", `liquid behind ${b.name} at ${px},${f + dy},${pz}`);
+						return false;
+					}
+					await digAt(bot, at);
 				}
 			}
 			if (!(await equip(bot, buildBlockName(bot)))) break;

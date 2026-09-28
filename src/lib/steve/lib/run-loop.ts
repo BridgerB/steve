@@ -98,12 +98,18 @@ const DEADLOCK_IDS = [
 // blocks off, and the walk alone eats the 120s budget → the step times out having
 // gathered nothing, looping forever (live race stalls: bots 074/084). 210s lets the
 // far-tree walk + chop finish so wood actually accumulates.
+// mine_iron / mine_coal descend to the ore band and branch-mine; 120s timed out
+// every attempt mid-branch (race 604-607: "Mine Iron Ore timed out (120s)" ×2-3
+// per bot, each restart re-descending). A displaced step is now actually
+// cancelled (taskScope), so a longer budget is safe.
 const stepTimeoutMs = (stepId: string): number =>
 	stepId === "build_nether_portal"
 		? 480000
-		: stepId === "gather_wood"
-			? 210000
-			: 120000;
+		: stepId === "mine_iron" || stepId === "mine_coal"
+			? 300000
+			: stepId === "gather_wood"
+				? 210000
+				: 120000;
 
 const completedFrom = (state: GameState): Set<string> =>
 	new Set(steps.filter((s) => s.isComplete(state)).map((s) => s.id));

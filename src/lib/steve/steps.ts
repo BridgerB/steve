@@ -238,6 +238,10 @@ export const steps: readonly Step[] = [
 			s.inventory.coal >= 6 ||
 			s.inventory.ironIngots >= 7 ||
 			s.inventory.planks >= 16 ||
+			// Bucket kit already crafted → nothing left to smelt, coal is dead weight.
+			// Race 606 had 2 buckets + 2 ingots (< 7) and spent 6 min relocate-looping
+			// on Mine Coal instead of going to fill water.
+			s.inventory.buckets + s.inventory.waterBuckets >= 2 ||
 			// READY TO SMELT → stop mining coal and go smelt with wood. Without this, a bot
 			// whose plank count dips below 16 (after crafting a table/tools) re-triggers
 			// Mine Coal, which relocate-LOOPS on sparse ore ("Relocated toward X,Y" forever)
