@@ -249,7 +249,12 @@ export const steps: readonly Step[] = [
 			// having furnace+iron+21 planks. If it can smelt now, it should.
 			(s.equipment.hasFurnace &&
 				s.inventory.ironOre >= 3 &&
-				s.inventory.planks >= 6),
+				s.inventory.planks >= 6) ||
+			// Furnace + enough WOOD fuel to smelt the 8-ingot kit (~6 planks; logs
+			// smelt too) → coal is optional. Race26 661 and race27 666/667 spent
+			// their whole runs relocate-looping for coal at y50 while holding a
+			// furnace and a stack of planks, never reaching iron.
+			(s.equipment.hasFurnace && s.inventory.planks + s.inventory.logs * 4 >= 10),
 		execute: async (bot, _state) => {
 			const { mineBlock } = await import("./tasks/mining/main.ts");
 			return mineBlock(bot, "coal_ore", 10);

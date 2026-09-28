@@ -228,7 +228,7 @@ export const descendStaircase = async (
 		// Continuing here would issue forward/down controls + digs that fight
 		// escapeWater's upward climb, leaving the bot bobbing in the flooded shaft.
 		if (bot.entity?.isInWater) return { y: floorY(bot), stopped: "in water" };
-		if (!bot.heldItem?.name.endsWith("_pickaxe")) await ensurePickaxe(bot);
+		if (!STONE_PLUS_PICKS.has(bot.heldItem?.name ?? "")) await ensurePickaxe(bot);
 		const p = bot.entity.position;
 		const fx = Math.floor(p.x);
 		const fy = Math.floor(p.y);
@@ -435,6 +435,13 @@ const branchMineOre = async (
 			// 3-4 blocks inside the wall). Dig the blocks on the eye→ore ray so the
 			// drop falls into an opening the bot can walk into.
 			if (!(await openLineToOre(bot, ore))) return false;
+			// Never break ore without a stone-or-better pick: the stone pick wears out
+			// mid-band, the wooden spare takes over silently and the ore drops NOTHING
+			// (race27 664: two ores "mined", 0 raw_iron, drops_lost relocate).
+			if (!(await ensurePickaxe(bot)) || !STONE_PLUS_PICKS.has(bot.heldItem?.name ?? "")) {
+				logEvent(mineCat(blockType), "no_pick", `held=${bot.heldItem?.name ?? "nothing"}`);
+				return false;
+			}
 			const above = bot.blockAt(offset(ore.position, 0, 1, 0)) as Block | null;
 			if (above && !isAir(above) && !isLiquid(above)) await lookDig(bot, above);
 			if (await lookDig(bot, ore)) {
@@ -845,7 +852,7 @@ export const digDownVertical = async (
 	while (floorY(bot) > targetY && Date.now() < deadline) {
 		if ((bot.health ?? 20) < 8) return { y: floorY(bot), stopped: "low health" };
 		if (bot.entity?.isInWater) return { y: floorY(bot), stopped: "in water" };
-		if (!bot.heldItem?.name.endsWith("_pickaxe")) await ensurePickaxe(bot);
+		if (!STONE_PLUS_PICKS.has(bot.heldItem?.name ?? "")) await ensurePickaxe(bot);
 		// Harvest ore the shaft has EXPOSED in its walls as we pass through the band —
 		// the 1-wide shaft slices veins, and mining those faces (drops land at our feet)
 		// collects much of the target on the way down. No X-ray: only uncovered walls.
