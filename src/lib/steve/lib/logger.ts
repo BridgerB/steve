@@ -9,9 +9,9 @@
  */
 
 import type { Bot } from "typecraft";
-import { connectDb, type SteveDb } from "./db.ts";
+import { createWriter, type Writer } from "./db.ts";
 
-let db: SteveDb | null = null;
+let writer: Writer | null = null;
 let flushing = false;
 let raceId: string = "";
 let botId: string = "";
@@ -83,9 +83,7 @@ export const initLogger = (race: string): void => {
 	botId = process.env.MC_USERNAME ?? "Steve";
 	raceId = race;
 
-	db = connectDb();
-	// Tables are owned by the Drizzle schema (src/lib/server/db/schema.ts) and
-	// created with `npm run db:apply:local` — the logger just connects and writes.
+	writer = createWriter();
 
 	flushInterval = setInterval(() => {
 		flushBuffers();
@@ -100,23 +98,15 @@ export const registerRace = (
 	timeoutSec?: number,
 	goal?: string,
 ): void => {
-	if (!db) return;
-	try {
-		db.prepare(
-			`INSERT INTO races (race_id, kind, started_at, bot_count, timeout_sec, goal)
-			 VALUES (?, ?, ?, ?, ?, ?)
-			 ON CONFLICT (race_id) DO NOTHING`,
-		).run(id, kind, new Date().toISOString(), botCount, timeoutSec ?? null, goal ?? null);
-	} catch {
-		/* best-effort */
-	}
+	if (!writer) return;
+	writer.registerRace(id, kind, botCount, timeoutSec ?? null, goal ?? null);
 };
 
 const ts = () => new Date().toISOString();
 
-// ── Flush: write all buffered rows as batched inserts (one transaction) ──
+// ── Flush: hand buffered rows to the writer (local node:sqlite or remote POST) ──
 const flushBuffers = (): void => {
-	if (!db || flushing) return;
+	if (!writer || flushing) return;
 	if (eventBuf.length === 0 && tickBuf.length === 0 && invBuf.length === 0)
 		return;
 
@@ -125,39 +115,7 @@ const flushBuffers = (): void => {
 		const events = eventBuf.splice(0);
 		const ticks = tickBuf.splice(0);
 		const inv = invBuf.splice(0);
-
-		db.exec("BEGIN");
-		try {
-			if (events.length) {
-				const stmt = db.prepare(
-					`INSERT INTO events (race_id, bot_id, ts, category, event, detail, x, y, z, yaw, pitch)
-					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				);
-				for (const r of events) stmt.run(...r);
-			}
-			if (ticks.length) {
-				const stmt = db.prepare(
-					`INSERT INTO ticks (race_id, bot_id, ts, x, y, z, yaw, pitch, health, food, dimension, block_below, block_at_cursor, is_in_water, on_ground)
-					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				);
-				for (const r of ticks) stmt.run(...r);
-			}
-			if (inv.length) {
-				const stmt = db.prepare(
-					`INSERT INTO inventory_snapshots (race_id, bot_id, ts, slot, item_name, count)
-					 VALUES (?, ?, ?, ?, ?, ?)`,
-				);
-				for (const r of inv) stmt.run(...r);
-			}
-			db.exec("COMMIT");
-		} catch (e) {
-			try {
-				db.exec("ROLLBACK");
-			} catch {
-				/* ignore */
-			}
-			throw e;
-		}
+		writer.writeBatch(events, ticks, inv);
 	} catch (e) {
 		console.error("logger: flush failed:", e instanceof Error ? e.message : e);
 	} finally {
@@ -172,7 +130,7 @@ export const logEvent = (
 	detail?: string,
 	pos?: { x: number; y: number; z: number },
 ): void => {
-	if (!db) return;
+	if (!writer) return;
 	// Auto-capture the bot's current pose so every event line carries position +
 	// look direction — makes "is it stuck?" obvious in the debug console.
 	const e = diagBot?.entity;
@@ -194,7 +152,7 @@ export const logEvent = (
 
 /** Log a full tick snapshot */
 const logTick = (bot: Bot): void => {
-	if (!db || !bot.entity?.position) return;
+	if (!writer || !bot.entity?.position) return;
 
 	const p = bot.entity.position;
 
@@ -481,16 +439,16 @@ export const stopLogger = (): void => {
 		clearInterval(flushInterval);
 		flushInterval = null;
 	}
-	if (!db) return;
+	if (!writer) return;
 	try {
 		flushBuffers();
 	} catch {
 		/* closing anyway */
 	}
-	const d = db;
-	db = null;
+	const w = writer;
+	writer = null;
 	try {
-		d.close();
+		w.close();
 	} catch {
 		/* closing anyway */
 	}

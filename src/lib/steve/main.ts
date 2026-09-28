@@ -395,11 +395,10 @@ const runRace = async (count: number, timeoutMs: number) => {
 			if (milestonesHit.has(m.name)) continue;
 			try {
 				// m.query is a trusted static condition from MILESTONES (no user input).
-				const rows = db
-					.prepare(
-						`SELECT bot_id FROM inventory_snapshots WHERE race_id = ? AND (${m.query}) LIMIT 1`,
-					)
-					.all(RACE_ID) as { bot_id: string }[];
+				const rows = db.query<{ bot_id: string }>(
+					`SELECT bot_id FROM inventory_snapshots WHERE race_id = ? AND (${m.query}) LIMIT 1`,
+					RACE_ID,
+				);
 				const row = rows[0];
 				if (row) {
 					milestonesHit.add(m.name);
@@ -414,11 +413,11 @@ const runRace = async (count: number, timeoutMs: number) => {
 		const db = getRaceDb();
 		if (!db) return false;
 		try {
-			const rows = db
-				.prepare(
-					`SELECT COUNT(*) AS c FROM events WHERE race_id = ? AND bot_id = ? AND event = 'success' AND detail LIKE 'Enter Nether:%'`,
-				)
-				.all(RACE_ID, botId) as { c: number }[];
+			const rows = db.query<{ c: number }>(
+				`SELECT COUNT(*) AS c FROM events WHERE race_id = ? AND bot_id = ? AND event = 'success' AND detail LIKE 'Enter Nether:%'`,
+				RACE_ID,
+				botId,
+			);
 			return (rows[0]?.c ?? 0) > 0;
 		} catch {
 			return false;
@@ -429,11 +428,11 @@ const runRace = async (count: number, timeoutMs: number) => {
 		const db = getRaceDb();
 		if (!db) return "no data";
 		try {
-			const rows = db
-				.prepare(
-					`SELECT item_name || 'x' || CAST(MAX(count) AS TEXT) AS inv FROM inventory_snapshots WHERE race_id = ? AND bot_id = ? GROUP BY item_name ORDER BY MAX(count) DESC LIMIT 5`,
-				)
-				.all(RACE_ID, botId) as { inv: string }[];
+			const rows = db.query<{ inv: string }>(
+				`SELECT item_name || 'x' || CAST(MAX(count) AS TEXT) AS inv FROM inventory_snapshots WHERE race_id = ? AND bot_id = ? GROUP BY item_name ORDER BY MAX(count) DESC LIMIT 5`,
+				RACE_ID,
+				botId,
+			);
 			return rows.map((r) => r.inv).join(", ") || "empty";
 		} catch {
 			return "db error";
