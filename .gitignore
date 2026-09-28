@@ -36,3 +36,5 @@ test-results
 /src/lib/typecraft/datagen/mod/run/
 .race-serial
 worker-configuration.d.ts
+# Viewer textures copied from the (gitignored) typecraft data dir (`npm run sync-textures`)
+/static/textures/

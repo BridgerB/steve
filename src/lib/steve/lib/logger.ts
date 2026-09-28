@@ -197,7 +197,13 @@ const logTick = (bot: Bot): void => {
 		bot.entity.onGround ? 1 : 0,
 	]);
 
+	// Inventory: only write a snapshot when it actually changed. Writing every
+	// tick was ~90% of all D1 rows (one row per slot per second per bot) and
+	// blew through the free tier's daily write budget. The dashboard reads the
+	// newest snapshot per bot, so a change-only snapshot is still the current
+	// inventory.
 	const registry = bot.registry;
+	const rows: InvRow[] = [];
 	for (let i = 0; i < bot.inventory.slots.length; i++) {
 		const item = bot.inventory.slots[i];
 		if (item && item.count > 0) {
@@ -206,10 +212,16 @@ const logTick = (bot: Bot): void => {
 				const def = registry.itemsById.get(item.type);
 				if (def) name = def.name;
 			}
-			invBuf.push([raceId, botId, t, i, name, item.count]);
+			rows.push([raceId, botId, t, i, name, item.count]);
 		}
 	}
+	const sig = rows.map((r) => `${r[3]}:${r[4]}:${r[5]}`).join("|");
+	if (sig !== lastInvSig) {
+		lastInvSig = sig;
+		invBuf.push(...rows);
+	}
 };
+let lastInvSig = "";
 
 /** Start the 1-second tick logger */
 export const startTickLogger = (bot: Bot): void => {

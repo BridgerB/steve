@@ -34,6 +34,43 @@ export class Relay {
 	private chunks = new Map<string, string>();
 	private entities = new Map<string, string>(); // latest spawn per id
 	private equips = new Map<string, string>();
+	// Bot's current chunk, from the latest `position`; chunks farther than
+	// KEEP_RADIUS from it are evicted so the buffer (and every replay) stays
+	// bounded instead of growing with everywhere the bot has ever been.
+	private botCx = 0;
+	private botCz = 0;
+	private static readonly KEEP_RADIUS = 4; // matches the bot's stream viewDistance
+
+	// Entity moves arrive hundreds of times a second (item drops, mobs, other
+	// bots). Coalesce to the latest position per entity and fan out ONE
+	// `entityMoves` batch every 100ms instead of a JSON message per move.
+	private moveBuf = new Map<string, Record<string, unknown>>();
+	private moveTimer: ReturnType<typeof setTimeout> | null = null;
+
+	private scheduleMoveFlush() {
+		if (this.moveTimer) return;
+		this.moveTimer = setTimeout(() => {
+			this.moveTimer = null;
+			if (this.moveBuf.size === 0) return;
+			const batch = JSON.stringify({ type: 'entityMoves', moves: [...this.moveBuf.values()] });
+			this.moveBuf.clear();
+			for (const v of this.viewers) {
+				try {
+					v.send(batch);
+				} catch {
+					/* ignore */
+				}
+			}
+		}, 100);
+	}
+
+	private pruneChunks() {
+		for (const key of this.chunks.keys()) {
+			const [cx, cz] = key.split(',').map(Number);
+			if (Math.abs(cx - this.botCx) > Relay.KEEP_RADIUS || Math.abs(cz - this.botCz) > Relay.KEEP_RADIUS)
+				this.chunks.delete(key);
+		}
+	}
 
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
 	constructor(_state: DurableObjectState, _env: Env) {}
@@ -78,7 +115,7 @@ export class Relay {
 	}
 
 	private onMessage(json: string) {
-		let msg: { type?: string; x?: number; z?: number; id?: number };
+		let msg: { type?: string; x?: number; z?: number; id?: number } & Record<string, unknown>;
 		try {
 			msg = JSON.parse(json);
 		} catch {
@@ -92,7 +129,23 @@ export class Relay {
 				break;
 			case 'position':
 				this.pos = json;
+				if (typeof msg.x === 'number' && typeof msg.z === 'number') {
+					const cx = Math.floor(msg.x / 16);
+					const cz = Math.floor(msg.z / 16);
+					if (cx !== this.botCx || cz !== this.botCz) {
+						this.botCx = cx;
+						this.botCz = cz;
+						this.pruneChunks();
+					}
+				}
 				break;
+			case 'entityMove':
+				// Coalesce; flushed as one `entityMoves` batch (see scheduleMoveFlush).
+				if (msg.id != null) {
+					this.moveBuf.set(String(msg.id), msg);
+					this.scheduleMoveFlush();
+				}
+				return;
 			case 'state':
 				this.live = json;
 				break;
@@ -112,6 +165,7 @@ export class Relay {
 				if (msg.id != null) {
 					this.entities.delete(String(msg.id));
 					this.equips.delete(String(msg.id));
+					this.moveBuf.delete(String(msg.id));
 				}
 				break;
 			case 'entityEquip':

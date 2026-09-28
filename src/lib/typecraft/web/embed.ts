@@ -283,6 +283,10 @@ export function mountViewer(
 			);
 		} else if (msg.type === "entityMove") {
 			updateViewerEntity(viewer, msg.id, msg.x, msg.y, msg.z, msg.yaw);
+		} else if ((msg as { type: string }).type === "entityMoves") {
+			// Relay-batched entity moves (latest position per entity, ~10Hz).
+			for (const m of (msg as unknown as { moves: { id: number; x: number; y: number; z: number; yaw: number }[] }).moves)
+				updateViewerEntity(viewer, m.id, m.x, m.y, m.z, m.yaw);
 		} else if (msg.type === "entityGone") {
 			removeViewerEntity(viewer, msg.id);
 		} else if (msg.type === "entityEquip") {
