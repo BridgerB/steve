@@ -693,8 +693,11 @@ const tunnelToward = async (bot: Bot, dx: number, dz: number, n: number): Promis
 		const cell = vec3(fx + dx, fy, fz + dz);
 		const cellUp = vec3(fx + dx, fy + 1, fz + dz);
 		if ([cell, cellUp].some((c) => digExposesLava(bot, c) || digExposesWater(bot, c))) break;
-		if (!(await lookDig(bot, head))) break;
-		if (!(await lookDig(bot, feet))) break;
+		// lookDig returns false for AIR too — an already-open cell ahead ended the
+		// tunnel at 0 cells (race33 689/690: "relocated 0/20 cells"). Only a refused
+		// dig on a solid block stops us.
+		if (!isAir(head) && !(await lookDig(bot, head))) break;
+		if (!isAir(feet) && !(await lookDig(bot, feet))) break;
 		await walkToXZ(bot, fx + dx + 0.5, fz + dz + 0.5, { targetDist: 0.3, maxTime: 1500 });
 		if (Math.floor(bot.entity.position.x) === fx && Math.floor(bot.entity.position.z) === fz) break;
 		moved++;
@@ -931,7 +934,13 @@ export const digDownVertical = async (
 ): Promise<{ y: number; stopped: string | null }> => {
 	await ensurePickaxe(bot);
 	let sideTries = 0;
+	let sideSteps = 0;
+	let lastFloor = floorY(bot);
 	while (floorY(bot) > targetY && Date.now() < deadline) {
+		if (floorY(bot) < lastFloor) {
+			lastFloor = floorY(bot);
+			sideSteps = 0; // descended — the sidestep budget resets
+		}
 		if ((bot.health ?? 20) < 8) return { y: floorY(bot), stopped: "low health" };
 		if (bot.entity?.isInWater) return { y: floorY(bot), stopped: "in water" };
 		if (!STONE_PLUS_PICKS.has(bot.heldItem?.name ?? "")) await ensurePickaxe(bot);
@@ -973,10 +982,18 @@ export const digDownVertical = async (
 		}
 
 		if (lavaClose || waterBelow || deepDrop) {
-			if (await sidestepToSolid(bot, 2)) continue;
+			// A 2-cell sidestep "succeeds" onto the next cell over the SAME lake and the
+			// loop ping-pongs there until the 60s descent budget dies (race33 688: 3×
+			// "Stuck descending at y=53" over water at y49). After 3 sidesteps with no
+			// descent, stop sidestepping: relocate, else report the water table.
+			if (sideSteps < 3 && (await sidestepToSolid(bot, 2))) {
+				sideSteps++;
+				continue;
+			}
 			// Sidestep couldn't escape (wide water table) — pathfind to dry ground.
 			if (await relocateToDryGround(bot)) {
 				sideTries = 0;
+				sideSteps = 0;
 				continue;
 			}
 			// Each failed relocate burns an 8s goTo; 7 of them ate the whole 60s descent
