@@ -191,6 +191,57 @@ const roam = async (bot: Bot, seen: Set<string>): Promise<Vec3 | null> => {
 	return null;
 };
 
+const REPLACEABLE = new Set(["air", "cave_air", "short_grass", "tall_grass", "fern", "large_fern", "snow_layer", "dead_bush", "leaf_litter"]);
+const BAD_FLOOR = (n: string): boolean =>
+	n === "air" || n === "cave_air" || n.includes("water") || n.includes("lava") || n.includes("leaves") || n.includes("gravel") || n.includes("sand");
+
+/**
+ * The speedrunner's flint trick: place a gravel block from the pack on the ground
+ * beside us, break it, pick the drop up. 10% flint per break; otherwise the gravel
+ * comes straight back, so a couple of gravel blocks are enough to farm a flint in
+ * ~20s instead of roaming a gravel-free forest for minutes (race45 737: 5+ min
+ * with 2 gravel in the pack; 738 the same with 3). Returns true once flint is held.
+ */
+const cycleGravel = async (bot: Bot, deadlineMs: number): Promise<boolean> => {
+	for (let i = 0; i < 40 && !findItem(bot, "flint") && Date.now() < deadlineMs; i++) {
+		throwIfPreempted();
+		const g = findItem(bot, "gravel");
+		if (!g) return false;
+		const p = bot.entity.position;
+		const fx = Math.floor(p.x);
+		const fy = Math.floor(p.y);
+		const fz = Math.floor(p.z);
+		let placed: Vec3 | null = null;
+		for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+			const cell = vec3(fx + dx, fy, fz + dz);
+			const cb = getBlock(bot, cell);
+			const below = getBlock(bot, vec3(fx + dx, fy - 1, fz + dz));
+			if (!cb || !REPLACEABLE.has(cb.name)) continue;
+			if (!below || BAD_FLOOR(below.name)) continue;
+			try {
+				await bot.equip(g as never, "hand");
+				await bot.placeBlockWithOptions(below as never, vec3(0, 1, 0), { forceLook: true });
+			} catch {
+				continue;
+			}
+			await sleep(250);
+			if (getBlock(bot, cell)?.name === "gravel") {
+				placed = cell;
+				break;
+			}
+		}
+		if (!placed) {
+			logEvent("flint", "gravel_cycle", `no spot to place beside ${fx},${fy},${fz}`, p);
+			return false;
+		}
+		if (i === 0) logEvent("flint", "gravel_cycle", `start with ${(g as { count?: number }).count ?? 1} gravel`, p);
+		await mineGravel(bot, placed);
+	}
+	const ok = !!findItem(bot, "flint");
+	logEvent("flint", "gravel_cycle", ok ? "flint!" : "no flint yet", bot.entity.position);
+	return ok;
+};
+
 /**
  * Mine gravel until a flint is in inventory or `deadlineMs` passes. Returns true
  * if a flint was obtained.
@@ -215,6 +266,9 @@ export const gatherFlint = async (
 		// at the river bank, 90s frozen each time, right after filling its bucket.
 		throwIfPreempted();
 		if ((bot.health ?? 20) < 6) break; // don't die for a flint
+		// Gravel already in the pack (picked up while mining, or from a pocket that
+		// yielded none): farm it in place before roaming anywhere.
+		if (findItem(bot, "gravel") && !bot.entity.isInWater && (await cycleGravel(bot, deadlineMs))) break;
 		let seed = findBlocks(bot, "gravel", 64, 40)
 			.filter((p) => !doneSeeds.has(key(p)) && !wet(bot, p) && !underWater(bot, p))
 			.map((p) => ({ p, d: distance(bot.entity.position, p) }))
