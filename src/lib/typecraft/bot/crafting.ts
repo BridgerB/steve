@@ -70,6 +70,13 @@ export const initCrafting = (bot: Bot, _options: BotOptions): void => {
 
 		const times = count ?? 1;
 		let windowCraftingTable: Window | null = null;
+		// Host-provided cancellation: steve's run-loop lets a timed-out step keep
+		// running in the background and dispatches the next one; two crafts then
+		// interleave clicks on different window ids and both fail ("No craft
+		// result" / "Promise timed out", race41 721). The host sets bot.preemptCheck
+		// to throw once its epoch moved on; we call it before every click.
+		const check = (): void =>
+			(bot as unknown as { preemptCheck?: () => void }).preemptCheck?.();
 
 		const doCraft = async () => {
 			bot.emit("debug", "craft", {
@@ -190,9 +197,11 @@ export const initCrafting = (bot: Bot, _options: BotOptions): void => {
 										throw new Error("Missing ingredient");
 									if (originalSourceSlot === null)
 										originalSourceSlot = sourceSlot;
+									check();
 									await bot.clickWindow(sourceSlot, 0, 0);
 								}
 
+								check();
 								await bot.clickWindow(slot(x, y), 1, 0);
 							}
 						}
@@ -227,9 +236,11 @@ export const initCrafting = (bot: Bot, _options: BotOptions): void => {
 								});
 								if (originalSourceSlot === null)
 									originalSourceSlot = sourceSlot;
+								check();
 								await bot.clickWindow(sourceSlot, 0, 0);
 							}
 
+							check();
 							await bot.clickWindow(destSlot, 1, 0);
 						}
 					}
@@ -267,6 +278,20 @@ export const initCrafting = (bot: Bot, _options: BotOptions): void => {
 					// the wood (race34 692: 25 birch buttons, 25 planks gone; 686: a door +
 					// stairs). Put the grid back and let the caller retry instead.
 					const got = window.slots[0];
+					// One line per craft showing what actually sits in the grid vs the
+					// result the server offered — the only way to tell a rejected click
+					// from a wrong pattern when "No craft result" comes back.
+					bot.emit("debug", "craft", {
+						event: "grid",
+						window: window.id,
+						grid: Array.from({ length: w * h }, (_, i) => {
+							const it = window.slots[i + 1];
+							return it ? `${it.name}x${it.count}` : "-";
+						}).join(","),
+						result: got ? `${got.name}x${got.count}` : null,
+						cursor: window.selectedItem?.name ?? null,
+					});
+					check();
 					if (got && got.type !== recipe.result.id) {
 						bot.emit("debug", "craft", { event: "wrong_result", got: got.name, want: recipe.result.id });
 						for (let s = 1; s <= w * h; s++) {

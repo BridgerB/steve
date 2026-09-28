@@ -2022,6 +2022,10 @@ export const craftItem = async (
 				await sleep(150);
 			} catch {}
 		}
+		// Let typecraft's click loop unwind the moment this step's epoch is stale
+		// (timed-out step still crafting while the next dispatch opens its own
+		// window — race41 721 looped "No craft result"/"Promise timed out").
+		(bot as unknown as { preemptCheck?: () => void }).preemptCheck = throwIfPreempted;
 		await bot.craft(fixedRecipe, count, craftingTable ?? undefined);
 	};
 
