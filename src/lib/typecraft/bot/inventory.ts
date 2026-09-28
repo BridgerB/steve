@@ -347,6 +347,45 @@ export const initInventory = (bot: Bot, _options: BotOptions): void => {
 		bot.emit("windowClose", window);
 	};
 
+	// ── Resync the player inventory from the server ──
+	//
+	// The client model drifts after a rejected/mis-applied click (a bot was seen
+	// holding "dirt" client-side while the server had its stone pickaxe in the
+	// selected slot, so every equip and dig failed for minutes). Vanilla has no
+	// "send me my inventory" packet, but a container click whose stateId does not
+	// match makes the server IGNORE the click and answer with the full container
+	// contents (sendAllDataToRemote). Click an always-empty slot (the 2x2 craft
+	// result, slot 0) with a bogus stateId and an empty cursor, then wait for it.
+	bot.resyncInventory = async (): Promise<boolean> => {
+		if (!bot.inventory || !bot.registry) return false;
+		if (!bot.supportFeature("stateIdUsed")) return false;
+		bot.client.write("container_click", {
+			windowId: 0,
+			slot: 0,
+			mouseButton: 0,
+			mode: 0,
+			stateId: -1,
+			changedSlots: [],
+			cursorItem: toNotch(bot.registry, null),
+		});
+		const got = await new Promise<boolean>((resolve) => {
+			const timeout = setTimeout(() => {
+				bot.client.removeListener("container_set_content", onItems);
+				resolve(false);
+			}, 1500);
+			const onItems = (packet: Record<string, unknown>) => {
+				if ((packet.windowId as number) !== 0) return;
+				clearTimeout(timeout);
+				bot.client.removeListener("container_set_content", onItems);
+				resolve(true);
+			};
+			bot.client.on("container_set_content", onItems);
+		});
+		bot.updateHeldItem();
+		bot.emit("debug", "inventory", { event: "resync", got });
+		return got;
+	};
+
 	// ── Set quick bar slot ──
 
 	bot.setQuickBarSlot = (slot: number) => {

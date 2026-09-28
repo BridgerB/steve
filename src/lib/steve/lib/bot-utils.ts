@@ -1827,6 +1827,10 @@ export const craftItem = async (
 				} catch {}
 				await sleep(400);
 			}
+			// "Missing ingredient" with the ingredients plainly in the pack = the client
+			// inventory model drifted from the server's. Pull the server's truth
+			// before retrying instead of re-clicking phantom slots.
+			await bot.resyncInventory().catch(() => false);
 			await sleep(300);
 		}
 	}

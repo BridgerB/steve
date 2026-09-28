@@ -175,10 +175,18 @@ const ensurePickaxe = async (bot: Bot): Promise<boolean> => {
 		bot.inventory.slots.find((s) => s && STONE_PLUS_PICKS.has(s.name));
 	let pick = findPick();
 	if (pick) {
-		if (!bot.heldItem?.name.endsWith("_pickaxe")) {
+		if (!STONE_PLUS_PICKS.has(bot.heldItem?.name ?? "")) {
 			await equipItem(bot, pick.name, "hand");
+			// Still not holding it → the client inventory model has drifted from the
+			// server (race29 672: server had the stone pick in the selected hotbar
+			// slot, client showed dirt; 'no_pick' ×6). Pull the truth and retry once.
+			if (!STONE_PLUS_PICKS.has(bot.heldItem?.name ?? "")) {
+				await bot.resyncInventory();
+				const again = findPick();
+				if (again) await equipItem(bot, again.name, "hand");
+			}
 		}
-		return true;
+		return STONE_PLUS_PICKS.has(bot.heldItem?.name ?? "");
 	}
 	// None left — craft a stone pickaxe (3 cobblestone + 2 sticks, needs a table)
 	if (invCount(bot, "cobblestone") < 3) return false;

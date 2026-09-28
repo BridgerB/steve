@@ -526,6 +526,8 @@ export type Bot = EventEmitter & {
 	moveSlotItem: (sourceSlot: number, destSlot: number) => Promise<void>;
 	setQuickBarSlot: (slot: number) => void;
 	updateHeldItem: () => void;
+	/** Force a full player-inventory resync from the server (see inventory.ts). */
+	resyncInventory: () => Promise<boolean>;
 	activateItem: (offhand?: boolean) => void;
 	deactivateItem: () => void;
 	consume: () => Promise<void>;
