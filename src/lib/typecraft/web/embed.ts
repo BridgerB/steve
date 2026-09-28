@@ -236,6 +236,18 @@ export function mountViewer(
 	let closed = false;
 	let raf = 0;
 
+	// Camera smoothing: position packets arrive ~20Hz with jitter over the relay
+	// (p99 gaps >100ms), and hard-setting the camera per packet reads as stepping.
+	// Keep the latest packet as a target and ease the camera toward it every frame.
+	type Pose = { x: number; y: number; z: number; yaw: number; pitch: number };
+	let camTarget: Pose | null = null;
+	let camCur: Pose | null = null;
+	const TWO_PI = Math.PI * 2;
+	const lerpAngle = (a: number, b: number, t: number): number => {
+		const d = ((((b - a) % TWO_PI) + TWO_PI + Math.PI) % TWO_PI) - Math.PI; // shortest arc
+		return a + d * t;
+	};
+
 	const sizeCanvas = () => {
 		const w = canvas.clientWidth || 300;
 		const h = canvas.clientHeight || 200;
@@ -249,7 +261,15 @@ export function mountViewer(
 	const processMessage = (msg: ServerMessage): void => {
 		if (!viewer) return;
 		if (msg.type === "position") {
-			setViewerCamera(viewer, vec3(msg.x, msg.y, msg.z), msg.yaw, msg.pitch);
+			camTarget = { x: msg.x, y: msg.y, z: msg.z, yaw: msg.yaw, pitch: msg.pitch };
+			if (!camCur) {
+				// First fix (or after a teleport-sized jump): snap instead of easing.
+				camCur = { ...camTarget };
+				setViewerCamera(viewer, vec3(msg.x, msg.y, msg.z), msg.yaw, msg.pitch);
+			} else if (Math.hypot(msg.x - camCur.x, msg.y - camCur.y, msg.z - camCur.z) > 24) {
+				camCur = { ...camTarget };
+				setViewerCamera(viewer, vec3(msg.x, msg.y, msg.z), msg.yaw, msg.pitch);
+			}
 			opts.onPose?.({ x: msg.x, y: msg.y, z: msg.z, yaw: msg.yaw, pitch: msg.pitch });
 		} else if (msg.type === "chunk") {
 			const raw = Buffer.from(msg.buf, "base64");
@@ -385,8 +405,23 @@ export function mountViewer(
 		};
 	};
 
+	let lastFrame = performance.now();
 	const loop = () => {
 		try {
+			if (viewer && camTarget && camCur) {
+				// Time-based easing (~90ms to converge) so it's frame-rate independent.
+				const now = performance.now();
+				const t = Math.min(1, (now - lastFrame) / 90);
+				lastFrame = now;
+				camCur.x += (camTarget.x - camCur.x) * t;
+				camCur.y += (camTarget.y - camCur.y) * t;
+				camCur.z += (camTarget.z - camCur.z) * t;
+				camCur.yaw = lerpAngle(camCur.yaw, camTarget.yaw, t);
+				camCur.pitch += (camTarget.pitch - camCur.pitch) * t;
+				setViewerCamera(viewer, vec3(camCur.x, camCur.y, camCur.z), camCur.yaw, camCur.pitch);
+			} else {
+				lastFrame = performance.now();
+			}
 			if (viewer) renderViewer(viewer);
 		} catch (_) {
 			// entity mesh hiccups must not kill the loop
