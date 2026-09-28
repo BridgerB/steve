@@ -581,8 +581,16 @@ export const initDigging = (bot: Bot, _options: BotOptions): void => {
 			speed *= 0.3 ** (fatigue.amplifier + 1);
 		}
 
-		// Underwater penalty (unless Aqua Affinity helmet)
-		if (bot.entity.isInWater) {
+		// Underwater penalty (unless Aqua Affinity helmet). Vanilla applies it when
+		// the EYES are in water (isEyeInFluid), not when any part of the hitbox is:
+		// a player treading water at the surface digs the bank at the off-ground
+		// rate only. Using isInWater here made the client wait 25× for a dig the
+		// server completes at 5×, so bank-notch digs timed out while floating.
+		const eyeY = bot.entity.position.y + PLAYER_EYE_HEIGHT;
+		const eyeBlock = bot.blockAt(
+			vec3(Math.floor(bot.entity.position.x), Math.floor(eyeY), Math.floor(bot.entity.position.z)),
+		);
+		if (eyeBlock?.name.includes("water")) {
 			let hasAquaAffinity = false;
 			// Helmet is slot 5 in inventory
 			const helmet = bot.inventory?.slots[5];

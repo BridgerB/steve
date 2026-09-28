@@ -9,6 +9,7 @@ import {
 	digExposesLava,
 	digExposesWater,
 	dropColumnLavaFree,
+	dropColumnSafe,
 	equipItem,
 	escapeWater,
 	exploreRandom,
@@ -1130,7 +1131,7 @@ export const mineBlock = async (
 			if (!below) return null;
 			if (isTarget(below.name)) return below;
 			if (isLiquid(below) || below.name === "bedrock") return null;
-			if (!dropColumnLavaFree(bot, fx, fy - 2, fz, 4)) return null;
+			if (!dropColumnSafe(bot, fx, fy - 2, fz)) return null;
 			if (digExposesWater(bot, below.position) || digExposesLava(bot, below.position)) return null;
 			try {
 				await bot.lookAt(offset(below.position, 0.5, 0.5, 0.5));
@@ -1320,9 +1321,9 @@ export const mineBlock = async (
 			const downward = ci <= 1;
 			if (
 				downward &&
-				!dropColumnLavaFree(bot, b.position.x, b.position.y - 1, b.position.z, 4)
+				!dropColumnSafe(bot, b.position.x, b.position.y - 1, b.position.z)
 			) {
-				logEvent(mineCat(blockType), "skip_lava_below", `${b.position.x},${b.position.y},${b.position.z}`);
+				logEvent(mineCat(blockType), "skip_unsafe_below", `${b.position.x},${b.position.y},${b.position.z}`);
 				continue;
 			}
 			block = b;

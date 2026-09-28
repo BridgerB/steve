@@ -2216,8 +2216,9 @@ const escapeWaterInner = async (
 
 	// PRIMARY: route out to real shore with the pathfinder (fast + no bank-climbing
 	// flakiness). Only fall through to the manual carve-a-stair logic below when no
-	// reachable shore exists (a fully boxed pocket).
-	if (await escapeViaPathfinder(bot)) return true;
+	// reachable shore exists (a fully boxed pocket). STEVE_ESCAPE_NO_PF=1 (harness
+	// only) skips it so the manual swim/carve path can be exercised on its own.
+	if (!process.env.STEVE_ESCAPE_NO_PF && (await escapeViaPathfinder(bot))) return true;
 
 	// The first solid, diggable block straight up within reach — for a SEALED
 	// flooded cave (buoyancy presses our head to the cap), where pathfinding can't
@@ -2306,7 +2307,7 @@ const escapeWaterInner = async (
 			await bot.lookAt(vec3(pos.x + 0.5, pos.y + 0.5, pos.z + 0.5), true);
 			await Promise.race([
 				(bot.dig(b as never, true) as Promise<void>).catch(() => {}),
-				sleep(5000), // grounded-underwater dirt is ~3.75s (5× penalty); give it room
+				sleep(9000), // off-ground dirt is ~3.75s, picked stone ~5.6s (5× penalty); give it room
 			]);
 			bot.stopDigging();
 		} catch {
@@ -2565,25 +2566,64 @@ const escapeWaterInner = async (
 								) ?? [1, 0]);
 				}
 				const [ex, ez] = escapeDir;
-				// GROUND FIRST. You can't dig while floating — mining is 5×(underwater) ×
-				// 5×(off-ground) = 25× slower, so a dig never finishes and the bot bobs
-				// forever. Stop pressing and let the (buoyancy-free) bot sink onto the
-				// floor so on_ground=true; then dirt breaks in ~3.75s (5×) instead of never.
-				bot.clearControlStates();
-				await sleep(600);
-				const gy = Math.floor(bot.entity?.position?.y ?? fy);
-				// Carve ONE ascending staircase step: clear the wall ahead at head + above
-				// (leaving the block ahead-below as the stair to step onto) + our own head.
-				await digAt(B(fx, gy + 1, fz));
-				await digAt(B(fx + ex, gy + 1, fz + ez));
-				await digAt(B(fx + ex, gy + 2, fz + ez));
-				logEvent(
-					"nav",
-					"pocket_dig",
-					`at ${fx},${gy},${fz} dir ${ex},${ez} og=${bot.entity?.onGround}`,
-				);
-				// Step up-and-forward onto the freshly-cut stair.
-				locked = vec3(fx + ex * 2, gy + 2, fz + ez * 2);
+				// SURFACE FIRST, then notch the bank ABOVE the water line. The old
+				// "ground first" carve dug the wall at head level from the pond floor —
+				// under water — so the notch flooded, the bot floated in it instead of
+				// standing on the step, and every dig from there ran at the 25×
+				// off-ground-underwater rate and never finished (race24 655 drowned in
+				// a 3-deep pit pond after 2 min; harness pocket3 reproduces it).
+				// Swim up (jump = +0.04/tick) while pressing into the wall, then dig the
+				// two wall blocks just above the water: they stay dry, the dig runs at
+				// the 5× off-ground rate only, and the out-of-liquid impulse + forward
+				// hops us into the notch onto dry footing.
+				bot.setControlState("forward", true);
+				bot.setControlState("jump", true);
+				await bot.lookAt(vec3(fx + ex + 0.5, fy + 1, fz + ez + 0.5), true);
+				const tSurf = Date.now();
+				let surfaced = false;
+				while (Date.now() - tSurf < 4000) {
+					const hp = bot.entity?.position;
+					if (!hp) break;
+					const head = B(Math.floor(hp.x), Math.floor(hp.y) + 1, Math.floor(hp.z));
+					if (head && !head.name.includes("water")) {
+						surfaced = true;
+						break;
+					}
+					await sleep(100);
+				}
+				if (surfaced) {
+					const sp = bot.entity.position;
+					const sx = Math.floor(sp.x);
+					const sy = Math.floor(sp.y); // the top water block's level
+					const sz = Math.floor(sp.z);
+					// Keep forward+jump held: bobbing at the surface against the wall keeps
+					// the head dry (5× dig, not 25×) and the two blocks in reach.
+					await digAt(B(sx + ex, sy + 1, sz + ez));
+					await digAt(B(sx + ex, sy + 2, sz + ez));
+					logEvent(
+						"nav",
+						"bank_notch",
+						`at ${sx + ex},${sy + 1},${sz + ez} dir ${ex},${ez} y=${sp.y.toFixed(1)}`,
+					);
+					locked = vec3(sx + ex * 2, sy + 1, sz + ez * 2);
+				} else {
+					// Couldn't surface (capped by rock): the old floor-based carve — sink
+					// onto the floor so the dig is 5× not 25×, cut the wall at head level.
+					bot.clearControlStates();
+					const tSink = Date.now();
+					while (Date.now() - tSink < 3500 && !bot.entity?.onGround) await sleep(100);
+					const gy = Math.floor(bot.entity?.position?.y ?? fy);
+					await digAt(B(fx, gy + 1, fz));
+					await digAt(B(fx + ex, gy + 1, fz + ez));
+					await digAt(B(fx + ex, gy + 2, fz + ez));
+					logEvent(
+						"nav",
+						"pocket_dig",
+						`at ${fx},${gy},${fz} dir ${ex},${ez} og=${bot.entity?.onGround}`,
+					);
+					locked = vec3(fx + ex * 2, gy + 2, fz + ez * 2);
+				}
+				// Step up-and-forward into the freshly-cut notch.
 				lockUntil = Date.now() + 4000;
 				stuckSince = Date.now(); // give the climb a beat
 			}
@@ -2661,6 +2701,26 @@ export const dropColumnLavaFree = (
 		}
 	}
 	return true;
+};
+
+/** Is it safe to open the floor so the bot drops onto column (x, y, z)? `y` is the
+ *  block directly UNDER the one about to be dug. False when lava is near, when the
+ *  drop lands in water (race24 655 dug "ahead+below" over a cave lake, fell 10
+ *  blocks into 3-deep water and drowned), or when the fall is more than 2 blocks. */
+export const dropColumnSafe = (bot: Bot, x: number, y: number, z: number): boolean => {
+	if (!dropColumnLavaFree(bot, x, y, z, 4)) return false;
+	let gap = 0;
+	for (let dy = 0; dy < 8; dy++) {
+		const b = getBlock(bot, vec3(x, y - dy, z));
+		if (!b) return false;
+		if (b.name.includes("water") || b.name.includes("lava")) return false;
+		if (b.name === "air" || b.name === "cave_air") {
+			gap++;
+			continue;
+		}
+		break;
+	}
+	return gap <= 2;
 };
 
 /** Would breaking the block at `pos` let lava flow onto the bot? (sides + above) */
