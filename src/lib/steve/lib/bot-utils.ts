@@ -960,7 +960,25 @@ export const digStaircaseUp = async (
 		// (race43 731: 3+ min on its own table at y33 with a full iron kit). Sneak
 		// while placing — the server then places instead of interacting.
 		const sneakPlace = /crafting_table|furnace|smoker|chest|barrel|anvil|bed|trapdoor|door|gate|lever|button/.test(floorRef.name);
-		if (sneakPlace) logEvent("nav", "pillar_sneak", `on ${floorRef.name} at y=${fy}`, bot.entity.position);
+		if (sneakPlace) {
+			logEvent("nav", "pillar_sneak", `on ${floorRef.name} at y=${fy}`, bot.entity.position);
+			// Sneak-placing on a furnace still never lands (race57 784: pillar_sneak
+			// ×11 on its furnace at y22, 5+ min lost at the bottom of the mine).
+			// Step onto a plain neighbouring floor cell and pillar from there.
+			let moved = false;
+			for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+				const nf = B(fx + dx, fy - 1, fz + dz);
+				if (!solid(nf) || /crafting_table|furnace|smoker|chest|barrel|anvil|bed|trapdoor|door|gate|lever|button/.test(nf!.name)) continue;
+				const c0 = B(fx + dx, fy, fz + dz);
+				const c1 = B(fx + dx, fy + 1, fz + dz);
+				if (solid(c0) || solid(c1) || blocked(c0) || blocked(c1)) continue;
+				bot.setControlState("sneak", false);
+				await walkToXZ(bot, fx + dx + 0.5, fz + dz + 0.5, { targetDist: 0.2, maxTime: 1500 });
+				moved = Math.floor(bot.entity.position.x) === fx + dx && Math.floor(bot.entity.position.z) === fz + dz;
+				if (moved) break;
+			}
+			if (moved) continue;
+		}
 		// Centre in the cell and sneak for EVERY pillar step, like cast.ts pillarUp
 		// (the climber that works): from a cell edge the block lands in the wrong
 		// column or inside our own hitbox and never registers — race47 746 logged
