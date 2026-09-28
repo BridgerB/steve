@@ -1056,8 +1056,39 @@ export const mineBlock = async (
 	};
 	const findDryTarget = (radius: number): Block | null => {
 		const positions = findBlocks(bot, isTarget, radius, 48);
-		const dry = positions.find((p) => !nearWater(p)) ?? positions[0];
+		// Stone: dry candidates only — the wet fallback is exactly the pond trap, and
+		// digDownToStone below is the better fallback. Ores keep the nearest match.
+		const dry = positions.find((p) => !nearWater(p)) ?? (isStone ? undefined : positions[0]);
 		return dry ? (bot.blockAt(dry) as Block | null) : null;
+	};
+	// Flat terrain (a forest floor at y63-68) has no exposed stone for 64 blocks —
+	// race 612-615 all failed "Could not find stone" repeatedly, or walked into the
+	// one exposed patch at a pond. Stone is 3-5 blocks under the grass: dig a 1-wide
+	// hole straight down (lava/water-checked) until the block under our feet is stone.
+	const digDownToStone = async (): Promise<Block | null> => {
+		for (let i = 0; i < 8; i++) {
+			throwIfPreempted();
+			const p = bot.entity?.position;
+			if (!p) return null;
+			const fx = Math.floor(p.x);
+			const fy = Math.floor(p.y);
+			const fz = Math.floor(p.z);
+			const below = bot.blockAt(vec3(fx, fy - 1, fz)) as Block | null;
+			if (!below) return null;
+			if (isTarget(below.name)) return below;
+			if (isLiquid(below) || below.name === "bedrock" || isAir(below)) return null;
+			if (!dropColumnLavaFree(bot, fx, fy - 2, fz, 4)) return null;
+			if (digExposesWater(bot, below.position) || digExposesLava(bot, below.position)) return null;
+			try {
+				await bot.lookAt(offset(below.position, 0.5, 0.5, 0.5));
+				await safeDig(bot, below);
+			} catch {
+				return null;
+			}
+			await sleep(700); // drop onto the next block and settle
+			logEvent(mineCat(blockType), "dig_down", `${below.name} y=${fy - 1}`);
+		}
+		return null;
 	};
 
 	// Find initial block — check memory first, then scan
@@ -1080,6 +1111,9 @@ export const mineBlock = async (
 	}
 	if (!startBlock) {
 		startBlock = findDryTarget(64);
+	}
+	if (!startBlock && isStone) {
+		startBlock = await digDownToStone();
 	}
 	// Explore before giving up — walk around and search wider
 	if (!startBlock) {
