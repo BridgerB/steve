@@ -1385,7 +1385,11 @@ const STATION_NON_SOLID = new Set([
 const isStationGround = (name: string): boolean =>
 	!STATION_NON_SOLID.has(name) &&
 	!name.includes("leaves") &&
-	!name.includes("sapling");
+	!name.includes("sapling") &&
+	// A right-click on an interactive block OPENS it instead of placing: race57
+	// 784 picked its own furnace as the ground for a new crafting table, the
+	// place never landed, and Craft Buckets timed out (120s) with 8 ingots.
+	!/furnace|crafting_table|smoker|chest|barrel|anvil|bed|door|trapdoor|gate|lever|button|hopper|dropper|dispenser|shulker/.test(name);
 const isStationClear = (name: string): boolean =>
 	name === "air" || name === "cave_air" || STATION_NON_SOLID.has(name);
 
