@@ -557,8 +557,21 @@ export const initInventory = (bot: Bot, _options: BotOptions): void => {
 		for (let i = 0; i < bot.inventory.slots.length; i++) {
 			const slotItem = bot.inventory.slots[i];
 			if (slotItem && slotItem.type === itemType) {
+				// Already in the hotbar → just select it (no window clicks at all).
+				if (destination === "hand" && i >= 36 && i <= 44) {
+					bot.setQuickBarSlot(i - 36);
+					return;
+				}
 				await bot.clickWindow(i, 0, 0);
 				await bot.clickWindow(destSlot, 0, 0);
+				// The item displaced from destSlot is now on the cursor: park it back
+				// in the source slot, otherwise it is silently lost on the next window
+				// close (the "planks vanish at the table" bug) and every later click
+				// starts with a stale cursor.
+				if (bot.inventory.selectedItem) await bot.clickWindow(i, 0, 0);
+				// "hand" is hotbar 0 — SELECT it, or the held item never changes when
+				// another hotbar slot is active (station_place_failed heldAfter=andesite).
+				if (destination === "hand") bot.setQuickBarSlot(0);
 				return;
 			}
 		}

@@ -35,6 +35,8 @@ const waterKey = (p: Vec3) => `${p.x},${p.y},${p.z}`;
 // re-exploring from there. Go straight back to it first.
 const lastFound = new WeakMap<Bot, Vec3>();
 
+const unreachableWater = new WeakMap<Bot, Map<string, number>>();
+
 const CLEAR = new Set([
 	"air",
 	"cave_air",
@@ -316,6 +318,29 @@ export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 		const aboveWater = vec3(waterPos.x + 0.5, waterPos.y + 1, waterPos.z + 0.5);
 		if (distance(bot.entity.position, aboveWater) > 2) {
 			await goTo(bot, aboveWater, { range: 1, timeout: 15000 });
+		}
+	}
+
+	// Never got near the water (no path / cliff / 42 blocks away): don't blame the
+	// water block. race38 710 blacklisted a perfectly good pond it never reached and
+	// burnt 35s of moveCloser attempts on it. Two unreachable tries → then blacklist.
+	{
+		const wc = vec3(waterPos.x + 0.5, waterPos.y + 0.5, waterPos.z + 0.5);
+		const far = distance(bot.entity.position, wc);
+		if (far > 6) {
+			const tries = unreachableWater.get(bot) ?? new Map<string, number>();
+			unreachableWater.set(bot, tries);
+			const n = (tries.get(waterKey(waterPos)) ?? 0) + 1;
+			tries.set(waterKey(waterPos), n);
+			logEvent("bucket", "water_unreachable", `${waterKey(waterPos)} dist=${far.toFixed(1)} try=${n}`);
+			if (n >= 2) {
+				const set = failedWater.get(bot) ?? new Set<string>();
+				set.add(waterKey(waterPos));
+				failedWater.set(bot, set);
+				lastFound.delete(bot);
+				logEvent("bucket", "scoop_blacklist", `${waterKey(waterPos)} (unreachable)`);
+			}
+			return { success: false, message: `Couldn't reach water (${far.toFixed(0)} away)` };
 		}
 	}
 
