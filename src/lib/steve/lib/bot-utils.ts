@@ -654,6 +654,10 @@ export const rememberMineEntry = (
 	pos: { x: number; y: number; z: number },
 ) => {
 	const mem = getMemory(bot);
+	// Only a real footing counts: after a death the bot respawns falling from the
+	// sky point (y200) and mineDeepOre recorded THAT as the entry, then tried to
+	// staircase back up to y200 (race 647).
+	if (!bot.entity?.onGround || pos.y > 100) return;
 	if (!mem.mineEntry || pos.y > mem.mineEntry.y) {
 		mem.mineEntry = {
 			x: Math.floor(pos.x),

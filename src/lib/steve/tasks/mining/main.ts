@@ -528,6 +528,14 @@ const branchMineOre = async (
 		// take over cleanly instead of this dig loop fighting it underwater.
 		if (isInWaterTrap(bot)) return { mined, dug, lostDrops: false };
 		if ((bot.health ?? 20) < 7) return { mined, dug, lostDrops: false };
+		// Lava two blocks away is already too close for a bot with no buoyancy: the
+		// in-lava guard fires too late to swim out (race 647 died in 4s at y21 after
+		// 90s of tunnelling). Back off now and let the caller relocate sideways.
+		if (lavaAround(bot, 2)) {
+			logEvent(mineCat(blockType), "lava_near", `backing off at y=${floorY(bot)}`);
+			bot.clearControlStates();
+			return { mined, dug, lostDrops: false, noOre: true };
+		}
 		if (have() > collected) {
 			collected = have();
 			lastCollectAt = Date.now();
