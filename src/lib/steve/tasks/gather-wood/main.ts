@@ -392,7 +392,19 @@ export const gatherWood = async (
 	// bot in its own 5-deep stone hole (y58, trees at y63) or a mine at y28 "found"
 	// a tree 40 blocks away, tried to walk to it, nav_stuck → blacklist → relocate
 	// for the whole step (race 616/617/619: 3 of 4 bots parked on Gather Wood).
-	if (p0.y < localSurface - 2) {
+	// "Underground" is geometric, not "below the column-scan surface": a jungle
+	// canopy put that surface 8 blocks over a bot standing on grass (race 620/621
+	// looped "Returning to surface (y=76 → 84)"). Either boxed in rock on all four
+	// sides at feet+head (a 1-wide hole / shaft), or well below the surface with a
+	// rock ceiling overhead (a mine).
+	const earth = /stone|dirt|grass_block|gravel|sand|deepslate|andesite|diorite|granite|tuff|clay|terracotta|_ore|obsidian|podzol|mycelium|calcite|dripstone|moss_block|mud|packed_mud/;
+	const isEarth = (dx: number, dy: number, dz: number): boolean =>
+		earth.test(getBlock(bot, vec3(Math.floor(p0.x) + dx, Math.floor(p0.y) + dy, Math.floor(p0.z) + dz))?.name ?? "");
+	const boxed = [[1, 0], [-1, 0], [0, 1], [0, -1]].every(([dx, dz]) => isEarth(dx!, 0, dz!) && isEarth(dx!, 1, dz!));
+	const ceiling = [2, 3, 4, 5, 6, 7, 8].some((dy) => isEarth(0, dy, 0));
+	const deep = localSurface - p0.y >= 6 && ceiling;
+	if (boxed || deep) {
+		logEvent("wood", "underground", `boxed=${boxed} deep=${deep} y=${Math.floor(p0.y)} surface=${localSurface}`);
 		let reached = await returnToSurface(bot);
 		if (!reached) {
 			// The pathfinder can't climb the staircase back up (deep mines defeat
