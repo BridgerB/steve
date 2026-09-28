@@ -1857,7 +1857,7 @@ export const reclaimCraftingGrid = async (bot: Bot): Promise<void> => {
 	// stray plank still sits in the grid we mint a junk oak_button (and consume the
 	// plank) instead of reclaiming it. Emptying the grid first breaks the recipe, so
 	// by the time we reach slot 0 it holds only a genuinely-stranded crafted result.
-	for (let slot = gridEnd - 1; slot >= 0; slot--) {
+	for (let slot = gridEnd - 1; slot >= 1; slot--) {
 		const s = win.slots[slot];
 		if (s && s.count > 0) {
 			try {
@@ -1865,6 +1865,22 @@ export const reclaimCraftingGrid = async (bot: Bot): Promise<void> => {
 				await sleep(80);
 			} catch {}
 		}
+	}
+	// The RESULT slot: never shift-click it. Shift-click on a craft output crafts
+	// the MAXIMUM the grid allows, and when the client's grid view has drifted
+	// from the server's (a plank the client thinks is gone), that minted 6
+	// buttons from 6 planks in one click (race36 700 at 11:52:42, "got
+	// acacia_button"). A plain click takes exactly one result; drop it into an
+	// empty inventory slot.
+	const out = win.slots[0];
+	if (out && out.count > 0) {
+		try {
+			await bot.clickWindow(0, 0, 0);
+			await sleep(80);
+			const empty = win.slots.findIndex((x, i) => i >= win.inventoryStart && !x);
+			if (empty >= 0) await bot.clickWindow(empty, 0, 0);
+			await sleep(80);
+		} catch {}
 	}
 };
 

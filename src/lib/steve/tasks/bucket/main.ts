@@ -126,6 +126,12 @@ export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 			logEvent("bucket", "still_underground", `y=${Math.floor(bot.entity.position.y)} rim=${rim} — climbing`);
 			await digStaircaseUp(bot, rim, Date.now() + 100000);
 		}
+		// STILL down here after both climbs (the climber bailed: water beside it, a
+		// wet ceiling…): don't hunt from the cave — race36 702 searched at y13,
+		// "found" cave water at y47 and blacklisted it. Fail so the step retries.
+		if (bot.entity.position.y < rimYAt(bot) - 6) {
+			return { success: false, message: `Still underground at y=${Math.floor(bot.entity.position.y)} — climb again` };
+		}
 		waterPos = search(128, 100);
 		for (let i = 0; i < 4 && !waterPos; i++) {
 			logEvent("bucket", "exploring", `surface water ${i + 1}/4`);

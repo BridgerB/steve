@@ -308,9 +308,16 @@ export const startBot = async (): Promise<Bot> => {
 // ============================================
 
 import { type ChildProcess, spawn } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { connectDb, type SteveDb } from "./lib/db.ts";
+
+
+// Per-bot stderr log file for the forked children (crash visibility).
+const errFd = (username: string): number => {
+	const dir = join(process.cwd(), "data", "bot-logs");
+	mkdirSync(dir, { recursive: true });
+	return openSync(join(dir, `${username}.log`), "a");
+};import { connectDb, type SteveDb } from "./lib/db.ts";
 
 interface InstanceResult {
 	idx: number;
@@ -572,12 +579,15 @@ const runRace = async (count: number, timeoutMs: number) => {
 				STEVE_TIMEOUT: String(timeoutMs / 1000),
 				STEVE_VIEWER_PORT: i < NUM_VIEWERS ? String(3001 + i) : "",
 			},
-			stdio: ["ignore", "ignore", "ignore"],
+			// stderr → data/bot-logs/<name>.log: a crashed child was invisible (race36
+			// 703 "lost connection" at 12:14 and its process just vanished).
+			stdio: ["ignore", "ignore", errFd(username)],
 		});
 		allProcs.push(steveProc);
 		const entry = { proc: steveProc, username, exited: false };
-		steveProc.on("exit", () => {
+		steveProc.on("exit", (code, signal) => {
 			entry.exited = true;
+			console.log(`  ${username} process exited code=${code} signal=${signal} — see data/bot-logs/${username}.log`);
 		});
 		botProcs.push(entry);
 	}
