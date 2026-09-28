@@ -35,6 +35,52 @@ const waterKey = (p: Vec3) => `${p.x},${p.y},${p.z}`;
 // re-exploring from there. Go straight back to it first.
 const lastFound = new WeakMap<Bot, Vec3>();
 
+const CLEAR = new Set([
+	"air",
+	"cave_air",
+	"short_grass",
+	"tall_grass",
+	"fern",
+	"large_fern",
+	"dead_bush",
+	"snow_layer",
+	"leaf_litter",
+	"vine",
+]);
+const clearAt = (bot: Bot, x: number, y: number, z: number): boolean =>
+	CLEAR.has(bot.blockAt({ x, y, z })?.name ?? "stone");
+const groundAt = (bot: Bot, x: number, y: number, z: number): boolean => {
+	const n = bot.blockAt({ x, y, z })?.name ?? "";
+	return n !== "" && !CLEAR.has(n) && !n.includes("water") && !n.includes("lava") && !n.includes("leaves");
+};
+
+/**
+ * A dry block to STAND on beside `water`: solid under the feet, 2 clear above,
+ * within 2 blocks horizontally and 0-2 above the water's level, close enough
+ * that the scoop's raytrace reaches (feet ≤ 3.8 from the water's centre).
+ * Nearest to the bot first so we don't cross the pond to get there.
+ */
+export const shoreStand = (bot: Bot, water: Vec3): Vec3 | null => {
+	const wc = vec3(water.x + 0.5, water.y + 0.5, water.z + 0.5);
+	let best: { p: Vec3; d: number } | null = null;
+	for (let dx = -2; dx <= 2; dx++) {
+		for (let dz = -2; dz <= 2; dz++) {
+			if (dx === 0 && dz === 0) continue;
+			for (let dy = 0; dy <= 2; dy++) {
+				const x = water.x + dx;
+				const y = water.y + dy;
+				const z = water.z + dz;
+				if (!groundAt(bot, x, y - 1, z) || !clearAt(bot, x, y, z) || !clearAt(bot, x, y + 1, z)) continue;
+				const feet = vec3(x + 0.5, y, z + 0.5);
+				if (distance(feet, wc) > 3.8) continue;
+				const d = distance(bot.entity.position, feet);
+				if (!best || d < best.d) best = { p: vec3(x, y, z), d };
+			}
+		}
+	}
+	return best?.p ?? null;
+};
+
 export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 	const bad = (p: Vec3): boolean =>
 		failedWater.get(bot)?.has(waterKey(p)) ?? false;
@@ -253,12 +299,24 @@ export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 		return { success: false, message: "No empty bucket in inventory" };
 	}
 
-	// Navigate to stand directly above/next to water
-	// Need to be within 1-2 blocks for reliable raytrace
-	const aboveWater = vec3(waterPos.x + 0.5, waterPos.y + 1, waterPos.z + 0.5);
-	const dist = distance(bot.entity.position, aboveWater);
-	if (dist > 2) {
-		await goTo(bot, aboveWater, { range: 1, timeout: 15000 });
+	// Walk to a DRY shore stand beside the water, never onto the water itself.
+	// The old target was the block directly above the water: from a bank 2-3
+	// higher than the pond that is a step off the ledge into the pond →
+	// escape_water preempts → resume_found picks the same pond → repeat (race38
+	// 708 looped Fill Water ⇄ Get Out Of Water 5× in 2 min with a bucket in hand).
+	const stand = shoreStand(bot, waterPos);
+	if (stand) {
+		logEvent("bucket", "shore_stand", `${stand.x},${stand.y},${stand.z} for water ${waterPos.x},${waterPos.y},${waterPos.z}`);
+		const standC = vec3(stand.x + 0.5, stand.y, stand.z + 0.5);
+		if (distance(bot.entity.position, standC) > 0.8) {
+			await goTo(bot, standC, { range: 0.7, timeout: 15000 }).catch(() => {});
+		}
+	} else {
+		logEvent("bucket", "shore_stand", "none — approaching above the water");
+		const aboveWater = vec3(waterPos.x + 0.5, waterPos.y + 1, waterPos.z + 0.5);
+		if (distance(bot.entity.position, aboveWater) > 2) {
+			await goTo(bot, aboveWater, { range: 1, timeout: 15000 });
+		}
 	}
 
 	try {
@@ -283,7 +341,7 @@ export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 		// rather than in raytrace range).
 		const filled = await interactReliably(bot, {
 			target: waterPos,
-			reach: 2.5,
+			reach: 4, // from the shore stand: never step toward the water again
 			attempts: 5,
 			settleMs: 1000,
 			action: async () => {
