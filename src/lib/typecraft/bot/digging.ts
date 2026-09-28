@@ -363,6 +363,12 @@ export const initDigging = (bot: Bot, _options: BotOptions): void => {
 			quickBar: bot.quickBarSlot,
 		});
 
+		// Re-assert the held slot right before the dig. The server's SelectedItemSlot
+		// was observed drifting from the client's quickBarSlot (a bot digging "with a
+		// stone pickaxe" while the server had andesite selected), so every client-side
+		// dig time was too short, the server rejected the break, and the client kept
+		// a phantom air block under its feet. One packet makes them agree.
+		bot.client.write("set_carried_item", { slotId: bot.quickBarSlot });
 		bot.client.write("player_action", {
 			status: 0,
 			location: { x: pos.x, y: pos.y, z: pos.z },

@@ -658,10 +658,15 @@ export const rememberMineEntry = (
 	// sky point (y200) and mineDeepOre recorded THAT as the entry, then tried to
 	// staircase back up to y200 (race 647).
 	if (!bot.entity?.onGround || pos.y > 100) return;
-	if (!mem.mineEntry || pos.y > mem.mineEntry.y) {
+	// The entry is the SURFACE above this spot, not the bottom of the dig-down hole
+	// the bot is already standing in (race25 657 "returned" to y71 in a shaft whose
+	// rim was y78 and sat boxed there).
+	const rim = rimYAt(bot);
+	const entryY = rim > pos.y && rim <= pos.y + 12 ? rim : Math.floor(pos.y);
+	if (!mem.mineEntry || entryY > mem.mineEntry.y) {
 		mem.mineEntry = {
 			x: Math.floor(pos.x),
-			y: Math.floor(pos.y),
+			y: entryY,
 			z: Math.floor(pos.z),
 		};
 	}
@@ -904,9 +909,60 @@ export const returnToSurface = async (bot: Bot): Promise<boolean> => {
 		);
 		await digStaircaseUp(bot, entry.y, Date.now() + 50000);
 	}
-	const reached = atEntry();
+	// The recorded entry can be the BOTTOM of a dig-down hole (Mine Cobblestone sinks
+	// the bot 6 blocks into a 1-wide shaft before Mine Iron records the entry), so
+	// "at the entry" still leaves it boxed below the rim. Climb out to the real rim.
+	const unboxed = await unboxToRim(bot);
+	const reached = atEntry() || unboxed;
 	if (reached) logEvent("nav", "reached_surface", undefined, bot.entity.position);
 	return reached;
+};
+
+/** Rim = the highest surface of this column's 4 neighbours (in a hole the own
+ *  column tops out at our feet). */
+export const rimYAt = (bot: Bot): number => {
+	const p = bot.entity.position;
+	const fx = Math.floor(p.x);
+	const fz = Math.floor(p.z);
+	return Math.max(
+		...[[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dz]) =>
+			surfaceYAt(bot, fx + dx!, fz + dz!),
+		),
+	);
+};
+
+/** If the bot is standing in a 1-wide hole below the surrounding surface, climb
+ *  out to the rim (pillar with cobble, else carve stairs). race25 657 sat in its
+ *  own 4-deep dig-down shaft with a bucket for 3 min: returnToSurface had
+ *  "reached" the recorded entry at the shaft's bottom and every exploreRandom
+ *  goTo from the boxed cell failed. Returns true when at/near the rim. */
+export const unboxToRim = async (bot: Bot, budgetMs = 60000): Promise<boolean> => {
+	const p = bot.entity?.position;
+	if (!p) return false;
+	const rim = rimYAt(bot);
+	if (Math.floor(p.y) >= rim - 1) return true;
+	if (rim - Math.floor(p.y) > 12) return false; // a mine, not a surface hole — callers handle mines
+	const fx = Math.floor(p.x);
+	const fy = Math.floor(p.y);
+	const fz = Math.floor(p.z);
+	const solidAt = (dx: number, dy: number, dz: number): boolean => {
+		const b = getBlock(bot, vec3(fx + dx, fy + dy, fz + dz));
+		return !!b && b.name !== "air" && b.name !== "cave_air" && !isPassableBlock(b);
+	};
+	const boxed = [[1, 0], [-1, 0], [0, 1], [0, -1]].every(
+		([dx, dz]) => solidAt(dx!, 0, dz!) || solidAt(dx!, 1, dz!),
+	);
+	if (!boxed) return false; // open ground below the rim (a valley) — not a hole
+	logEvent("nav", "unbox", `boxed at y=${fy}, rim y=${rim}`, p);
+	const { pillarUp } = await import("../tasks/portal/cast.ts");
+	let ok = await pillarUp(bot, rim);
+	bot.setControlState("sneak", false);
+	if (!ok) {
+		const got = await digStaircaseUp(bot, rim, Date.now() + budgetMs);
+		ok = got >= rim - 1;
+	}
+	logEvent("nav", "unbox_done", `ok=${ok} y=${Math.floor(bot.entity.position.y)}`, bot.entity.position);
+	return ok;
 };
 
 export const rememberResource = (
@@ -2964,6 +3020,8 @@ export const attachSafety = (bot: Bot): void => {
  */
 export const exploreRandom = async (bot: Bot, dist = 30): Promise<void> => {
 	if (!bot.entity?.position) return;
+	// From a boxed cell A* is exhaustive and fails; get out of the hole first.
+	await unboxToRim(bot).catch(() => false);
 	const angle = Math.random() * Math.PI * 2;
 	const target = vec3(
 		bot.entity.position.x + Math.cos(angle) * dist,
