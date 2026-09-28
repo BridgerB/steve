@@ -2082,6 +2082,27 @@ export const craftItem = async (
 	const msg =
 		lastErr instanceof Error ? lastErr.message : `Failed to craft ${itemName}`;
 	logEvent("craft", "error", `${itemName}: ${msg}`);
+	// A table whose window never opens / never yields a result is a ghost (a
+	// placement the client registered but the server didn't) or otherwise dead:
+	// race38 709 looped "Promise timed out" / "No craft result" on one table for
+	// 3 minutes with the ingredients in hand. Forget it and break the block so the
+	// next attempt places a fresh table (a real one comes back as an item).
+	if (craftingTable && /timed out|No craft result|Non-crafting/.test(msg)) {
+		getMemory(bot).craftingTablePos = null;
+		logEvent("craft", "table_discard", `${craftingTable.position.x},${craftingTable.position.y},${craftingTable.position.z}: ${msg}`);
+		try {
+			const blk = bot.blockAt(craftingTable.position);
+			if (blk && blk.name === "crafting_table") {
+				await bot.lookAt(offset(craftingTable.position, 0.5, 0.5, 0.5), true);
+				await bot.dig(blk as never, true);
+				await bot.collectDrops(4, 2500, async (p) => {
+					await goTo(bot, p, { range: 1.2, timeout: 2500 });
+				}).catch(() => {});
+			}
+		} catch {
+			/* ghost block — nothing to dig */
+		}
+	}
 	return { success: false, message: msg };
 };
 
