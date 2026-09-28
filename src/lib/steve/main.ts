@@ -15,7 +15,7 @@ import { createBot as createMcBot, createWebViewer, forwardBotToRelay } from "ty
 import {
 	attachSafety,
 	equipBestTool,
-	isInWaterTrap,
+	needsWaterEscape,
 	registerBlockMemory,
 } from "./lib/bot-utils.ts";
 import { type Channel, createChannel } from "./lib/channel.ts";
@@ -195,7 +195,12 @@ export const startBot = async (): Promise<Bot> => {
 			let state: ReturnType<typeof syncFromBot> | null = null;
 			let inWaterTrap = false;
 			try {
-				inWaterTrap = isInWaterTrap(bot);
+				// The wade-tolerant trigger, not the raw trap predicate: raw isInWaterTrap
+				// preempted the running step the instant a foot touched a puddle, so a
+				// path through a 1-deep cave pool became Gather Wood → Get Out Of Water →
+				// Gather Wood every 5s, 36× (race23 650). Only submersion / a bounded
+				// crossing / being pinned at a bank warrants the override.
+				inWaterTrap = needsWaterEscape(bot);
 				state = syncFromBot(bot);
 			} catch {}
 			if (!state) return;
@@ -215,7 +220,7 @@ export const startBot = async (): Promise<Bot> => {
 			channel.put({
 				type: "tick",
 				state: syncFromBot(bot),
-				inWaterTrap: isInWaterTrap(bot),
+				inWaterTrap: needsWaterEscape(bot),
 			});
 		} catch {}
 	});
@@ -576,16 +581,37 @@ const runRace = async (count: number, timeoutMs: number) => {
 				const x = spawns[i]?.x ?? 0;
 				const z = spawns[i]?.z ?? 0;
 				await rcon(`clear ${name}`);
-				await rcon(`tp ${name} ${x} 200 ${z}`);
+				// Drop from y200 and check where it LANDED. A cave mouth / ravine /
+				// pond-in-a-hole under the column swallows the bot (race23 650 fell to
+				// y35 in a cave with no tools, no cobble and a pool at its feet and
+				// looped Gather Wood ⇄ Get Out Of Water for 8 min). A real player
+				// spawns on the surface, so re-place it a few blocks over until it does.
+				let sx = x;
+				let sz = z;
+				for (let t = 0; t < 4; t++) {
+					await rcon(`tp ${name} ${sx} 200 ${sz}`);
+					await sleep(8000); // fall + chunk settle
+					let landedY = 200;
+					try {
+						const m = /\[(-?[\d.]+)d, (-?[\d.]+)d, (-?[\d.]+)d\]/.exec(
+							await rcon(`data get entity ${name} Pos`),
+						);
+						if (m) landedY = parseFloat(m[2]!);
+					} catch {}
+					if (landedY >= 55 && landedY < 200) break;
+					console.log(`  ${name} landed at y=${landedY} (${sx},${sz}) — underground, re-placing`);
+					sx = x + (t + 1) * 9;
+					sz = z + (t % 2 === 0 ? 7 : -7);
+				}
 				// The race cell IS this bot's world spawn: without this, a death sends
 				// it back to the real world spawn thousands of blocks from its mine,
 				// furnace and table (race 604 drowned and respawned 4000 blocks away).
-				await rcon(`spawnpoint ${name} ${x} 200 ${z}`);
+				await rcon(`spawnpoint ${name} ${sx} 200 ${sz}`);
 				// Stagger: the box has only 4 cores, so let each bot's fresh chunk
 				// generation settle before teleporting the next — otherwise 10
 				// simultaneous gens saturate the CPU and the server misses keepalives,
 				// dropping bots with "lost connection: Timed out".
-				await sleep(15000);
+				await sleep(7000);
 				placed.add(name);
 				console.log(`  ${name} → tp ${x}, ${z}`);
 			}

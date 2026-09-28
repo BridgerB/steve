@@ -717,6 +717,13 @@ export const digStaircaseUp = async (
 		b.name !== "cave_air" &&
 		b.name !== "bedrock" &&
 		!blocked(b);
+	// Equip any pickaxe so the dig isn't bare-handed-slow.
+	const pickSlot = bot.inventory.slots.findIndex((s) =>
+		s?.name.endsWith("_pickaxe"),
+	);
+	// Bare hands take ~7.5s on stone; a 4s cap cancelled every such dig, so a
+	// tool-less bot (spawned into a cave, race23 650) could never carve a way out.
+	const digCap = pickSlot >= 0 ? 4000 : 9000;
 	const digAt = async (b: ReturnType<typeof getBlock>): Promise<void> => {
 		if (!solid(b)) return;
 		const pos = (b as { position: Vec3 }).position;
@@ -724,17 +731,13 @@ export const digStaircaseUp = async (
 			await bot.lookAt(vec3(pos.x + 0.5, pos.y + 0.5, pos.z + 0.5));
 			await Promise.race([
 				(bot.dig(b as never, true) as Promise<void>).catch(() => {}),
-				sleep(4000),
+				sleep(digCap),
 			]);
 			bot.stopDigging();
 		} catch {
 			/* ignore */
 		}
 	};
-	// Equip any pickaxe so the dig isn't bare-handed-slow.
-	const pickSlot = bot.inventory.slots.findIndex((s) =>
-		s?.name.endsWith("_pickaxe"),
-	);
 	if (pickSlot >= 36 && pickSlot <= 44) bot.setQuickBarSlot(pickSlot - 36);
 	else if (pickSlot >= 0) {
 		try {
@@ -806,7 +809,33 @@ export const digStaircaseUp = async (
 		// Pillar up one: equip a block, look down, hold jump, and SPAM placeBlock under
 		// our feet until we rise — in a tight shaft the apex is brief, so a single
 		// timed place misses; spamming lands the block the instant the feet clear.
-		if (!equipFiller()) break; // out of blocks — can't pillar further
+		if (!equipFiller()) {
+			// Out of blocks — carve a REAL stair instead (what the doc above promises):
+			// pick a side whose foot-level block is solid, clear the two above it, and
+			// hop up onto it. Turning to face rock in an open cave keeps a step ahead.
+			let stepped = false;
+			for (const [dx, dz] of [[1, 0], [0, 1], [-1, 0], [0, -1]] as const) {
+				const step = B(fx + dx, fy, fz + dz);
+				if (!solid(step)) continue;
+				const above = [1, 2, 3].map((dy) => B(fx + dx, fy + dy, fz + dz));
+				if (above.some((b) => blocked(b) || fallable(b))) continue;
+				const a1 = vec3(fx + dx, fy + 1, fz + dz);
+				const a2 = vec3(fx + dx, fy + 2, fz + dz);
+				if ([a1, a2].some((at) => digExposesWater(bot, at) || digExposesLava(bot, at))) continue;
+				await digAt(above[0]!);
+				await digAt(above[1]!);
+				bot.setControlState("jump", true);
+				await walkToXZ(bot, fx + dx + 0.5, fz + dz + 0.5, { targetDist: 0.3, maxTime: 2500 });
+				bot.setControlState("jump", false);
+				stepped = true;
+				break;
+			}
+			if (!stepped) break; // no rock to climb on any side
+			await sleep(300);
+			if (Math.floor(bot.entity.position.y) > fy) stuck = 0;
+			else if (++stuck > 5) break;
+			continue;
+		}
 		const floorRef = B(fx, fy - 1, fz);
 		if (!floorRef) break;
 		await bot.lookAt(vec3(fx + 0.5, fy - 0.5, fz + 0.5), true);
@@ -1988,7 +2017,14 @@ export const needsWaterEscape = (bot: Bot): boolean => {
 		// kept ocean-spawned bots circling. It's cleared on a confirmed escape.
 		return false;
 	}
-	if (bot.entity?.isInWater) return true; // submerged → drowning risk, escape now
+	// Submerged = the HEAD block is water. typecraft's isInWater is "any water in
+	// the hitbox", so it fired on a foot-deep puddle and made every wade an escape.
+	const hp = bot.entity?.position;
+	if (
+		hp &&
+		getBlock(bot, vec3(Math.floor(hp.x), Math.floor(hp.y) + 1, Math.floor(hp.z)))?.name.includes("water")
+	)
+		return true; // drowning risk, escape now
 	const now = Date.now();
 	if (!mem.waterEnterAt) mem.waterEnterAt = now;
 	// BOUND the crossing. Wading across a stream/puddle is fine, but without a limit
@@ -2822,7 +2858,10 @@ export const attachSafety = (bot: Bot): void => {
 		// gives up (kept well under the ~30s thrash-kick window).
 		const drownStuck = submergedSince > 0 && Date.now() - submergedSince > 1500;
 		const inWaterMs = inWaterSince ? Date.now() - inWaterSince : 0;
-		const surfaceStuck = inWaterMs > 1500;
+		// Head-up in water: only when the wade-tolerant trigger says so (bounded
+		// crossing / pinned at a bank). A flat 1.5s fired on every foot-deep puddle
+		// the pathfinder crossed and yanked the bot off its path (race23 650).
+		const surfaceStuck = inWaterMs > 1500 && needsWaterEscape(bot);
 		const finalBackup = inWaterMs > 15000;
 		if (!escaping && !drowning && (drownStuck || surfaceStuck || finalBackup)) {
 			drowning = true;

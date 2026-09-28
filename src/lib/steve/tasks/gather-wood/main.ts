@@ -402,7 +402,13 @@ export const gatherWood = async (
 	const isEarth = (dx: number, dy: number, dz: number): boolean =>
 		earth.test(getBlock(bot, vec3(Math.floor(p0.x) + dx, Math.floor(p0.y) + dy, Math.floor(p0.z) + dz))?.name ?? "");
 	const boxed = [[1, 0], [-1, 0], [0, 1], [0, -1]].every(([dx, dz]) => isEarth(dx!, 0, dz!) && isEarth(dx!, 1, dz!));
-	const ceiling = [2, 3, 4, 5, 6, 7, 8].some((dy) => isEarth(0, dy, 0));
+	// "Ceiling" = ANY earth between our head and the column's surface. A fixed
+	// 8-block look-up missed a tall cave (race23 650: y35, surface y65, cave roof
+	// 12 up) and let the bot chase surface trees from the cave floor for 8 min.
+	// A canopy column has only leaves/logs/air above the grass, so it still fails.
+	const span = Math.min(64, Math.max(0, localSurface - Math.floor(p0.y)));
+	let ceiling = false;
+	for (let dy = 2; dy <= span && !ceiling; dy++) ceiling = isEarth(0, dy, 0);
 	const deep = localSurface - p0.y >= 6 && ceiling;
 	if (boxed || deep) {
 		// The pit's own column tops out at our feet, so its "surface" IS our y; the
@@ -431,6 +437,12 @@ export const gatherWood = async (
 			const { pillarUp } = await import("../portal/cast.ts");
 			reached = await pillarUp(bot, rim); // straight up THIS column to the rim
 			bot.setControlState("sneak", false); // pillarUp leaves it on for the cast
+		}
+		if (!reached) {
+			// Nothing to pillar with (cave spawn, no tools): carve stairs up the rock.
+			const got = await digStaircaseUp(bot, rim, Date.now() + 120000);
+			reached = got >= rim - 1;
+			logEvent("wood", "climb_out_stairs", `reached y=${got} (target ${rim})`, botPos());
 		}
 		if (!reached) {
 			return {
@@ -590,7 +602,8 @@ export const gatherWood = async (
 				// and no cobble, into a valley 10 below the trees): dig a staircase up
 				// the slope instead — it yields the cobble as it goes.
 				if (!up) {
-					const got = await digStaircaseUp(bot, surf, Date.now() + 40000);
+					// 90s: bare hands take ~7.5s per stone block, ~3 blocks a level.
+					const got = await digStaircaseUp(bot, surf, Date.now() + 90000);
 					up = got >= surf - 1;
 					logEvent("wood", "climb_out_stairs", `reached y=${got} (target ${surf})`, botPos());
 				}
