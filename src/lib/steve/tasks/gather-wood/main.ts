@@ -8,6 +8,7 @@ import {
 	digStaircaseUp,
 	escapeWater,
 	exploreRandom,
+	walkToXZ,
 	getBlock,
 	getMineEntry,
 	getPathfinder,
@@ -442,13 +443,20 @@ export const gatherWood = async (
 
 		// Navigate to dropped item for pickup, then stand on the stump to vacuum
 		// logs that fell to the ground (upper-trunk drops often land below).
+		// Walk STRAIGHT at the drop / the stump instead of pathfinding: the drop
+		// lies at the trunk base, often a level below a bot that dug from a
+		// hillside 2-3 blocks away, and goTo returned without moving — race56
+		// logged 26 pickup_miss across 4 bots (~18s each) with the bot standing
+		// still on the same grass block the whole time.
 		await bot.collectDrops(6, 3000, async (p) => {
-			await goTo(bot, p, { range: 1.4, timeout: 3000 });
+			await walkToXZ(bot, p.x, p.z, { targetDist: 0.5, maxTime: 2500 });
 		});
-		await goTo(bot, pos, { range: 1, timeout: 3000 }).catch(() => {});
-		await bot.collectDrops(8, 2500, async (p) => {
-			await goTo(bot, p, { range: 1.2, timeout: 2500 });
-		});
+		if (countLogs() === logsBefore) {
+			await walkToXZ(bot, pos.x + 0.5, pos.z + 0.5, { targetDist: 0.6, maxTime: 2500 });
+			await bot.collectDrops(8, 2500, async (p) => {
+				await walkToXZ(bot, p.x, p.z, { targetDist: 0.5, maxTime: 2000 });
+			});
+		}
 
 		const logsNow = countLogs();
 		if (logsNow > logsBefore) {
