@@ -27,6 +27,7 @@ import {
 	sleep,
 	success,
 	throwIfPreempted,
+	walkToXZ,
 } from "../../lib/bot-utils.ts";
 import { logEvent } from "../../lib/logger.ts";
 import type { Block, StepResult } from "../../types.ts";
@@ -1102,10 +1103,25 @@ export const mineBlock = async (
 			const fx = Math.floor(p.x);
 			const fy = Math.floor(p.y);
 			const fz = Math.floor(p.z);
-			const below = bot.blockAt(vec3(fx, fy - 1, fz)) as Block | null;
+			// Stand in the CENTRE of the cell first: on a block edge the bot doesn't
+			// drop into the 1-wide hole it just dug, the next look-down sees air and
+			// the whole dig-down was abandoned after one block (race 645: "Could not
+			// find stone" ×4 on plain grass).
+			await walkToXZ(bot, fx + 0.5, fz + 0.5, { targetDist: 0.2, maxTime: 1500 });
+			let below = bot.blockAt(vec3(fx, fy - 1, fz)) as Block | null;
+			if (below && isAir(below)) {
+				// We're above the hole — let gravity take us, then re-evaluate.
+				for (let w = 0; w < 20 && Math.floor(bot.entity.position.y) >= fy; w++) await sleep(50);
+				const ny = Math.floor(bot.entity.position.y);
+				below = bot.blockAt(vec3(fx, ny - 1, fz)) as Block | null;
+				if (below && isAir(below)) return null; // still floating over air — a cave
+				if (!below) return null;
+				if (isTarget(below.name)) return below;
+				continue;
+			}
 			if (!below) return null;
 			if (isTarget(below.name)) return below;
-			if (isLiquid(below) || below.name === "bedrock" || isAir(below)) return null;
+			if (isLiquid(below) || below.name === "bedrock") return null;
 			if (!dropColumnLavaFree(bot, fx, fy - 2, fz, 4)) return null;
 			if (digExposesWater(bot, below.position) || digExposesLava(bot, below.position)) return null;
 			try {
