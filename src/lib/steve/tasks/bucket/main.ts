@@ -148,12 +148,15 @@ export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 		];
 		for (const [dx, dz] of dirs) {
 			if (waterPos) break;
-			for (let leg = 1; leg <= 2 && !waterPos; leg++) {
+			// Legs of 60: the pathfinder's searchRadius is 64, so a 140-block goal was
+			// "No path found" every time and the bot never left its cell (race26 660
+			// ran all 16 legs standing still). Three 60-block legs cover the same reach.
+			for (let leg = 1; leg <= 3 && !waterPos; leg++) {
 				const here = bot.entity.position;
 				const target = vec3(
-					Math.floor(here.x + dx * 140),
+					Math.floor(here.x + dx * 60),
 					Math.floor(here.y),
-					Math.floor(here.z + dz * 140),
+					Math.floor(here.z + dz * 60),
 				);
 				logEvent(
 					"bucket",

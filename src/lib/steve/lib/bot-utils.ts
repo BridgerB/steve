@@ -661,8 +661,11 @@ export const rememberMineEntry = (
 	// The entry is the SURFACE above this spot, not the bottom of the dig-down hole
 	// the bot is already standing in (race25 657 "returned" to y71 in a shaft whose
 	// rim was y78 and sat boxed there).
+	// Allow a deep gap: a dig-down that breaks into a cavern starts the mine on the
+	// cavern floor 15-20 below the real surface (race26 660 "returned to the
+	// surface" at y54 in a cavern, rim y70, and hunted water down there).
 	const rim = rimYAt(bot);
-	const entryY = rim > pos.y && rim <= pos.y + 12 ? rim : Math.floor(pos.y);
+	const entryY = rim > pos.y && rim <= pos.y + 40 ? rim : Math.floor(pos.y);
 	if (!mem.mineEntry || entryY > mem.mineEntry.y) {
 		mem.mineEntry = {
 			x: Math.floor(pos.x),
@@ -907,7 +910,8 @@ export const returnToSurface = async (bot: Bot): Promise<boolean> => {
 			`goTo fell short at y=${Math.floor(bot.entity.position.y)} → digStaircaseUp`,
 			bot.entity.position,
 		);
-		await digStaircaseUp(bot, entry.y, Date.now() + 50000);
+		// ~3.5s per level with a stone pick; a cavern-floor mine can be 20 below.
+		await digStaircaseUp(bot, entry.y, Date.now() + 100000);
 	}
 	// The recorded entry can be the BOTTOM of a dig-down hole (Mine Cobblestone sinks
 	// the bot 6 blocks into a 1-wide shaft before Mine Iron records the entry), so
