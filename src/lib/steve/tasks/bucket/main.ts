@@ -225,16 +225,28 @@ export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 	//     rough terrain, but even partial progress relocates us into new ground to scan.
 	if (!waterPos) {
 		const origin = bot.entity.position;
-		const dirs: ReadonlyArray<readonly [number, number]> = [
-			[1, 0],
-			[0, 1],
-			[-1, 0],
-			[0, -1],
-			[1, 1],
-			[-1, -1],
-			[1, -1],
-			[-1, 1],
-		];
+		// Downhill first: water sits at y<=63, so from a mountain top the legs that
+		// head into falling terrain are the ones that find it (race53 768: the
+		// hunt's fixed east-first order happened to be downhill and found a lake in
+		// 1:20 after 5 min of dry ridge exploring; a different spawn would have
+		// spent legs climbing). Sort the eight bearings by the terrain height 60
+		// blocks out, lowest first — a bearing that is already at lake level wins.
+		const dirs = (
+			[
+				[1, 0],
+				[0, 1],
+				[-1, 0],
+				[0, -1],
+				[1, 1],
+				[-1, -1],
+				[1, -1],
+				[-1, 1],
+			] as ReadonlyArray<readonly [number, number]>
+		)
+			.map((d) => ({ d, y: surfaceYAt(bot, Math.floor(origin.x + d[0] * 60), Math.floor(origin.z + d[1] * 60)) }))
+			.sort((p, q) => p.y - q.y)
+			.map((p) => p.d);
+		logEvent("bucket", "hunt_order", dirs.map((d) => `${d[0]},${d[1]}`).join(" "));
 		for (const [dx, dz] of dirs) {
 			if (waterPos) break;
 			// Legs of 60: the pathfinder's searchRadius is 64, so a 140-block goal was
