@@ -1277,6 +1277,11 @@ const WATCHED_BLOCKS = [
 	"deepslate_coal_ore",
 	"iron_ore",
 	"deepslate_iron_ore",
+	// Gravel too: the flint step only sees exposed, line-of-sight gravel, so a bot
+	// whose descent crossed none roams the surface in 92s legs for nothing (race58
+	// 790: 'Need flint (dig gravel)' twice with a water bucket in hand). The mine
+	// and cave walls it just passed are full of it.
+	"gravel",
 ];
 
 /**
