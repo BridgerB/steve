@@ -56,6 +56,10 @@ export const steps: readonly Step[] = [
 		// portal) needs wood — stop forcing pointless re-gathering, which deadlocks
 		// in tree-poor terrain.
 		isComplete: (s) =>
+			// Iron kit done (2 buckets in hand): nothing left on the critical path needs
+			// wood, so never climb 80 levels out of the mine for logs again (race41 723:
+			// 2 buckets + 2 ingots, spent 4+ min on Gather Wood from y28).
+			s.inventory.buckets + s.inventory.waterBuckets >= 2 ||
 			s.inventory.logs >= 5 ||
 			s.inventory.planks >= 20 ||
 			// With a table already placed, 12 planks covers the whole early tool chain

@@ -245,17 +245,34 @@ export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 				// "ran" in 2s (race36 700 at 12:10:28). Unwind instead.
 				throwIfPreempted();
 				const here = bot.entity.position;
-				const target = vec3(
-					Math.floor(here.x + dx * 60),
-					Math.floor(here.y),
-					Math.floor(here.z + dz * 60),
-				);
+				const tx = Math.floor(here.x + dx * 60);
+				const tz = Math.floor(here.z + dz * 60);
+				// Aim at the terrain surface out there, not at our own height: from a
+				// mountain top a same-y goal 60 blocks out hangs in the air and the
+				// pathfinder gives up, so the bot stood still through 3 legs × 36s
+				// (race41 720 at y113).
+				const target = vec3(tx, surfaceYAt(bot, tx, tz), tz);
 				logEvent(
 					"bucket",
 					"long_hunt",
-					`dir ${dx},${dz} leg ${leg} → ${target.x},${target.z}`,
+					`dir ${dx},${dz} leg ${leg} → ${target.x},${target.y},${target.z}`,
 				);
+				const before = vec3(here.x, here.y, here.z);
 				await goTo(bot, target, { range: 8, timeout: 30000 }).catch(() => {});
+				if (distance(bot.entity.position, before) < 3) {
+					// Pathfinder found nothing and the nudge hit a wall: jump-walk the
+					// bearing for 4s so a ledge or 1-high lip can't pin us.
+					logEvent("bucket", "long_hunt_stuck", `leg moved <3 — jump-walk dir ${dx},${dz}`);
+					await bot.lookAt(vec3(here.x + dx * 10, here.y, here.z + dz * 10));
+					bot.setControlState("forward", true);
+					bot.setControlState("sprint", true);
+					bot.setControlState("jump", true);
+					await sleep(4000);
+					bot.setControlState("forward", false);
+					bot.setControlState("sprint", false);
+					bot.setControlState("jump", false);
+					if (bot.entity.isInWater) return { success: false, message: "in water — yielding to escape_water" };
+				}
 				await bot.waitForChunksToLoad();
 				waterPos = search(160, 300);
 			}
