@@ -8,6 +8,7 @@ import {
 	craftItem,
 	digExposesLava,
 	digExposesWater,
+	digStaircaseUp,
 	dropColumnLavaFree,
 	dropColumnSafe,
 	equipItem,
@@ -431,7 +432,31 @@ const branchMineOre = async (
 				const landing = vec3(ore.position.x, landingY, ore.position.z);
 				if (climb <= 12 && distance(bot.entity.position, landing) <= 18) {
 					logEvent(mineCat(blockType), "ore_climb", `to y=${landingY} from y=${floorY(bot)} for ${ore.position.x},${ore.position.y},${ore.position.z}`);
-					await goTo(bot, landing, { range: 1.5, timeout: 15000 }).catch(() => {});
+					// The pathfinder can't scaffold through rock to a ledge, so goTo
+					// returned instantly (race36 701: 4 climbs, 0 reached). Do it by hand:
+					// tunnel to the ore's column at this level, then dig/pillar straight up
+					// until the ore is the ceiling — mining it drops the raw iron on us.
+					const p0 = bot.entity.position;
+					const ddx = ore.position.x - Math.floor(p0.x);
+					if (ddx !== 0) await tunnelToward(bot, Math.sign(ddx), 0, Math.abs(ddx));
+					const p1 = bot.entity.position;
+					const ddz = ore.position.z - Math.floor(p1.z);
+					if (ddz !== 0) await tunnelToward(bot, 0, Math.sign(ddz), Math.abs(ddz));
+					const p2 = bot.entity.position;
+					if (Math.floor(p2.x) === ore.position.x && Math.floor(p2.z) === ore.position.z) {
+						await digStaircaseUp(bot, ore.position.y - 1, Date.now() + 25000);
+						await bot.collectDrops(8, 4000, async (pp) => {
+							await goTo(bot, pp, { range: 1, timeout: 3000 });
+						}).catch(() => {});
+						const left = bot.blockAt(ore.position);
+						if (!left || !isTarget(left.name)) {
+							mined++;
+							logEvent(mineCat(blockType), "ore", `${blockType} ${mined}/${targetCount} (climbed)`);
+							return true;
+						}
+					} else {
+						await goTo(bot, landing, { range: 1.5, timeout: 12000 }).catch(() => {});
+					}
 				}
 			}
 			if (landingY > floorY(bot) + 1) {
