@@ -8,7 +8,6 @@ import {
 	digStaircaseUp,
 	exploreRandom,
 	forgetResource,
-	getMineEntry,
 	getRememberedResource,
 	goTo,
 	interactReliably,
@@ -29,6 +28,11 @@ import type { StepResult } from "../../types.ts";
 // it (this is what killed the first bot to reach the water step).
 const failedWater = new WeakMap<Bot, Set<string>>();
 const waterKey = (p: Vec3) => `${p.x},${p.y},${p.z}`;
+// The last pond a hunt found, per bot. The step's budget can expire right after
+// a long_hunt finds water (race36 700: found at 12:05:54, timed out 12:06:23), and
+// the next call started over — surfacing to the mine rim 100 blocks away and
+// re-exploring from there. Go straight back to it first.
+const lastFound = new WeakMap<Bot, Vec3>();
 
 export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 	const bad = (p: Vec3): boolean =>
@@ -88,15 +92,24 @@ export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 
 	let waterPos: Vec3 | null = null;
 
+	// 0. A pond a previous (cut-short) call already found: go there first.
+	{
+		const prev = lastFound.get(bot);
+		if (prev && !bad(prev) && (bot.blockAt(prev)?.name ?? "") === "water") {
+			logEvent("bucket", "resume_found", `${prev.x},${prev.y},${prev.z}`);
+			waterPos = prev;
+		} else if (prev) lastFound.delete(bot);
+	}
+
 	// 1. If deep underground, surface FIRST. The only water within reach down here
 	//    is flowing cave water that won't scoop (bots looped + drowned cycling
 	//    through it) — ponds/rivers up top are scoopable source water.
-	const entry = getMineEntry(bot);
 	const yNow = bot.entity.position.y;
-	// Surface first when deep: below the recorded mine entry, OR — when that memory
-	// was wiped by a reconnect — simply well below sea level, where there's no
-	// scoopable source water. returnToSurface now climbs even with no entry.
-	if ((entry && yNow < entry.y - 6) || yNow < 52) {
+	// "Underground" = well below the terrain surface of OUR column, not below the
+	// mine entry: a bot standing in a valley (y66) under a hilltop entry (y78)
+	// walked 100 blocks back up to the rim and lost the pond it had just found.
+	const surfHere = surfaceYAt(bot, Math.floor(bot.entity.position.x), Math.floor(bot.entity.position.z));
+	if (!waterPos && (yNow < surfHere - 5 || yNow < 45)) {
 		logEvent(
 			"bucket",
 			"return_surface",
@@ -221,6 +234,7 @@ export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 		"found_water",
 		`at ${waterPos.x},${waterPos.y},${waterPos.z}`,
 	);
+	lastFound.set(bot, waterPos);
 
 	const bucket = windowItems(bot.inventory).find((i) => i.name === "bucket");
 	if (!bucket) {

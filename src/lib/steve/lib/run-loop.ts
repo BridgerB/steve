@@ -121,7 +121,9 @@ const stepTimeoutMs = (stepId: string): number =>
 			? 300000
 			: stepId === "gather_wood"
 				? 210000
-				: 120000;
+				: stepId === "get_water_buckets"
+					? 240000 // a dry-hills hunt (explore rounds + long_hunt legs) needs >120s
+					: 120000;
 
 const completedFrom = (state: GameState): Set<string> =>
 	new Set(steps.filter((s) => s.isComplete(state)).map((s) => s.id));

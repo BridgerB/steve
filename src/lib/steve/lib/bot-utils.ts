@@ -1087,10 +1087,27 @@ export const returnToSurface = async (bot: Bot): Promise<boolean> => {
 	// First let the pathfinder climb — with scaffolding enabled it pillars up open
 	// shafts cleanly. If it falls short (rock-capped column where A* would need a huge
 	// dig path), fall back to the explicit dig-ceiling + pillar climber.
-	await goTo(bot, vec3(entry.x, entry.y, entry.z), {
-		range: 2,
-		timeout: 45000,
-	});
+	// Water beside us (a flooded band): the pathfinder's route to the entry runs
+	// through the pool, escape_water preempts, and the climb restarts — race36 702
+	// looped climb_out → water → escape 10× in 90s at y13-14. Skip the walk and
+	// pillar straight up from this dry cell instead.
+	const wetNear = (): boolean => {
+		const p = bot.entity.position;
+		for (let dx = -2; dx <= 2; dx++)
+			for (let dz = -2; dz <= 2; dz++)
+				for (let dy = -1; dy <= 1; dy++)
+					if ((getBlock(bot, vec3(Math.floor(p.x) + dx, Math.floor(p.y) + dy, Math.floor(p.z) + dz))?.name ?? "").includes("water"))
+						return true;
+		return false;
+	};
+	if (wetNear()) {
+		logEvent("nav", "climb_wet", "water beside the climb start — pillaring in place", bot.entity.position);
+	} else {
+		await goTo(bot, vec3(entry.x, entry.y, entry.z), {
+			range: 2,
+			timeout: 45000,
+		});
+	}
 	if (!atEntry()) {
 		logEvent(
 			"nav",
