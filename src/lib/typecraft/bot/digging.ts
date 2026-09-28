@@ -635,6 +635,9 @@ export const initDigging = (bot: Bot, _options: BotOptions): void => {
 		const startTime = Date.now();
 		let collected = 0;
 		const itemEntityType = bot.registry?.entitiesByName.get("item")?.id;
+		// Attempts per item entity: an item we can't reach twice is skipped so the
+		// loop moves on to the next drop instead of spinning on it until timeout.
+		const tried = new Map<number, number>();
 
 		while (Date.now() - startTime < timeout) {
 			// Find nearest item entity
@@ -644,6 +647,7 @@ export const initDigging = (bot: Bot, _options: BotOptions): void => {
 				if (entity.id === bot.entity?.id) continue;
 				if (itemEntityType != null && entity.entityType !== itemEntityType)
 					continue;
+				if ((tried.get(entity.id) ?? 0) >= 2) continue;
 				const dx = entity.position.x - bot.entity.position.x;
 				const dy = entity.position.y - bot.entity.position.y;
 				const dz = entity.position.z - bot.entity.position.z;
@@ -724,6 +728,41 @@ export const initDigging = (bot: Bot, _options: BotOptions): void => {
 					if (Math.abs(bot.entity.position.y - nearest.pos.y) < 0.5) break; // fell down
 				}
 				bot.setControlState("forward", false);
+			}
+
+			// Close the last gap ON FOOT. The pathfinder stops within its goal range
+			// of the item's BLOCK corner, which can leave the bot 1.5-2.3 from the item
+			// itself — outside the server's ~1-block pickup box — and this loop then
+			// re-picked the same item until the timeout (race39 714: 5 pickup_miss in
+			// a row with the log lying 2 blocks away on flat ground).
+			tried.set(nearest.id, (tried.get(nearest.id) ?? 0) + 1);
+			{
+				const live = bot.entities[nearest.id];
+				if (live) {
+					const cur = live.position;
+					const gap = Math.hypot(
+						cur.x - bot.entity.position.x,
+						cur.z - bot.entity.position.z,
+					);
+					if (gap > 0.45 && Math.abs(cur.y - bot.entity.position.y) < 1.6) {
+						await bot.lookAt(vec3(cur.x, bot.entity.position.y + 1.6, cur.z));
+						bot.setControlState("forward", true);
+						for (let t = 0; t < 20; t++) {
+							await new Promise((r) => setTimeout(r, 100));
+							const e = bot.entities[nearest.id];
+							if (!e) break;
+							const g = Math.hypot(
+								e.position.x - bot.entity.position.x,
+								e.position.z - bot.entity.position.z,
+							);
+							if (g < 0.3) break;
+							// A 1-block lip between us and the drop: hop it.
+							bot.setControlState("jump", !!bot.entity.isCollidedHorizontally);
+						}
+						bot.setControlState("forward", false);
+						bot.setControlState("jump", false);
+					}
+				}
 			}
 
 			// Wait for server to process pickup

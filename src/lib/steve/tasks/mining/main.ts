@@ -105,9 +105,12 @@ const DROP_ITEM: Record<string, string> = {
 const isAir = (b: Block | null): boolean =>
 	!b || b.name === "air" || b.name === "cave_air";
 const isLava = (b: Block | null): boolean => !!b && b.name.includes("lava");
-const isWater = (b: Block | null): boolean => !!b && b.name.includes("water");
+// bubble_column = the water column over magma/soul sand in an aquifer: it is
+// water for every purpose here (race39 712 dug into one at y27 and bobbed in it).
+const isWater = (b: Block | null): boolean =>
+	!!b && (b.name.includes("water") || b.name === "bubble_column");
 const isLiquid = (b: Block | null): boolean =>
-	!!b && (b.name.includes("water") || b.name.includes("lava"));
+	!!b && (b.name.includes("water") || b.name === "bubble_column" || b.name.includes("lava"));
 
 // Per-target event category (e.g. "mine:stone", "mine:coal_ore") so each mine
 // step's sub-tasks get their own timeline in the dashboard instead of sharing one.
@@ -538,10 +541,10 @@ const branchMineOre = async (
 				] as const
 			).some((o) => {
 				const b = bot.blockAt(vec3(cx + o[0], cy + o[1], cz + o[2]));
-				return !!b && b.name.includes("water");
+				return isWater(b);
 			});
 		if (
-			[head, feet, floor].some((b) => !!b && b.name.includes("water")) ||
+			[head, feet, floor].some((b) => isWater(b)) ||
 			touchesWater(fx + dx, fy, fz + dz) ||
 			touchesWater(fx + dx, fy + 1, fz + dz)
 		)
