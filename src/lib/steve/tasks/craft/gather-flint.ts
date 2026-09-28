@@ -126,7 +126,7 @@ const harvestPocket = async (
  * Returns a gravel seed if one comes into view.
  */
 const roam = async (bot: Bot, seen: Set<string>): Promise<Vec3 | null> => {
-	const base = Math.random() * Math.PI * 2;
+	let base = Math.random() * Math.PI * 2;
 	const high = bot.entity.position.y > 80;
 	for (let leg = 0; leg < 3; leg++) {
 		throwIfPreempted();
@@ -150,6 +150,22 @@ const roam = async (bot: Bot, seen: Set<string>): Promise<Vec3 | null> => {
 			await goTo(bot, t, { range: 4, timeout: 7000 });
 		} catch {}
 		if (bot.entity.isInWater) return null; // let escape_water take over
+		// A leg that didn't move us (pathfinder found nothing and the nudge hit a
+		// trunk / ledge): race40 716 logged 7 legs from the same block. Turn hard,
+		// then jump-walk the new bearing so a 1-high obstacle can't pin us.
+		if (distance(bot.entity.position, p) < 2) {
+			base += Math.PI / 2 + Math.random() * (Math.PI / 2);
+			const q = bot.entity.position;
+			const t2 = vec3(q.x + Math.cos(base) * 8, q.y, q.z + Math.sin(base) * 8);
+			logEvent("flint", "roam_stuck", `leg ${leg + 1} moved <2 — jump-walk → ${Math.floor(t2.x)},${Math.floor(t2.z)}`, q);
+			await bot.lookAt(t2);
+			bot.setControlState("forward", true);
+			bot.setControlState("jump", true);
+			await sleep(2500);
+			bot.setControlState("forward", false);
+			bot.setControlState("jump", false);
+			if (bot.entity.isInWater) return null;
+		}
 		const s = findBlocks(bot, "gravel", 64, 40)
 			.filter((q) => !seen.has(key(q)) && !wet(bot, q))
 			.map((q) => ({ q, d: distance(bot.entity.position, q) }))
