@@ -329,6 +329,22 @@ export const gatherWood = async (
 		const block = getBlock(bot, pos);
 		if (!block || !isLogName(block.name)) return true; // already gone
 
+		// Dig from the GROUND. The walk-closer above jumps into jungle vines/leaves and
+		// the bot hangs there airborne; typecraft's dig then carries the 5× off-ground
+		// penalty (3s → 15s per log), the 5s timeout fires with the log still standing,
+		// and the same log is re-picked forever (race31 682: 0/5 logs in 12 min, one
+		// jungle_log "dig timeout" every 7s).
+		bot.setControlState("forward", false);
+		bot.setControlState("jump", false);
+		for (let w = 0; w < 30 && !bot.entity.onGround; w++) await sleep(50);
+		if (!bot.entity.onGround) {
+			bot.setControlState("sneak", true);
+			for (let w = 0; w < 20 && !bot.entity.onGround; w++) await sleep(50);
+			bot.setControlState("sneak", false);
+		}
+		dist = distance(botPos(), blockCenter);
+		if (dist > 4.8) return false;
+
 		await bot.lookAt(blockCenter);
 
 		logEvent("wood", "dig_start", `${block.name} dist=${dist.toFixed(1)}`, pos);
@@ -347,7 +363,13 @@ export const gatherWood = async (
 			const msg = String(e instanceof Error ? e.message : e);
 			logEvent("wood", "dig_error", msg, pos);
 			bot.stopDigging();
-			return msg === "dig timeout"; // timeout = block probably broke, continue
+			if (msg !== "dig timeout") return false;
+			// Timeout with the log STILL there = the server refused/never finished the
+			// dig (off-ground penalty, out of reach) — report failure so the caller
+			// blacklists this log instead of re-picking it. Only a vanished block counts.
+			await sleep(300);
+			const still = getBlock(bot, pos);
+			return !still || !isLogName(still.name);
 		}
 
 		// Navigate to dropped item for pickup, then stand on the stump to vacuum

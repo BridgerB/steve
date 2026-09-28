@@ -27,6 +27,7 @@ import {
 	returnToSurface,
 	sleep,
 	success,
+	surfaceYAt,
 	throwIfPreempted,
 	walkToXZ,
 } from "../../lib/bot-utils.ts";
@@ -832,7 +833,8 @@ const relocateToDryGround = async (bot: Bot): Promise<boolean> => {
 				const h = bot.blockAt(vec3(cx + dx, y + 1, cz + dz)); // head
 				if (!g || isAir(g) || isLava(g) || isWater(g)) continue;
 				if (!isAir(f) || !isAir(h)) continue;
-				if (isWater(bot.blockAt(vec3(cx + dx, y - 2, cz + dz)))) continue; // not a water table
+				// Not a water table: a beach aquifer sits 2-4 under the sand (race31 683).
+				if ([2, 3, 4].some((k) => isWater(bot.blockAt(vec3(cx + dx, y - k, cz + dz))))) continue;
 				const d = dx * dx + dz * dz;
 				if (d < bestD) {
 					bestD = d;
@@ -847,6 +849,51 @@ const relocateToDryGround = async (bot: Bot): Promise<boolean> => {
 		await goTo(bot, best, { range: 0, timeout: 8000 });
 	} catch {}
 	return distance(bot.entity.position, best) <= 2.5;
+};
+
+/**
+ * Beach/shore stall: the column under the bot is dry for 1-2 blocks and then hits
+ * the sea-level aquifer, so every dig-down attempt within a 12-block random hop
+ * lands on the same water table (race31 683: 3× "Stuck descending at y=58" on a
+ * beach, 60s each). Walk to the HIGHEST dry terrain within R instead — inland rises
+ * away from the water table — and let the retry start its shaft there.
+ */
+const relocateToHighGround = async (bot: Bot): Promise<boolean> => {
+	const p = bot.entity.position;
+	const cx = Math.floor(p.x);
+	const cz = Math.floor(p.z);
+	const here = Math.floor(p.y);
+	let best: Vec3 | null = null;
+	let bestScore = -Infinity;
+	const R = 40;
+	for (let dx = -R; dx <= R; dx += 4) {
+		for (let dz = -R; dz <= R; dz += 4) {
+			if (Math.abs(dx) + Math.abs(dz) < 12) continue;
+			const x = cx + dx;
+			const z = cz + dz;
+			const sy = surfaceYAt(bot, x, z); // feet y on the surface
+			if (sy <= here + 2) continue; // must be meaningfully higher than this shore
+			const g = bot.blockAt(vec3(x, sy - 1, z));
+			if (!g || isAir(g) || isWater(g) || isLava(g)) continue;
+			let wet = false;
+			for (let k = 2; k <= 6; k++) {
+				const b = bot.blockAt(vec3(x, sy - k, z));
+				if (!b || isWater(b) || isLava(b)) wet = true;
+			}
+			if (wet) continue;
+			const score = sy * 4 - Math.hypot(dx, dz);
+			if (score > bestScore) {
+				bestScore = score;
+				best = vec3(x, sy, z);
+			}
+		}
+	}
+	if (!best) return false;
+	logEvent("mine", "relocate_high", `${best.x},${best.y},${best.z} from y=${here}`);
+	try {
+		await goTo(bot, best, { range: 2, timeout: 25000 });
+	} catch {}
+	return distance(bot.entity.position, best) <= 4;
 };
 
 export const digDownVertical = async (
@@ -885,7 +932,9 @@ export const digDownVertical = async (
 		let lavaClose = false;
 		for (let d = 1; d <= 4; d++)
 			if (isLava(bot.blockAt(vec3(fx, fy - d, fz)))) lavaClose = true;
-		const waterBelow = isWater(below);
+		// Water 1-3 under the floor: the last dig would open onto it (lookDig refuses
+		// anyway) — treat it as the hazard it is up front instead of burning a dig.
+		const waterBelow = [1, 2, 3].some((d) => isWater(bot.blockAt(vec3(fx, fy - d, fz))));
 		// Air below = cave/void: gauge the drop. A short step down is fine; a deep one
 		// (fall damage) or lava/water at the bottom is a hazard to route around.
 		let deepDrop = false;
@@ -903,7 +952,9 @@ export const digDownVertical = async (
 				sideTries = 0;
 				continue;
 			}
-			if (++sideTries > 7)
+			// Each failed relocate burns an 8s goTo; 7 of them ate the whole 60s descent
+			// budget standing still on a beach. Two misses = a wide water table: bail.
+			if (++sideTries > 1)
 				return {
 					y: floorY(bot),
 					stopped: lavaClose
@@ -926,7 +977,7 @@ export const digDownVertical = async (
 					sideTries = 0;
 					continue;
 				}
-				if (++sideTries > 7)
+				if (++sideTries > 1)
 					return { y: floorY(bot), stopped: "blocked (liquid)" };
 				continue;
 			}
@@ -976,7 +1027,8 @@ const mineDeepOre = async (
 		// the next attempt starts a fresh column, and let the step retry.
 		if (startY - res.y < 3 && res.y > level + 15) {
 			logEvent(mineCat(blockType), "descent_stalled", `y=${res.y} (${res.stopped ?? "no progress"}) — shifting`);
-			await exploreRandom(bot, 12);
+			const wet = /water|liquid/.test(res.stopped ?? "");
+			if (!wet || !(await relocateToHighGround(bot))) await exploreRandom(bot, 12);
 			return {
 				success: false,
 				message: `Stuck descending at y=${res.y} (${res.stopped ?? "?"})`,
@@ -1131,10 +1183,13 @@ export const mineBlock = async (
 		} catch {}
 	}
 
-	// For stone, we get cobblestone drops
+	// For stone, we get cobblestone drops — so "stone" must be EXACTLY stone. The old
+	// substring match took sandstone/red_sandstone/blackstone as stone: race31 680 spent
+	// 16 min on a beach "mining stone 16/16" and banked 16 sandstone, 0 cobblestone.
 	const isStone = blockType === "stone";
 	const searchTypes = isStone ? ["stone"] : [blockType];
-	const isTarget = (name: string) => searchTypes.some((t) => name.includes(t));
+	const isTarget = (name: string) =>
+		isStone ? name === "stone" : searchTypes.some((t) => name.includes(t));
 
 	// Deep ores (iron, diamond, …): descend to the ore band and strip-mine
 	// instead of wandering the surface. Resumable across step ticks.
