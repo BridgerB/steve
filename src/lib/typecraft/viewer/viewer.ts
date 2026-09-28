@@ -451,8 +451,10 @@ export const setViewerPath = (
 	): void => {
 		const cam = viewer.camera.position;
 		for (const c of cells) {
-			// Skip the cell the camera is standing in — nothing to see from inside.
-			if (Math.hypot(c.x + 0.5 - cam.x, c.y + 0.5 - cam.y, c.z + 0.5 - cam.z) < 1.3) continue;
+			// Skip cells at/next to the camera: in first person a marker cube 1-2 blocks
+			// ahead fills the whole view with a purple/orange hexagon (race32/33: every
+			// crafting stop after a walk left the last route's place-marker in the face).
+			if (Math.hypot(c.x + 0.5 - cam.x, c.y + 0.5 - cam.y, c.z + 0.5 - cam.z) < 3.2) continue;
 			const box = MeshBuilder.CreateBox("botMark", { size: 0.72 }, viewer.scene);
 			box.position.set(c.x + 0.5, c.y + 0.5, c.z + 0.5);
 			box.renderingGroupId = 1;
