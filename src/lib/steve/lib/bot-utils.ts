@@ -2712,6 +2712,7 @@ const escapeWaterInner = async (
 	const headingSign = (v: number): number => (Math.abs(v) >= 0.38 ? Math.sign(v) : 0);
 
 	let locked: Vec3 | null = null;
+	let notchTries = 0;
 	let lockUntil = 0;
 	// "Stuck" is tracked on a WALL CLOCK against an ABSOLUTE anchor, NOT per-target.
 	// In a tight pocket the target re-locks every second or two; resetting the
@@ -2971,18 +2972,45 @@ const escapeWaterInner = async (
 				if (surfaced) {
 					const sp = bot.entity.position;
 					const sx = Math.floor(sp.x);
-					const sy = Math.floor(sp.y); // the top water block's level
 					const sz = Math.floor(sp.z);
+					// The top WATER block's level — not floor(y): a bot bobbing at y63.4 on
+					// water whose top block is y62 got sy=63, so the "notch" was dug at
+					// y64/65 (already air) while the bank block at y63 stayed, 30× in 5 min
+					// (race37 704, right after the fastest water fill ever).
+					let wy = Math.floor(sp.y);
+					while (wy > Math.floor(sp.y) - 3 && !(B(sx, wy, sz)?.name ?? "").includes("water")) wy--;
+					// And notch a CARDINAL wall block that is actually there: the diagonal
+					// exit direction (-1,1) pointed at an empty corner.
+					const order: [number, number][] = [
+						[ex, ez],
+						[1, 0],
+						[-1, 0],
+						[0, 1],
+						[0, -1],
+					].filter(([dx, dz]) => Math.abs(dx) + Math.abs(dz) === 1) as [number, number][];
+					const pick = order.find(([dx, dz]) => diggable(B(sx + dx, wy + 1, sz + dz))) ?? order[0]!;
+					const [nx, nz] = pick;
+					await bot.lookAt(vec3(sx + nx + 0.5, wy + 1.5, sz + nz + 0.5), true);
 					// Keep forward+jump held: bobbing at the surface against the wall keeps
 					// the head dry (5× dig, not 25×) and the two blocks in reach.
-					await digAt(B(sx + ex, sy + 1, sz + ez));
-					await digAt(B(sx + ex, sy + 2, sz + ez));
+					await digAt(B(sx + nx, wy + 1, sz + nz));
+					await digAt(B(sx + nx, wy + 2, sz + nz));
+					notchTries++;
 					logEvent(
 						"nav",
 						"bank_notch",
-						`at ${sx + ex},${sy + 1},${sz + ez} dir ${ex},${ez} y=${sp.y.toFixed(1)}`,
+						`at ${sx + nx},${wy + 1},${sz + nz} dir ${nx},${nz} wy=${wy} y=${sp.y.toFixed(1)} try=${notchTries}`,
 					);
-					locked = vec3(sx + ex * 2, sy + 1, sz + ez * 2);
+					locked = vec3(sx + nx * 2, wy + 1, sz + nz * 2);
+					// Still floating after 3 notches: make dry footing under us (a block in
+					// the water cell) so a real ground jump (0.42) clears the bank.
+					if (notchTries >= 3 && notchTries % 3 === 0) {
+						logEvent("nav", "bank_pillar", `notch ×${notchTries} — building footing`, bot.entity.position);
+						await pillarInWater(bot, 1);
+						bot.setControlState("jump", true);
+						await walkToXZ(bot, sx + nx + 0.5, sz + nz + 0.5, { targetDist: 0.3, maxTime: 3000 }).catch(() => {});
+						bot.setControlState("jump", false);
+					}
 				} else {
 					// Couldn't surface (capped by rock): the old floor-based carve — sink
 					// onto the floor so the dig is 5× not 25×, cut the wall at head level.
