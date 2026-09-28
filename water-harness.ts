@@ -150,6 +150,7 @@ bot.once("spawn", async () => {
 	// A race bot at the water stage carries cobble and a stone pick; the capped
 	// escape pillars up on placed blocks and digs the cap, so give the same kit.
 	await cmd("clear InlineBot");
+	await cmd("effect give InlineBot minecraft:instant_health 1 10 true"); // full heal between runs
 	await cmd("give InlineBot cobblestone 64");
 	await cmd("give InlineBot stone_pickaxe 1");
 	await sleep(400);
@@ -194,8 +195,10 @@ bot.once("spawn", async () => {
 	const ok = await escapeWater(bot, retreat);
 	const p = bot.entity.position;
 	const dry = !bot.entity.isInWater;
+	// A death respawns the bot at world spawn, on dry land — that is NOT a pass.
+	const died = Math.hypot(p.x - dx, p.z - dz) > 40;
 	console.log(
-		`RESULT ${ok && dry ? "PASS" : "FAIL"} ok=${ok} took=${Date.now() - t0}ms x=${Math.round(p.x)} y=${Math.round(p.y * 10) / 10} z=${Math.round(p.z)} inWater=${bot.entity.isInWater} hp=${bot.health}`,
+		`RESULT ${ok && dry && !died ? "PASS" : "FAIL"}${died ? " (DIED)" : ""} ok=${ok} took=${Date.now() - t0}ms x=${Math.round(p.x)} y=${Math.round(p.y * 10) / 10} z=${Math.round(p.z)} inWater=${bot.entity.isInWater} hp=${bot.health}`,
 	);
 	await cmd(`forceload remove ${BX} ${BZ}`);
 	await sleep(300);
@@ -205,4 +208,4 @@ bot.once("spawn", async () => {
 setTimeout(() => {
 	console.log("TIMEOUT — never reached spawn/finish");
 	process.exit(1);
-}, 90000);
+}, 200000);
