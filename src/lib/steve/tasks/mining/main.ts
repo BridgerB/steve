@@ -1152,17 +1152,11 @@ const mineDeepOre = async (
 	// Lost drops are a sideways-relocate case, not "boxed": race38 710 mined a
 	// climbed ore, the watchdog fired, and dug===0 sent it on a 2-min climb to the
 	// y111 mine entry before relocating at y81 (out of the band).
-	if (have <= before && dug === 0 && !lostDrops) {
-		const entry = getMineEntry(bot);
-		if (entry && floorY(bot) < entry.y - 6) {
-			logEvent(mineCat(blockType),"climb_out", `boxed at y=${floorY(bot)} → entry y=${entry.y}`);
-			if (!(await returnToSurface(bot))) {
-				const { pillarUp } = await import("../portal/cast.ts");
-				await pillarUp(bot, entry.y);
-				bot.setControlState("sneak", false); // pillarUp leaves it on
-			}
-		}
-	}
+	// A "boxed" call (race47 747: one failed ore_climb ate the whole call, dug=0)
+	// first tries the sideways relocate below like any other stall; the climb to
+	// the entry is the LAST resort, only when even a 1x2 tunnel can't be cut
+	// (747 climbed 49 levels, got pillar_stuck beside water, and lost the descent).
+	const boxed = have <= before && dug === 0 && !lostDrops;
 	// Stuck detection by displacement AND ore gain from a fixed anchor. Wedged at a
 	// cavern mouth the bot still breaks ore (dug>0) but its raw_iron drops fall into
 	// lava (collected stays 0) while branch-mining only jitters it a few blocks. Count
@@ -1181,7 +1175,7 @@ const mineDeepOre = async (
 			? { x: anc.x, z: anc.z, n: stuckN, iron: anc.iron }
 			: { x: cur.x, z: cur.z, n: 0, iron: have },
 	);
-	if ((stuckN >= 3 || lostDrops || noOre) && have < targetCount) {
+	if ((stuckN >= 3 || lostDrops || noOre || boxed) && have < targetCount) {
 		mineStuckState.set(bot, { x: cur.x, z: cur.z, n: 0, iron: have });
 		const fx = Math.floor(cur.x);
 		const fz = Math.floor(cur.z);
@@ -1235,6 +1229,18 @@ const mineDeepOre = async (
 		// "Relocated toward" twice from the exact same cell, 120s per cycle. Cut a
 		// straight 1x2 tunnel there ourselves — that's what a branch-miner does anyway.
 		const moved = await tunnelToward(bot, best[0], best[1], hop);
+		if (boxed && moved === 0) {
+			const entry = getMineEntry(bot);
+			if (entry && floorY(bot) < entry.y - 6) {
+				logEvent(mineCat(blockType), "climb_out", `boxed at y=${floorY(bot)} → entry y=${entry.y}`);
+				if (!(await returnToSurface(bot))) {
+					const { pillarUp } = await import("../portal/cast.ts");
+					await pillarUp(bot, entry.y);
+					bot.setControlState("sneak", false); // pillarUp leaves it on
+				}
+				return { success: false, message: `Boxed at y=${feetY} — climbed out` };
+			}
+		}
 		if (moved < hop / 2) await goTo(bot, vec3(tx, baseY, tz), { range: 3, timeout: 15000 }).catch(() => {});
 		logEvent(mineCat(blockType), "relocated", `${moved}/${hop} cells toward ${best[0]},${best[1]} → ${Math.floor(bot.entity.position.x)},${Math.floor(bot.entity.position.z)}`);
 		return { success: true, message: `Relocated toward ${tx},${tz}` };
