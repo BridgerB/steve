@@ -20,6 +20,7 @@ import {
 	getRememberedResource,
 	goTo,
 	isInWaterTrap,
+	lavaAround,
 	moveCloser,
 	rememberMineEntry,
 	returnToSurface,
@@ -896,11 +897,17 @@ const mineDeepOre = async (
 		// Only hard-fail if stranded high in the near-oreless zone with essentially no
 		// progress (instantly boxed by a surface aquifer). Otherwise branch-mine right
 		// where we are — the descent already swept iron's band (and harvested through it).
-		if (res.y > 75 && startY - res.y < 3)
+		// No progress and still far above the band → don't branch-mine up here (race
+		// 641 strip-mined at y61-63 for 120s and found nothing). Shift a few blocks so
+		// the next attempt starts a fresh column, and let the step retry.
+		if (startY - res.y < 3 && res.y > level + 15) {
+			logEvent(mineCat(blockType), "descent_stalled", `y=${res.y} (${res.stopped ?? "no progress"}) — shifting`);
+			await exploreRandom(bot, 12);
 			return {
 				success: false,
 				message: `Stuck descending at y=${res.y} (${res.stopped ?? "?"})`,
 			};
+		}
 		logEvent(mineCat(blockType), "mine_in_place", `at y=${res.y}, branch-mining`);
 	}
 
@@ -984,7 +991,11 @@ const mineDeepOre = async (
 		const feetY = floorY(bot);
 		// A barren spot at the right band is relocated SIDEWAYS at this level; the
 		// climb is only for drops lost to lava below.
-		const deep = feetY < 45 && !noOre;
+		// … and only when lava is actually nearby — that's the case the climb was
+		// written for (drops burning below). Lost drops with no lava in sight (race
+		// 641/642: ore broken in a cavern wall, drop rolled off) still pillared 10
+		// blocks up out of the band.
+		const deep = feetY < 45 && !noOre && lavaAround(bot, 6);
 		logEvent(mineCat(blockType), "relocate", `lost=${lostDrops} noOre=${!!noOre} stuck=${stuckN} at ${fx},${fz},y${feetY} deep=${deep} solid=${bestSolid}`);
 		if (deep) {
 			const climbTo = Math.min(level + 14, 50); // stay underground, never the sky

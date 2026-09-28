@@ -5,6 +5,7 @@
 import type { Bot } from "typecraft";
 import { createGoalNear, distance, offset, type Vec3, vec3 } from "typecraft";
 import {
+	digStaircaseUp,
 	escapeWater,
 	exploreRandom,
 	getBlock,
@@ -583,8 +584,16 @@ export const gatherWood = async (
 				climbOuts++;
 				logEvent("wood", "climb_out", `nav_stuck at y=${Math.floor(here.y)}, surface y=${surf}`, here);
 				const { pillarUp } = await import("../portal/cast.ts");
-				const up = await pillarUp(bot, surf);
+				let up = await pillarUp(bot, surf);
 				bot.setControlState("sneak", false);
+				// No blocks to pillar with (race 643 came out of its mine with 8 ingots
+				// and no cobble, into a valley 10 below the trees): dig a staircase up
+				// the slope instead — it yields the cobble as it goes.
+				if (!up) {
+					const got = await digStaircaseUp(bot, surf, Date.now() + 40000);
+					up = got >= surf - 1;
+					logEvent("wood", "climb_out_stairs", `reached y=${got} (target ${surf})`, botPos());
+				}
 				if (up) continue; // try the same tree from the surface
 			}
 			unreachable.add(posKey(target.pos));
