@@ -422,6 +422,19 @@ const branchMineOre = async (
 			}
 			const landingY = ore.position.y - dy + 1;
 			if (landingY > floorY(bot) + 1) {
+				// The drop would land on a ledge above us. Don't give up yet: CLIMB to
+				// that ledge (the pathfinder scaffolds with our cobble) and mine from
+				// there. Cave-riddled bands had every visible ore 2-10 blocks up the
+				// walls and the bot rejected all of it (race35 696: ore_unreachable ×9,
+				// 697/699 ×3-4 each, 13 min for 4 raw iron between them).
+				const climb = landingY - floorY(bot);
+				const landing = vec3(ore.position.x, landingY, ore.position.z);
+				if (climb <= 12 && distance(bot.entity.position, landing) <= 18) {
+					logEvent(mineCat(blockType), "ore_climb", `to y=${landingY} from y=${floorY(bot)} for ${ore.position.x},${ore.position.y},${ore.position.z}`);
+					await goTo(bot, landing, { range: 1.5, timeout: 15000 }).catch(() => {});
+				}
+			}
+			if (landingY > floorY(bot) + 1) {
 				logEvent(mineCat(blockType), "ore_unreachable", `${ore.position.x},${ore.position.y},${ore.position.z} lands y=${landingY}, feet y=${floorY(bot)}`);
 				if (fromMem) forgetResource(bot, blockType, ore.position);
 				return false;
