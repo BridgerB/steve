@@ -457,11 +457,11 @@ export const initBlocks = (bot: Bot, _options: BotOptions): void => {
 								blocksChecked++;
 								if (!sidMatches(sid)) continue;
 								const pos = vec3(wx, wy, wz);
-								// Filter: exposed (has transparent neighbor) + line-of-sight from bot eye
-								if (useExposed) {
-									if (!isExposed(pos)) continue;
-									if (!bot.canSeeBlock(pos)) continue;
-								}
+								// Cheap exposure filter here; the line-of-sight raycast is deferred
+								// to the nearest candidates only (below) — running it on every
+								// match froze the process for a radius-110 gravel search (gravel
+								// is in nearly every section; thousands of 110-block raycasts).
+								if (useExposed && !isExposed(pos)) continue;
 								found.push({ pos, d2 });
 							}
 						}
@@ -470,7 +470,15 @@ export const initBlocks = (bot: Bot, _options: BotOptions): void => {
 			}
 		}
 		found.sort((a, b) => a.d2 - b.d2);
+		let rays = 0;
 		for (const f of found) {
+			if (useExposed) {
+				// Bound the raycast work: past this many misses the rest is out of
+				// sight anyway (or the caller asked for far more than is visible).
+				if (rays >= Math.max(64, count * 4)) break;
+				rays++;
+				if (!bot.canSeeBlock(f.pos)) continue;
+			}
 			results.push(f.pos);
 			if (results.length >= count) break;
 		}

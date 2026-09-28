@@ -147,6 +147,12 @@ bot.once("spawn", async () => {
 
 	// Teleport in and WAIT for the bot to actually arrive submerged (RCON tp is
 	// async from the bot's POV — poll its position rather than trust a fixed sleep).
+	// A race bot at the water stage carries cobble and a stone pick; the capped
+	// escape pillars up on placed blocks and digs the cap, so give the same kit.
+	await cmd("clear InlineBot");
+	await cmd("give InlineBot cobblestone 64");
+	await cmd("give InlineBot stone_pickaxe 1");
+	await sleep(400);
 	const [dx, dy, dz] = arena.dest;
 	let arrived = false;
 	for (let i = 0; i < 20; i++) {

@@ -111,7 +111,7 @@ const roam = async (bot: Bot, seen: Set<string>): Promise<Vec3 | null> => {
 		try {
 			await goTo(bot, t, { range: 4, timeout: 7000 });
 		} catch {}
-		const s = findBlocks(bot, "gravel", 110, 40)
+		const s = findBlocks(bot, "gravel", 64, 40)
 			.filter((q) => !seen.has(key(q)))
 			.map((q) => ({ q, d: distance(bot.entity.position, q) }))
 			.sort((x, y) => x.d - y.d)[0]?.q;
@@ -131,7 +131,7 @@ export const gatherFlint = async (
 	const doneSeeds = new Set<string>();
 	while (!findItem(bot, "flint") && Date.now() < deadlineMs) {
 		if ((bot.health ?? 20) < 6) break; // don't die for a flint
-		let seed = findBlocks(bot, "gravel", 110, 40)
+		let seed = findBlocks(bot, "gravel", 64, 40)
 			.filter((p) => !doneSeeds.has(key(p)))
 			.map((p) => ({ p, d: distance(bot.entity.position, p) }))
 			.sort((a, b) => a.d - b.d)[0]?.p;

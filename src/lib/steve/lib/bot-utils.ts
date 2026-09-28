@@ -812,6 +812,16 @@ export const digStaircaseUp = async (
 		const ceil = B(fx, fy + 2, fz);
 		const ceil2 = B(fx, fy + 3, fz);
 		if ([ceil, ceil2].some((b) => blocked(b) || fallable(b))) break;
+		// Never open the ceiling into a lake: race29 674 pillared from y28 to y47,
+		// broke the two blocks above into a capped aquifer and drowned in it.
+		if (
+			[ceil, ceil2].some(
+				(b) => solid(b) && (digExposesWater(bot, (b as { position: Vec3 }).position) || digExposesLava(bot, (b as { position: Vec3 }).position)),
+			)
+		) {
+			logEvent("nav", "stairs_blocked", `liquid behind the ceiling at y=${fy + 2}`, bot.entity.position);
+			break;
+		}
 		await digAt(ceil);
 		await digAt(ceil2);
 		// Pillar up one: equip a block, look down, hold jump, and SPAM placeBlock under
@@ -874,6 +884,65 @@ export const digStaircaseUp = async (
 	}
 	bot.clearControlStates();
 	return Math.floor(bot.entity.position.y);
+};
+
+/** Rise `levels` blocks while submerged by jumping off the floor and placing a
+ *  filler block underfoot each time (the ground jump works in water; only the
+ *  swim-up is weak). Returns the number of levels gained. */
+export const pillarInWater = async (bot: Bot, levels: number): Promise<number> => {
+	const isFiller = (s: { name: string } | null): boolean =>
+		!!s && /cobblestone|^dirt$|^stone$|deepslate|granite|andesite|diorite|tuff|netherrack/.test(s.name);
+	let gained = 0;
+	for (let i = 0; i < levels; i++) {
+		const hot = bot.inventory.slots.findIndex((s, k) => k >= 36 && k <= 44 && isFiller(s));
+		if (hot >= 0) bot.setQuickBarSlot(hot - 36);
+		else {
+			const slot = bot.inventory.slots.findIndex(isFiller);
+			if (slot < 0) break;
+			try {
+				await bot.clickWindow(slot, 0, 0);
+				await bot.clickWindow(36, 0, 0);
+				bot.setQuickBarSlot(0);
+			} catch {
+				break;
+			}
+		}
+		const p = bot.entity.position;
+		const fx = Math.floor(p.x);
+		const fy = Math.floor(p.y);
+		const fz = Math.floor(p.z);
+		await walkToXZ(bot, fx + 0.5, fz + 0.5, { targetDist: 0.2, maxTime: 800 });
+		const floorRef = getBlock(bot, vec3(fx, fy - 1, fz));
+		if (!floorRef) break;
+		await bot.lookAt(vec3(fx + 0.5, fy - 0.5, fz + 0.5), true);
+		bot.setControlState("jump", true);
+		let placed = false;
+		for (let k = 0; k < 16 && !placed; k++) {
+			await sleep(80);
+			if (Math.floor(bot.entity.position.y) > fy) {
+				try {
+					await Promise.race([
+						bot.placeBlock(floorRef as never, vec3(0, 1, 0)) as Promise<void>,
+						sleep(1000).then(() => {
+							throw new Error("place timeout");
+						}),
+					]);
+				} catch {
+					/* retry next spin */
+				}
+			}
+			const under = getBlock(bot, vec3(fx, fy, fz));
+			placed = !!under && under.name !== "air" && under.name !== "cave_air" && !under.name.includes("water");
+		}
+		bot.setControlState("jump", false);
+		// Settle onto the new block before the next level (5× digs need onGround).
+		const t0 = Date.now();
+		while (Date.now() - t0 < 2500 && !bot.entity.onGround) await sleep(100);
+		if (!placed) break;
+		gained++;
+	}
+	bot.clearControlStates();
+	return gained;
 };
 
 export const returnToSurface = async (bot: Bot): Promise<boolean> => {
@@ -2535,10 +2604,23 @@ const escapeWaterInner = async (
 			!dryTargets()[0] &&
 			!lastSafe
 		) {
+			// Digging while floating runs at 25× (off-ground × underwater): a stone cap
+			// never breaks and the bot drowns under it (race29 674, 100s submerged).
+			// So: SINK to the floor first (5×), and if the cap is out of reach from
+			// there, PILLAR UP on placed blocks — a jump from the floor clears the
+			// block even in water — until the cap is in reach, then dig it.
+			if (!bot.entity.onGround) {
+				bot.clearControlStates();
+				const t0 = Date.now();
+				while (Date.now() - t0 < 3000 && !bot.entity.onGround) await sleep(100);
+			}
 			const ceil = reachableCeiling();
-			if (ceil) {
+			if (ceil && bot.entity.onGround) {
 				await digAt(ceil);
 				logEvent("nav", "drown_dig_up", ceil.name, ceil.position);
+			} else if (!ceil && bot.entity.onGround) {
+				const rose = await pillarInWater(bot, 3);
+				logEvent("nav", "drown_pillar", `+${rose} on placed blocks`, bot.entity.position);
 			}
 		}
 
@@ -2593,6 +2675,30 @@ const escapeWaterInner = async (
 			stuckSince = Date.now();
 			if (traveled) escapeDir = null; // left the pit entirely → re-evaluate
 			lockUntil = Date.now() + 3000; // making progress — keep pressing this bank
+		} else if (
+			Date.now() - stuckSince > 2500 &&
+			B(fx, fy + 1, fz)?.name.includes("water") &&
+			[1, 2, 3, 4, 5, 6].some((dy) => isStandableGround(B(fx, fy + dy, fz)))
+		) {
+			// Pinned UNDER A CAP (flooded cave / aquifer): the dry-target scan sees the
+			// ground above the cap and keeps "swimming" at it, so the capped branch
+			// above never fired (harness 'capped' FAIL; race29 674 drowned this way).
+			// Sink to the floor (5× digs, not 25×), pillar up on placed blocks until
+			// the cap is in reach, then dig through it.
+			if (!bot.entity.onGround) {
+				bot.clearControlStates();
+				const t0 = Date.now();
+				while (Date.now() - t0 < 3000 && !bot.entity.onGround) await sleep(100);
+			}
+			const ceil = reachableCeiling();
+			if (ceil && bot.entity.onGround) {
+				await digAt(ceil);
+				logEvent("nav", "drown_dig_up", ceil.name, ceil.position);
+			} else if (bot.entity.onGround) {
+				const rose = await pillarInWater(bot, 3);
+				logEvent("nav", "drown_pillar", `+${rose} on placed blocks`, bot.entity.position);
+			}
+			stuckSince = Date.now();
 		} else if (Date.now() - stuckSince > 2500) {
 			// Not progressing. WHICH way is out — and is that way actually walled, or is
 			// it just slow open water? Commit toward the exit (nearest dry target, else
