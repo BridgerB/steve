@@ -217,11 +217,12 @@ export const smeltItems = async (
 			}
 		}
 
-		// Take the finished output stack into inventory.
-		let took = 0;
-		if (furnaceWindow.slots[2]) {
-			took = furnaceWindow.slots[2].count;
-			await bot.clickWindow(2, 0, 0);
+		// Take a furnace slot's whole stack into inventory; true if it landed.
+		const takeSlot = async (slotIdx: number): Promise<number> => {
+			const cur = furnaceWindow.slots[slotIdx];
+			if (!cur) return 0;
+			const n = cur.count;
+			await bot.clickWindow(slotIdx, 0, 0);
 			await sleep(300);
 			const empty = furnaceWindow.slots.findIndex(
 				(s, i) => i >= furnaceWindow.inventoryStart && !s,
@@ -229,11 +230,23 @@ export const smeltItems = async (
 			if (empty >= 0) {
 				await bot.clickWindow(empty, 0, 0);
 				await sleep(300);
-			} else if (furnaceWindow.selectedItem) {
-				await bot.clickWindow(2, 0, 0); // no inventory space — put it back
-				took = 0;
+				return n;
 			}
-		}
+			if (furnaceWindow.selectedItem) await bot.clickWindow(slotIdx, 0, 0); // no space — put it back
+			return 0;
+		};
+
+		// Take the finished output stack into inventory.
+		let took = await takeSlot(2);
+		// The fuel load above moves the WHOLE plank stack (a click carries the stack),
+		// and only ~6 planks burn for 8 iron — the rest sat in the furnace when the bot
+		// walked off: race32 686 left 26 acacia planks (+1 late ingot) in its furnace at
+		// y20, then spent minutes climbing 50 blocks for "wood" to make a table. Reclaim
+		// the leftover fuel (and any ingot that finished during the pickup).
+		const fuelBack = await takeSlot(1);
+		if (fuelBack > 0) logEvent("smelt", "fuel_reclaimed", `${fuelBack}`);
+		await sleep(800);
+		took += await takeSlot(2);
 
 		// Never close while carrying an item — it would be dropped on the ground.
 		if (furnaceWindow.selectedItem) {
