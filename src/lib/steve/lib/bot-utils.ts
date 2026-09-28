@@ -881,6 +881,7 @@ export const digStaircaseUp = async (
 	};
 
 	let stuck = 0;
+	let gravelDigs = 0;
 	while (Math.floor(bot.entity.position.y) < targetY && Date.now() < deadline) {
 		if ((bot.health ?? 20) < 8) break;
 		if (bot.entity?.isInWater) break;
@@ -894,9 +895,21 @@ export const digStaircaseUp = async (
 		// there's a real apex window to place into. Bail on liquids/falling blocks.
 		const ceil = B(fx, fy + 2, fz);
 		const ceil2 = B(fx, fy + 3, fz);
-		if ([ceil, ceil2].some((b) => blocked(b) || fallable(b))) {
+		if ([ceil, ceil2].some(blocked)) {
 			if (await shiftUnderDryCeiling(fx, fy, fz)) continue;
 			break;
+		}
+		// Gravel/sand overhead: dig it and let the column settle onto the block
+		// above our head (our own cells stay occupied), then re-evaluate. Bailing
+		// silently here left race37 707 at y54 under a gravel seam failing
+		// "Returning to surface for wood" every 5s with 8 ingots in the pack.
+		if ([ceil, ceil2].some(fallable)) {
+			if (++gravelDigs > 16) break;
+			logEvent("nav", "stairs_gravel", `${ceil?.name}/${ceil2?.name} above y=${fy}`, bot.entity.position);
+			if (fallable(ceil)) await digAt(ceil);
+			else if (fallable(ceil2)) await digAt(ceil2);
+			await sleep(700);
+			continue;
 		}
 		// Never open the ceiling into a lake: race29 674 pillared from y28 to y47,
 		// broke the two blocks above into a capped aquifer and drowned in it.
