@@ -284,8 +284,16 @@ export const reduce = (
 				// epoch so the running step's eventual result is ignored as stale, and start
 				// the new one. The displaced long task self-bails on its own water check, so
 				// the two don't fight for control.
+				// ONLY the survival override (escape_water, priority 0) may preempt. Any other
+				// "higher-priority step became incomplete" is a transient artefact of the
+				// running step itself — e.g. moving a log into the 2×2 craft grid drops the
+				// inventory log count, which flips gather_wood.isComplete() to false and,
+				// if allowed to preempt here, cancels the craft mid-place and re-gathers
+				// forever (the wood-lock). Regressions are handled when the running step
+				// finishes: completed is re-derived from isComplete() every tick, so the
+				// highest-priority incomplete step is picked up on the next dispatch.
 				const current = steps.find((s) => s.id === rs.currentStepId);
-				if (nextStep && current && nextStep.id !== current.id && nextStep.priority < current.priority) {
+				if (nextStep && current && nextStep.id !== current.id && nextStep.id === "escape_water") {
 					cmds.push(
 						{ type: "publishStatus", status: buildStatus(completed, nextStep.id, phase, progress) },
 						{ type: "console", msg: `⚠ preempt ${current.name} → ${nextStep.name}` },
