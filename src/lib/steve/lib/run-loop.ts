@@ -40,6 +40,9 @@ export type RunState = Readonly<{
 	currentStepId: string | null;
 	completed: ReadonlySet<string>;
 	consecutiveFailures: number;
+	// escape_water preempt timestamps (last 90s) + the pending storm relocate.
+	preemptAt: number[];
+	stormRelocate: boolean;
 	// Ticks to wait before starting the next step after a failure. Stops a step
 	// that fails fast (e.g. "Cannot find place for furnace") from re-running at the
 	// 20Hz tick rate — a hot-spin that burns CPU and visually flickers the viewer.
@@ -55,6 +58,8 @@ export const initialRunState: RunState = {
 	currentStepId: null,
 	completed: new Set(),
 	consecutiveFailures: 0,
+	preemptAt: [],
+	stormRelocate: false,
 	failureBackoffTicks: 0,
 	completeTicks: 0,
 };
@@ -217,12 +222,23 @@ export const reduce = (
 			if (ev.result.success) {
 				const completed = new Set(rs.completed);
 				if (stepId) completed.add(stepId);
+				// Storm relocate: out of the water now → wander away from this spot (the
+				// explore's goTo runs ~10s; hold dispatch that long so the restarted step
+				// doesn't fight it) instead of restarting the step at the same flooded cell.
+				const relocate = stepId === "escape_water" && rs.stormRelocate;
+				const extra: Command[] = relocate
+					? [
+							{ type: "event", category: "nav", event: "preempt_storm_relocate", detail: "escaped — exploring away before the next step" },
+							{ type: "abortExplore" },
+						]
+					: [];
 				return {
-					state: { ...rs, status: "idle", consecutiveFailures: 0, failureBackoffTicks: 0, completed },
+					state: { ...rs, status: "idle", consecutiveFailures: 0, failureBackoffTicks: relocate ? 200 : 0, completed, stormRelocate: relocate ? false : rs.stormRelocate },
 					commands: [
 						{ type: "closeWindow" },
 						{ type: "console", msg: `✓ ${ev.result.message}` },
 						{ type: "event", category: "step", event: "success", detail: ev.result.message },
+						...extra,
 					],
 				};
 			}
@@ -316,14 +332,27 @@ export const reduce = (
 				// highest-priority incomplete step is picked up on the next dispatch.
 				const current = steps.find((s) => s.id === rs.currentStepId);
 				if (nextStep && current && nextStep.id !== current.id && nextStep.id === "escape_water") {
+					// PREEMPT STORM: the same spot keeps re-flooding the restarted step
+					// (race59 792: Build Nether Portal → escape_water every ~10s at a
+					// flooded tunnel mouth; 793: 17 rounds at a pit in the iron band). Four
+					// preempts inside 90s → after this escape, relocate before restarting.
+					const now = Date.now();
+					const recent = [...rs.preemptAt.filter((t) => now - t < 90000), now];
+					const storm = recent.length >= 4;
 					cmds.push(
 						{ type: "publishStatus", status: buildStatus(completed, nextStep.id, phase, progress) },
 						{ type: "console", msg: `⚠ preempt ${current.name} → ${nextStep.name}` },
 						{ type: "event", category: "step", event: "preempt", detail: `${current.name} → ${nextStep.name}` },
+					);
+					if (storm) cmds.push({ type: "event", category: "nav", event: "preempt_storm", detail: `${recent.length} escape_water preempts of ${current.name} in 90s — relocating after the escape` });
+					cmds.push(
 						{ type: "event", category: "step", event: "start", detail: nextStep.name },
 						{ type: "runStep", stepId: nextStep.id, state, epoch: rs.epoch + 1, timeoutMs: stepTimeoutMs(nextStep.id) },
 					);
-					return { state: { ...rs, epoch: rs.epoch + 1, status: "running", currentStepId: nextStep.id, completed, completeTicks: 0 }, commands: cmds };
+					return {
+						state: { ...rs, epoch: rs.epoch + 1, status: "running", currentStepId: nextStep.id, completed, completeTicks: 0, preemptAt: storm ? [] : recent, stormRelocate: rs.stormRelocate || storm },
+						commands: cmds,
+					};
 				}
 				// SELF-CANCEL: the running step's own goal is already met (held for a
 				// couple of seconds, so a transient inventory dip can't fake it). Bump the
