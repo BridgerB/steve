@@ -30,9 +30,20 @@
 	// position/ladder under the new name until the new socket delivers.
 	// Follow the LEADER (most steps done; ties → earliest bot), not always bots[0]:
 	// the bot that is furthest along is the one worth watching.
+	// Rank by the FURTHEST critical-path step reached, not the done-count: a bot that
+	// smelted 8 ingots but re-gathers wood (0 logs → the wood steps flip un-done) was
+	// out-ranked by one stuck on Mine Cobblestone with every wood step ticked
+	// (race31 680 vs 681, race32 684 vs 686). Off-path steps (sword, iron pick, food,
+	// coal) don't count; ties → more done steps, then the earliest bot.
+	const OFF_PATH = new Set(['Craft Stone Sword', 'Mine Coal', 'Craft Iron Pickaxe', 'Gather Food'].map((n) => STEPS.indexOf(n as (typeof STEPS)[number])));
+	const reach = (b: { done: number[] }) => b.done.reduce((m, i) => (OFF_PATH.has(i) ? m : Math.max(m, i)), -1);
 	const leader = $derived.by(() => {
 		let best = race.bots[0];
-		for (const b of race.bots) if (b.done.length > (best?.done.length ?? -1)) best = b;
+		for (const b of race.bots) {
+			if (!best) { best = b; continue; }
+			const rb = reach(b), rBest = reach(best);
+			if (rb > rBest || (rb === rBest && b.done.length > best.done.length)) best = b;
+		}
 		return best;
 	});
 	const liveBotId = $derived(leader?.id ?? '');
