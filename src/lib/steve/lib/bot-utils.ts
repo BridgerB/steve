@@ -994,7 +994,13 @@ export const digStaircaseUp = async (
 		// Count a level GAINED only when a block actually landed under us: the old
 		// y > fy test was satisfied by the jump itself, so the stuck counter never
 		// tripped and a failing pillar looped until the step deadline.
-		if (solid(B(fx, fy, fz)) || (bot.entity.onGround && Math.floor(bot.entity.position.y) > fy)) stuck = 0;
+		// Only a block that actually landed in our old feet cell counts. The
+		// "on the ground one level higher" clause was fooled by a slope: a bot
+		// straddling two cells of different height jumped from the low cell,
+		// landed on the high one (y > fy), reset the counter, drifted back down,
+		// and repeated for the whole 90s budget with no block ever placed
+		// (race54 773, race55 776: 'reached y=66 (target 73)' with zero events).
+		if (solid(B(fx, fy, fz))) stuck = 0;
 		else if (++stuck > 5) {
 			logEvent("nav", "pillar_stuck", `no block landed at y=${fy} after 6 tries`, bot.entity.position);
 			break;
