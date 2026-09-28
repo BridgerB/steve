@@ -53,21 +53,26 @@
 	const pad2 = (n: number) => String(n).padStart(2, '0');
 
 	const furthest = $derived(bot && bot.done.length ? Math.max(...bot.done) : -1);
+	const doneCount = $derived(bot ? bot.done.length : 0);
 	const goalHit = $derived(furthest >= GOAL);
 	const currentStep = $derived(
 		bot && bot.current >= 0 && bot.current < STEPS.length ? STEPS[bot.current] : ''
 	);
 
+	// Phase from the step the bot is WORKING on, not the highest complete index
+	// (skippable steps like Gather Food are complete from the start and made a
+	// wood-stage bot read as IRON).
+	const at = $derived(bot && bot.current >= 0 ? bot.current : furthest);
 	const phase = $derived(
 		goalHit
 			? { name: 'NETHER', color: '#ff7043' }
-			: furthest >= 16
+			: at >= 16
 				? { name: 'PORTAL', color: '#ce93d8' }
-				: furthest >= IRON
+				: at >= IRON
 					? { name: 'IRON', color: '#90caf9' }
-					: furthest >= 5
+					: at >= 5
 						? { name: 'STONE', color: '#cfd8dc' }
-						: furthest >= 0
+						: at >= 0
 							? { name: 'WOOD', color: '#a5d6a7' }
 							: { name: 'START', color: '#9e9e9e' }
 	);
@@ -83,7 +88,11 @@
 	function stepInfo(i: number): StepState {
 		if (!bot) return { state: 'todo', time: '' };
 		if (i === bot.current) return { state: 'doing', time: '' };
-		const done = i <= furthest || bot.done.includes(i);
+		// Only what the bot reports complete. `i <= furthest` painted everything
+		// below the highest complete index as done — on a peaceful server Gather
+		// Food (15) is complete from the start, so a bot with a stone pickaxe showed
+		// 16/30 with Smelt Iron / Fill Water Buckets ticked.
+		const done = bot.done.includes(i);
 		if (done) {
 			const at = bot.doneAt[i];
 			const time =
@@ -344,10 +353,10 @@
 				<div class="progress">
 					<div class="row-between">
 						<span class="lbl">SPEEDRUN PROGRESS</span>
-						<span class="prog-val">{furthest + 1}<span class="dim">/{STEPS.length}</span></span>
+						<span class="prog-val">{doneCount}<span class="dim">/{STEPS.length}</span></span>
 					</div>
 					<div class="bar bar-tall">
-						<div class="bar-fill" style:width={`${((furthest + 1) / STEPS.length) * 100}%`} style:background={phase.color}></div>
+						<div class="bar-fill" style:width={`${(doneCount / STEPS.length) * 100}%`} style:background={phase.color}></div>
 					</div>
 					<span class="prog-note" style:color={phase.color}>step {bot.current + 1} · {currentStep || '—'}</span>
 				</div>
@@ -416,7 +425,7 @@
 			<div class="ladder">
 				<div class="ladder-head">
 					<span class="ladder-title">SPEEDRUN LADDER</span>
-					<span class="ladder-count">{furthest + 1} / {STEPS.length}</span>
+					<span class="ladder-count">{doneCount} / {STEPS.length}</span>
 				</div>
 				<div class="ladder-list">
 					{#each STEPS as name, i (name)}
