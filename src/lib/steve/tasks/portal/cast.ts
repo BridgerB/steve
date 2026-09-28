@@ -453,7 +453,16 @@ const findLavaPool = (
 	maxDistance: number,
 	minSources: number,
 ): { pos: Vec3; sources: number } | null => {
-	const srcs = exposedFluidSources(bot, "lava", maxDistance);
+	// SOURCE blocks only (fluid level 0 / no level property). typecraft names
+	// flowing lava "lava" too, so a single source with a 60-cell tongue counted
+	// as an "8-source pool" (race49 755: cast/pool 8 sources, [SCOOP] src0=1,
+	// two 5-minute chamber clears for nothing). Flowing lava never fills a bucket.
+	const isSrc = (p: Vec3): boolean => {
+		const lv = (getBlock(bot, vec3(p.x, p.y, p.z)) as { properties?: { level?: unknown } } | null)
+			?.properties?.level;
+		return lv == null || String(lv) === "0";
+	};
+	const srcs = exposedFluidSources(bot, "lava", maxDistance).filter(isSrc);
 	if (!srcs.length) return null;
 	const o = bot.entity.position;
 	const byDist = srcs
