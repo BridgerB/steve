@@ -1312,7 +1312,10 @@ export const mineBlock = async (
 	// one exposed patch at a pond. Stone is 3-5 blocks under the grass: dig a 1-wide
 	// hole straight down (lava/water-checked) until the block under our feet is stone.
 	const digDownToStone = async (): Promise<Block | null> => {
-		for (let i = 0; i < 8; i++) {
+		// 16 levels, not 8: grass + 4 dirt + a diorite/granite blob is common (race37
+		// 704 dug 8 levels to y56, hit no stone, spent 72s unboxing back to the rim,
+		// and repeated it — "Mine Cobblestone timed out" twice on plain hills).
+		for (let i = 0; i < 16; i++) {
 			throwIfPreempted();
 			const p = bot.entity?.position;
 			if (!p) return null;
