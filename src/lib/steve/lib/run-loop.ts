@@ -44,6 +44,9 @@ export type RunState = Readonly<{
 	// that fails fast (e.g. "Cannot find place for furnace") from re-running at the
 	// 20Hz tick rate — a hot-spin that burns CPU and visually flickers the viewer.
 	failureBackoffTicks: number;
+	// Consecutive ticks the RUNNING step's own isComplete() has been true (see the
+	// self-cancel in the tick reducer).
+	completeTicks: number;
 }>;
 
 export const initialRunState: RunState = {
@@ -53,7 +56,16 @@ export const initialRunState: RunState = {
 	completed: new Set(),
 	consecutiveFailures: 0,
 	failureBackoffTicks: 0,
+	completeTicks: 0,
 };
+
+// Steps that may be CANCELLED once their own isComplete() holds: pure gather/mine
+// loops with no crafting-grid state to strand. gather_wood's gate flips true as
+// soon as the reserve is met (e.g. 2 logs + iron in hand), but the task kept
+// walking to the 5th log for the rest of its 210s budget and blacklisted/hopped
+// away from the tree line meanwhile (race32 686: 90s lost with 8 ingots in hand).
+const SELF_CANCEL_IDS = new Set(["gather_wood", "mine_stone"]);
+const SELF_CANCEL_TICKS = 40; // ~2s at 20Hz — outlasts craft-grid inventory flicker
 
 type SteveStatus = {
 	step: number;
@@ -307,9 +319,22 @@ export const reduce = (
 						{ type: "event", category: "step", event: "start", detail: nextStep.name },
 						{ type: "runStep", stepId: nextStep.id, state, epoch: rs.epoch + 1, timeoutMs: stepTimeoutMs(nextStep.id) },
 					);
-					return { state: { ...rs, epoch: rs.epoch + 1, status: "running", currentStepId: nextStep.id, completed }, commands: cmds };
+					return { state: { ...rs, epoch: rs.epoch + 1, status: "running", currentStepId: nextStep.id, completed, completeTicks: 0 }, commands: cmds };
 				}
-				return { state: { ...rs, completed }, commands: cmds }; // keep running
+				// SELF-CANCEL: the running step's own goal is already met (held for a
+				// couple of seconds, so a transient inventory dip can't fake it). Bump the
+				// epoch (its eventual result is stale; throwIfPreempted unwinds it at the
+				// next primitive) and go idle so the next tick dispatches the real next step.
+				const doneNow = !!current && SELF_CANCEL_IDS.has(current.id) && completed.has(current.id);
+				const completeTicks = doneNow ? rs.completeTicks + 1 : 0;
+				if (doneNow && completeTicks >= SELF_CANCEL_TICKS) {
+					cmds.push(
+						{ type: "console", msg: `✓ ${current.name} already satisfied — moving on` },
+						{ type: "event", category: "step", event: "done_early", detail: current.name },
+					);
+					return { state: { ...rs, epoch: rs.epoch + 1, status: "idle", currentStepId: null, completed, completeTicks: 0 }, commands: cmds };
+				}
+				return { state: { ...rs, completed, completeTicks }, commands: cmds }; // keep running
 			}
 
 			// Failure backoff (idle only): after a step failed, wait a few ticks before
