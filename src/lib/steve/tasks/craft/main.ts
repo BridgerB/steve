@@ -10,6 +10,7 @@ import {
 	failure,
 	findItem,
 	getCraftingTable,
+	getMemory,
 	goTo,
 	reclaimCraftingGrid,
 	sleep,
@@ -89,6 +90,14 @@ export const craftPlanks = async (bot: Bot): Promise<StepResult> => {
 	}
 };
 
+// No table reachable and none to place: forget the remembered one, otherwise
+// hasCraftingTable stays true, Craft Crafting Table counts as done and nothing
+// ever gathers the wood for a new one (race46 743 looped 'Need crafting table').
+const noTable = (bot: Bot): StepResult => {
+	getMemory(bot).craftingTablePos = null;
+	return failure("Need crafting table");
+};
+
 export const craftCraftingTable = (bot: Bot): Promise<StepResult> => {
 	return craftItem(bot, "crafting_table", 1);
 };
@@ -102,7 +111,7 @@ export const craftSticks = async (bot: Bot): Promise<StepResult> => {
 
 export const craftWoodenPickaxe = async (bot: Bot): Promise<StepResult> => {
 	const table = await getCraftingTable(bot);
-	if (!table) return failure("Need crafting table");
+	if (!table) return noTable(bot);
 	return craftItem(bot, "wooden_pickaxe", 1, table);
 };
 
@@ -112,7 +121,7 @@ export const craftStonePickaxe = async (bot: Bot): Promise<StepResult> => {
 		if (!r.success) return r;
 	}
 	const table = await getCraftingTable(bot);
-	if (!table) return failure("Need crafting table");
+	if (!table) return noTable(bot);
 	return craftItem(bot, "stone_pickaxe", 1, table);
 };
 
@@ -122,25 +131,25 @@ export const craftStoneSword = async (bot: Bot): Promise<StepResult> => {
 		if (!r.success) return r;
 	}
 	const table = await getCraftingTable(bot);
-	if (!table) return failure("Need crafting table");
+	if (!table) return noTable(bot);
 	return craftItem(bot, "stone_sword", 1, table);
 };
 
 export const craftFurnace = async (bot: Bot): Promise<StepResult> => {
 	const table = await getCraftingTable(bot);
-	if (!table) return failure("Need crafting table");
+	if (!table) return noTable(bot);
 	return craftItem(bot, "furnace", 1, table);
 };
 
 export const craftIronPickaxe = async (bot: Bot): Promise<StepResult> => {
 	const table = await getCraftingTable(bot);
-	if (!table) return failure("Need crafting table");
+	if (!table) return noTable(bot);
 	return craftItem(bot, "iron_pickaxe", 1, table);
 };
 
 export const craftBucket = async (bot: Bot): Promise<StepResult> => {
 	const table = await getCraftingTable(bot);
-	if (!table) return failure("Need crafting table");
+	if (!table) return noTable(bot);
 	return craftItem(bot, "bucket", 1, table);
 };
 
@@ -154,7 +163,7 @@ export const craftFlintAndSteel = async (bot: Bot): Promise<StepResult> => {
 	if (!findItem(bot, "flint")) return failure("Need flint (dig gravel)");
 
 	const table = await getCraftingTable(bot);
-	if (!table) return failure("Need crafting table");
+	if (!table) return noTable(bot);
 
 	return craftItem(bot, "flint_and_steel", 1, table);
 };
@@ -188,7 +197,7 @@ export const craftEyesOfEnder = async (
 
 export const craftBowAndArrows = async (bot: Bot): Promise<StepResult> => {
 	const table = await getCraftingTable(bot);
-	if (!table) return failure("Need crafting table");
+	if (!table) return noTable(bot);
 
 	try {
 		// Craft bow

@@ -339,11 +339,12 @@ export const pillarUp = async (
  * invisible until the bot physically digs through to it. Prefers a source with
  * air directly above (pourable / scoopable surface).
  */
-const findFluidSource = (
+// All EXPOSED (air-adjacent) source blocks of a fluid within maxDistance.
+const exposedFluidSources = (
 	bot: Bot,
 	fluid: "water" | "lava",
 	maxDistance = 30,
-): Vec3 | null => {
+): Vec3[] => {
 	const positions = bot.findBlocks({
 		matching: (n: string) => n === fluid,
 		maxDistance,
@@ -377,11 +378,19 @@ const findFluidSource = (
 			] as const
 		).some(([a, b, c]) => air(p.x + a, p.y + b, p.z + c)),
 	);
+	return exposed;
+};
+
+const findFluidSource = (
+	bot: Bot,
+	fluid: "water" | "lava",
+	maxDistance = 30,
+): Vec3 | null => {
 	// EXPOSED-only: an air-neighbour source is the only kind the bot can actually bucket.
 	// (No encased fallback — targeting rock-walled lava the bot can't reach caused the
 	// "pool unreachable" stalls and the bot walking off toward deep lava it couldn't scoop.
 	// When nothing exposed is in range, return null so the caller descends/explores instead.)
-	const pick = exposed;
+	const pick = exposedFluidSources(bot, fluid, maxDistance);
 	if (!pick.length) return null;
 	const o = bot.entity.position;
 	let best: Vec3 | null = null;
@@ -395,6 +404,41 @@ const findFluidSource = (
 	}
 	return best;
 };
+
+/**
+ * Nearest exposed lava source that belongs to a POOL of at least `minSources`
+ * exposed sources (within 6 blocks horizontally / 2 vertically of it). A portal
+ * needs 10 lava buckets and every bucket consumes a source, so a cave STREAM
+ * (one source + a trail of flowing lava) is useless: race46 741 cleared a
+ * chamber for 5 min beside one ("src0=1"), fill_fail, then re-anchored at the
+ * same trickle. Returns the pool size too, for logging.
+ */
+const findLavaPool = (
+	bot: Bot,
+	maxDistance: number,
+	minSources: number,
+): { pos: Vec3; sources: number } | null => {
+	const srcs = exposedFluidSources(bot, "lava", maxDistance);
+	if (!srcs.length) return null;
+	const o = bot.entity.position;
+	const byDist = srcs
+		.map((p) => ({ p, d: distance(o, vec3(p.x, p.y, p.z)) }))
+		.sort((a, b) => a.d - b.d);
+	let bestSmall: { pos: Vec3; sources: number } | null = null;
+	for (const { p } of byDist) {
+		let n = 0;
+		for (const q of srcs)
+			if (Math.abs(q.x - p.x) <= 6 && Math.abs(q.z - p.z) <= 6 && Math.abs(q.y - p.y) <= 2) n++;
+		if (n >= minSources) return { pos: vec3(p.x, p.y, p.z), sources: n };
+		if (!bestSmall || n > bestSmall.sources) bestSmall = { pos: vec3(p.x, p.y, p.z), sources: n };
+	}
+	if (bestSmall)
+		console.error(`[SPOT] pool too small: best ${bestSmall.sources} sources at ${bestSmall.pos.x},${bestSmall.pos.y},${bestSmall.pos.z} (need ${minSources})`);
+	return null;
+};
+// A portal is 10 obsidian = 10 buckets = 10 sources; ask for 8 exposed ones (a
+// lake's rim sources are the exposed ones, the interior is under more lava).
+const MIN_POOL_SOURCES = 8;
 
 /** Find a nearby fluid source and fill an empty bucket from it. */
 // Any block whose neighbour is lava is unsafe to dig (would flood the bot). Used
@@ -1057,7 +1101,7 @@ const stripMineForLava = async (
 	) => Promise<{ y: number; stopped: string | null }>,
 	deadline: number,
 ): Promise<Vec3 | null> => {
-	const scan = () => findFluidSource(bot, "lava", 48);
+	const scan = () => findLavaPool(bot, 48, MIN_POOL_SOURCES)?.pos ?? null;
 	let lava = scan();
 	if (lava) return lava;
 
@@ -1157,7 +1201,7 @@ const stripMineForLava = async (
 			await goTo(bot, vec3(seen.x, seen.y, seen.z), { range: 4, timeout: 45000 }).catch(
 				() => {},
 			);
-			const near = findFluidSource(bot, "lava", 48);
+			const near = findLavaPool(bot, 48, MIN_POOL_SOURCES)?.pos ?? null;
 			if (near) return near;
 			continue;
 		}
@@ -1327,7 +1371,14 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 	// SPOT exposed lava WIDE — surface/cave lava is air-adjacent, so findFluidSource sees it
 	// across loaded chunks. A big radius lets the bot spot surface lava from far, then WALK to
 	// it (below), instead of only reacting to lava within 40 and otherwise digging blindly.
-	const findLava = (): Vec3 | null => findFluidSource(bot, "lava", 128);
+	// Only pools big enough to cast a whole portal (see findLavaPool); a nearer
+	// trickle is skipped and, with nothing else in sight, the bot digs down to the
+	// deep lava lakes instead.
+	const findLava = (): Vec3 | null => {
+		const pool = findLavaPool(bot, 128, MIN_POOL_SOURCES);
+		if (pool) logEvent("cast", "pool", `${pool.sources} sources at ${pool.pos.x},${pool.pos.y},${pool.pos.z}`);
+		return pool?.pos ?? null;
+	};
 
 	// 1. Locate a lava pool the bot can actually see. If none, descend toward
 	//    cave-lava depth and branch-mine to open walls until lava comes into

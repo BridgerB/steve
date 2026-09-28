@@ -59,7 +59,10 @@ export const steps: readonly Step[] = [
 			// Iron kit done (2 buckets in hand): nothing left on the critical path needs
 			// wood, so never climb 80 levels out of the mine for logs again (race41 723:
 			// 2 buckets + 2 ingots, spent 4+ min on Gather Wood from y28).
-			s.inventory.buckets + s.inventory.waterBuckets >= 2 ||
+			// …but only while a stone pickaxe can still be re-crafted (race46 743: the
+			// pick wore out, 0 planks, no table → 'Need crafting table' every 3s forever).
+			(s.inventory.buckets + s.inventory.waterBuckets >= 2 &&
+				(s.equipment.hasCraftingTable || s.inventory.planks >= 4)) ||
 			s.inventory.logs >= 5 ||
 			s.inventory.planks >= 20 ||
 			// With a table already placed, 12 planks covers the whole early tool chain
