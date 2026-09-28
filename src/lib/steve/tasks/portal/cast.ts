@@ -26,6 +26,14 @@ import {
 import { logEvent } from "../../lib/logger.ts";
 import type { Block, StepResult } from "../../types.ts";
 
+// Per-bot: how many deep-lava descents ended in water after the surface walk to
+// the dig column (race46 741: 16 rounds / 2 min of "dig down near -4512,5030" →
+// walked into a pond → escape_water → repeat). After the first, dig down HERE.
+const descendWet = new WeakMap<Bot, number>();
+// Per-bot: tunnel+exposure passes that ended without reachable lava; after 3 we
+// stop retrying the tunnel and anchor a site anyway.
+const exposeMiss = new WeakMap<Bot, number>();
+
 const isAir = (n?: string): boolean => !n || n === "air" || n === "cave_air";
 const SOFT = new Set([
 	"short_grass",
@@ -1398,11 +1406,20 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 				"lava_descend",
 				`lava ${lava.x},${lava.y},${lava.z} is ${Math.round(p.y - lava.y)} below — dig down near ${cx},${cz}`,
 			);
-			await goTo(bot, vec3(cx, surfaceYAt(bot, cx, cz), cz), { range: 1.5, timeout: 20000 }).catch(
-				() => {},
-			);
-			if (bot.entity.isInWater) return { success: false, message: "in water — yielding to escape_water" };
+			const wet = descendWet.get(bot) ?? 0;
+			if (wet === 0) {
+				await goTo(bot, vec3(cx, surfaceYAt(bot, cx, cz), cz), { range: 1.5, timeout: 20000 }).catch(
+					() => {},
+				);
+			} else {
+				logEvent("cast", "lava_descend_here", `walk to the column ended in water ${wet}× — digging down where we stand`, p);
+			}
+			if (bot.entity.isInWater) {
+				descendWet.set(bot, wet + 1);
+				return { success: false, message: "in water — yielding to escape_water" };
+			}
 			const r = await digDownVertical(bot, lava.y + 1, Math.min(deadline, Date.now() + 300000));
+			descendWet.set(bot, 0);
 			const dp = bot.entity.position;
 			logEvent(
 				"cast",
@@ -1419,15 +1436,20 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 		}
 		// Tunnel toward the pool, x leg then z leg, stopping 1 short on each axis so
 		// the exposure step below opens the last wall deliberately.
-		for (const axis of ["x", "z"] as const) {
-			if (lavaAdjacent()) break;
+		// A short leg (liquid / cave / refused dig ahead) used to END the tunnel, so
+		// the other axis never ran: race46 741 stopped "x 12/15" and tried to expose
+		// with the pool still 9 cells away in z. Alternate the axes, up to 4 legs,
+		// and only stop when two legs in a row make no progress.
+		let idleLegs = 0;
+		for (const axis of ["x", "z", "x", "z"] as const) {
+			if (lavaAdjacent() || idleLegs >= 2) break;
 			const q = bot.entity.position;
 			const off = axis === "x" ? lava.x - Math.floor(q.x) : lava.z - Math.floor(q.z);
 			const n = Math.abs(off) - 1;
 			if (n <= 0) continue;
 			const moved = await tunnelToward(bot, axis === "x" ? Math.sign(off) : 0, axis === "z" ? Math.sign(off) : 0, n);
 			logEvent("cast", "lava_tunnel", `${axis} ${moved}/${n} cells`, bot.entity.position);
-			if (moved < n) break; // liquid / cave / refused dig ahead — expose from here
+			idleLegs = moved === 0 ? idleLegs + 1 : 0;
 		}
 		// Direction of the remaining offset, for the exposure digs.
 		const q2 = bot.entity.position;
@@ -1453,10 +1475,15 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 						[0, -1],
 					] as const
 				).some(([ox, oz]) => isLava(getBlock(bot, vec3(c.x + ox, c.y, c.z + oz))?.name));
+			// Floor cell ahead FIRST: opening it exposes a pool that lies under/beside the
+			// tunnel floor from ABOVE (lava can't rise into the tunnel), which is the safe
+			// scoop stance. Feet/head cells only when no lava is beside them (a side
+			// opening floods the tunnel). The old order tried head/feet first and bailed
+			// on "lava beside the feet cell" before ever trying the floor.
 			outer: for (let k = 1; k <= 2 && !lavaAdjacent(); k++) {
-				for (const dy of [1, 0, -1]) {
+				for (const dy of [-1, 0, 1]) {
 					const c = vec3(fx - sx * k, fy + dy, fz - sz * k);
-					if (lavaBeside(c)) break outer;
+					if (dy >= 0 && lavaBeside(c)) break outer;
 					if (isSolid(getBlock(bot, c)?.name)) await digAt(bot, c);
 					if (lavaAdjacent()) break outer;
 				}
@@ -1471,7 +1498,19 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 				? `${got.x},${got.y},${got.z}`
 				: `at ${Math.floor(bp.x)},${Math.floor(bp.y)},${Math.floor(bp.z)} for lava ${lava.x},${lava.y},${lava.z}`,
 		);
-		if (got) lava = got;
+		if (got) {
+			lava = got;
+			exposeMiss.set(bot, 0);
+		} else {
+			const bq = bot.entity.position;
+			const far = Math.hypot(bq.x - (lava.x + 0.5), bq.z - (lava.z + 0.5)) > 3;
+			const miss = (exposeMiss.get(bot) ?? 0) + 1;
+			exposeMiss.set(bot, miss);
+			// Anchoring a site 7+ blocks from the pool just fails every fill (741 did).
+			// Let the step re-enter: we're already at the pool's level, so the retry
+			// skips the descent and tunnels the remaining offset.
+			if (far && miss <= 3) return { success: false, message: `lava not exposed (${miss}/3) — retunnel` };
+		}
 	}
 
 	// 1b. Scoop the lava bucket NOW, while we're standing adjacent on solid tunnel floor —
