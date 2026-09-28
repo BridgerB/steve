@@ -49,11 +49,14 @@ const log = (message: string) => {
 };
 
 
+let lifetimeArmed = false;
+
 export const startBot = async (): Promise<Bot> => {
 	// Bot lifetime timeout — only when explicitly requested (CLI races). In-server
 	// (SvelteKit) we omit STEVE_TIMEOUT so the bot runs until it disconnects and
 	// never calls process.exit (which would kill the host Node server).
-	if (process.env.STEVE_TIMEOUT) {
+	if (process.env.STEVE_TIMEOUT && !lifetimeArmed) {
+		lifetimeArmed = true; // once per process — a reconnect must not extend the race
 		const lifetimeMs = parseInt(process.env.STEVE_TIMEOUT, 10) * 1000;
 		setTimeout(() => {
 			log(`Lifetime timeout (${lifetimeMs / 1000}s) — exiting`);
@@ -238,6 +241,7 @@ export const startBot = async (): Promise<Bot> => {
 	// On disconnect/kick: stop feeding the channel and close it — the parked go-loop
 	// takes CLOSED and exits, taking its run state with it. The logger stays alive;
 	// the SvelteKit supervisor restarts startBot (a fresh channel + loop) to resume.
+	let reconnectScheduled = false;
 	const onGone = () => {
 		if (onPhysicsTick) {
 			bot.removeListener("physicsTick", onPhysicsTick);
@@ -245,6 +249,19 @@ export const startBot = async (): Promise<Bot> => {
 		}
 		ch?.close();
 		ch = null;
+		// Race child: come back. The server drops bots with "lost connection: Timed
+		// out" when 4 fresh spawns make it generate chunks at once (race 610/611 died
+		// 26s after their teleport and ghosted for the whole race). The spawnpoint
+		// set at placement puts the rejoined bot back in its cell; inventory is kept
+		// (keep_inventory) and steps re-derive from it.
+		if (process.env.STEVE_BOT_MODE && !reconnectScheduled) {
+			reconnectScheduled = true;
+			log("Reconnecting in 5s…");
+			logEvent("lifecycle", "reconnect_scheduled");
+			setTimeout(() => {
+				startBot().catch((e) => log(`Reconnect failed: ${e instanceof Error ? e.message : e}`));
+			}, 5000);
+		}
 	};
 
 	bot.on("end", () => {
@@ -568,7 +585,7 @@ const runRace = async (count: number, timeoutMs: number) => {
 				// generation settle before teleporting the next — otherwise 10
 				// simultaneous gens saturate the CPU and the server misses keepalives,
 				// dropping bots with "lost connection: Timed out".
-				await sleep(8000);
+				await sleep(15000);
 				placed.add(name);
 				console.log(`  ${name} → tp ${x}, ${z}`);
 			}

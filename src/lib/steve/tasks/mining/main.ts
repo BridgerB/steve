@@ -13,6 +13,7 @@ import {
 	escapeWater,
 	exploreRandom,
 	findBlock,
+	findBlocks,
 	forgetResource,
 	getCraftingTable,
 	getMineEntry,
@@ -1042,6 +1043,23 @@ export const mineBlock = async (
 		return await mineDeepOre(bot, blockType, isTarget, targetCount, deadline);
 	}
 
+	// Surface stone next to a pond is a trap: the nearest exposed stone is the
+	// pond's bank/floor, the walk to it ends in the water, escape_water preempts,
+	// and the next attempt picks the very same block (race 608: 8 preempts in
+	// 2 min at one pond). Prefer the nearest target with no water within 2 blocks.
+	const nearWater = (p: Vec3): boolean => {
+		for (let dx = -2; dx <= 2; dx++)
+			for (let dz = -2; dz <= 2; dz++)
+				for (let dy = -1; dy <= 1; dy++)
+					if (isWater(bot.blockAt(vec3(p.x + dx, p.y + dy, p.z + dz)) as Block | null)) return true;
+		return false;
+	};
+	const findDryTarget = (radius: number): Block | null => {
+		const positions = findBlocks(bot, isTarget, radius, 48);
+		const dry = positions.find((p) => !nearWater(p)) ?? positions[0];
+		return dry ? (bot.blockAt(dry) as Block | null) : null;
+	};
+
 	// Find initial block — check memory first, then scan
 	const remembered = getRememberedResource(bot, blockType);
 	let startBlock: Block | null = null;
@@ -1061,7 +1079,7 @@ export const mineBlock = async (
 		}
 	}
 	if (!startBlock) {
-		startBlock = findBlock(bot, isTarget, 64);
+		startBlock = findDryTarget(64);
 	}
 	// Explore before giving up — walk around and search wider
 	if (!startBlock) {
@@ -1086,7 +1104,7 @@ export const mineBlock = async (
 					forgetResource(bot, blockType, newRemembered);
 				}
 			}
-			startBlock = findBlock(bot, isTarget, 64);
+			startBlock = findDryTarget(64);
 			if (startBlock) break;
 		}
 	}
@@ -1259,7 +1277,7 @@ export const mineBlock = async (
 
 			// Search if memory didn't help
 			if (!block) {
-				block = findBlock(bot, isTarget, 32);
+				block = findDryTarget(32);
 			}
 			if (!block) {
 				return {
