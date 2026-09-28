@@ -441,6 +441,7 @@ export const gatherWood = async (
 	// unreachable, so the bot re-blacklists them and spins (race105/106/110: relocate_stuck
 	// fires but 30 blocks isn't enough to clear the pocket). Escalate 60→90→120→…→150.
 	let relocateCount = 0;
+	let climbOuts = 0; // pillar-out-of-a-pit attempts this step
 	let exploreAngle = Math.random() * Math.PI * 2;
 
 	while (
@@ -549,6 +550,20 @@ export const gatherWood = async (
 
 		const reached = await navigateTo(target.pos);
 		if (!reached) {
+			// Can't reach a tree AND we're below the local surface → we're in a pit
+			// (the dig-down hole opening into a side tunnel defeats the geometric
+			// "boxed" test: race 624 blacklisted tree after tree from y62 with the
+			// surface at y66). Pillar straight up before blaming the tree.
+			const here = botPos();
+			const surf = surfaceYAt(bot, Math.floor(here.x), Math.floor(here.z));
+			if (here.y < surf - 1 && climbOuts < 3) {
+				climbOuts++;
+				logEvent("wood", "climb_out", `nav_stuck at y=${Math.floor(here.y)}, surface y=${surf}`, here);
+				const { pillarUp } = await import("../portal/cast.ts");
+				const up = await pillarUp(bot, surf);
+				bot.setControlState("sneak", false);
+				if (up) continue; // try the same tree from the surface
+			}
 			unreachable.add(posKey(target.pos));
 			consecutiveFails++;
 			logEvent(
