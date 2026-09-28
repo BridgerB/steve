@@ -445,6 +445,12 @@ export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 		});
 		if (filled) {
 			logEvent("bucket", "filled", "water_bucket");
+			// The scoop swaps the held bucket for a water bucket server-side; the
+			// client model briefly showed the OTHER empty bucket gone (race45 738:
+			// bucket 0 / water_bucket 1 for 70s), so the iron-kit sums dropped below
+			// 7 and Mine Coal / Mine Iron re-fired with the full kit in the pack.
+			// Pull the server's truth before the next step tick.
+			await bot.resyncInventory().catch(() => false);
 			return { success: true, message: "Filled water bucket" };
 		}
 		// This block won't scoop (flowing/awkward) — blacklist it so the retry
