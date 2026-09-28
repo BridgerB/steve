@@ -419,7 +419,7 @@ export const setViewerPath = (
 		const pts = points
 			.slice(a, b + 1)
 			.map((p) => new Vector3(p.x + 0.5, p.y + 0.45, p.z + 0.5))
-			.filter((v) => Vector3.Distance(v, camPos) >= 2.2);
+			.filter((v) => Vector3.Distance(v, camPos) >= 3.5);
 		if (pts.length < 2) return;
 		const tube = MeshBuilder.CreateTube(
 			"botPath",

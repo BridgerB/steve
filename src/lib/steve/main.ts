@@ -621,8 +621,16 @@ const runRace = async (count: number, timeoutMs: number) => {
 						);
 						if (m) landedY = parseFloat(m[2]!);
 					} catch {}
-					if (landedY >= 55 && landedY < 200) break;
-					console.log(`  ${name} landed at y=${landedY} (${sx},${sz}) — underground, re-placing`);
+					// Lava under the column: race37 705 dropped from y200 straight into a
+					// lava pool ("tried to swim in lava", death 1). Treat as a bad landing.
+					let inLava = false;
+					try {
+						const probe = await rcon(`execute as ${name} at @s if block ~ ~ ~ minecraft:lava`);
+						const probe2 = await rcon(`execute as ${name} at @s if block ~ ~-1 ~ minecraft:lava`);
+						inLava = probe.includes("passed") || probe2.includes("passed");
+					} catch {}
+					if (landedY >= 55 && landedY < 200 && !inLava) break;
+					console.log(`  ${name} landed at y=${landedY} (${sx},${sz})${inLava ? " IN LAVA" : " — underground"}, re-placing`);
 					sx = x + (t + 1) * 9;
 					sz = z + (t % 2 === 0 ? 7 : -7);
 				}

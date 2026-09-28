@@ -95,7 +95,11 @@ export const steps: readonly Step[] = [
 				// … and fuel only matters while there is RAW iron to smelt: a bot with 8
 				// ingots and 6 planks (race34 692, after losing 25 planks to junk buttons)
 				// climbed 57 blocks for firewood it would never burn.
+				// … and a stray raw_iron with the ingot kit already in hand (race37 707:
+				// 8 ingots + 1 reclaimed raw_iron + 6 planks → an 85-block climb for
+				// firewood) doesn't count either.
 				(s.inventory.ironOre === 0 ||
+					s.inventory.ironIngots >= 8 ||
 					s.inventory.coal >= 1 ||
 					s.inventory.planks >= 8 ||
 					s.inventory.logs >= 2) &&
