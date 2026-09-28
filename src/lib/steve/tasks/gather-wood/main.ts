@@ -458,7 +458,14 @@ export const gatherWood = async (
 			await walkToXZ(bot, p.x, p.z, { targetDist: 0.5, maxTime: 2500 });
 		});
 		if (countLogs() === logsBefore) {
-			await walkToXZ(bot, pos.x + 0.5, pos.z + 0.5, { targetDist: 0.6, maxTime: 2500 });
+			// Breadcrumb: race58 788 missed 6 drops from 2 blocks away without ever
+			// moving — was the item entity even tracked, and did the walk move us?
+			const itemType = bot.registry?.entitiesByName.get("item")?.id;
+			const items = Object.values(bot.entities).filter((e) => itemType != null && e.entityType === itemType && distance(e.position, botPos()) <= 8).length;
+			const b0 = botPos();
+			const walked = await walkToXZ(bot, pos.x + 0.5, pos.z + 0.5, { targetDist: 0.6, maxTime: 2500 });
+			const b1 = botPos();
+			logEvent("wood", "pickup_walk", `items=${items} walked=${walked} moved=${distance(b0, b1).toFixed(1)} sneak=${bot.controlState.sneak} to ${pos.x},${pos.y},${pos.z} from y${Math.floor(b0.y)}`, b1);
 			await bot.collectDrops(8, 2500, async (p) => {
 				await walkToXZ(bot, p.x, p.z, { targetDist: 0.5, maxTime: 2000 });
 			});
