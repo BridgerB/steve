@@ -31,7 +31,9 @@ bot.on("error", (e) => {
 	if (!e.message.includes("waypoint")) console.log("ERR", e.message);
 });
 registerBlockMemory(bot); // same passive ore memory as production
-initLogger(`gymcli-${SLUG}-${Date.now()}`);
+const RUN_ID = process.env.GYM_RUN_ID ?? `gymcli-${SLUG}-${Date.now()}`;
+initLogger(RUN_ID);
+console.log(`RACEID ${RUN_ID}`);
 
 bot.once("spawn", async () => {
 	await bot.waitForChunksToLoad();
