@@ -24,7 +24,7 @@ import {
 	surfaceYAt,
 	walkToXZ,
 } from "../../lib/bot-utils.ts";
-import { logEvent } from "../../lib/logger.ts";
+import { logEvent, setPhase } from "../../lib/logger.ts";
 import { ensurePickaxe } from "../mining/main.ts";
 import type { Block, StepResult } from "../../types.ts";
 
@@ -802,6 +802,7 @@ export const castObsidianAt = async (
 		//    leaves it on through cup-building + pouring (no drift off the pillar).
 		//    Retry + verify — in the cluttered frame the bot can drift, and a
 		//    mispositioned pillar misplaces the whole cup.
+		setPhase(`mold ${pos.x},${pos.y},${pos.z}`);
 		let cupState = "?";
 		let afterLava = "?";
 		// LAVA ALREADY IN THE CUP (a previous pass poured it, then the water aim
@@ -955,6 +956,7 @@ export const castObsidianAt = async (
 			maxTime: 2500,
 		});
 		const bp = bot.entity.position;
+		setPhase(`lava ${pos.x},${pos.y},${pos.z}`);
 		logEvent(
 			"cast",
 			"pre_pour",
@@ -1028,6 +1030,7 @@ export const castObsidianAt = async (
 			await walkToXZ(bot, pos.x + 0.5, standZ + 0.5, { targetDist: 0.2, maxTime: 1500 });
 		}
 		bot.setControlState("sneak", true);
+		setPhase(`water ${pos.x},${pos.y},${pos.z}`);
 		const wp = bot.entity.position;
 		logEvent(
 			"cast",
@@ -1042,6 +1045,7 @@ export const castObsidianAt = async (
 			continue;
 		}
 		await sleep(300);
+		setPhase(`verify ${pos.x},${pos.y},${pos.z}`);
 		logEvent(
 			"cast",
 			"post_water",
@@ -1705,6 +1709,7 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 		`${bx},${by},${bz} lava=${lava.x},${lava.y},${lava.z}`,
 	);
 	siteAnchor.set(bot, vec3(bx, by, bz));
+	setPhase("chamber");
 
 	// 3. Clear a flat chamber (frame box + scaffold) and lay a solid floor.
 	//    Never dig lava or a block touching it — that would flood/kill the bot.
@@ -1812,6 +1817,7 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 	if (floorSkipped > 0) logEvent("cast", "floor_skipped", `${floorSkipped} floor cells out of reach`, bot.entity.position);
 
 	// 4. Top up a lava bucket from the pool (refilled again every cast).
+	setPhase("lava_fill");
 	if (count(bot, "lava_bucket") < 1 && count(bot, "bucket") >= 1)
 		await fillBucket(bot, "lava");
 
@@ -1917,6 +1923,7 @@ export const buildPortalByCasting = async (bot: Bot): Promise<StepResult> => {
 	}
 
 	logEvent("cast", "portal_start", `frame at ${bx},${by},${bz}`);
+	setPhase("portal_start");
 	await buildBacking(bot, bx, by, bz);
 	let cast = 0;
 	const castOne = async (pos: Vec3): Promise<StepResult | null> => {
@@ -1977,6 +1984,7 @@ export const buildPortalByCasting = async (bot: Bot): Promise<StepResult> => {
 	// returned a stale count and falsely failed a complete frame).
 	const present = frame.filter((p) => getBlock(bot, p)?.name === "obsidian").length;
 	logEvent("cast", "frame_check", `${present}/10 obsidian present`);
+	setPhase("light");
 	if (present < 10)
 		return { success: false, message: `Only ${present}/10 obsidian present` };
 

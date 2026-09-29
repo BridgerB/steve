@@ -129,7 +129,13 @@ const flushBuffers = (): void => {
 // only carried a position, so the blocking scan could not be named).
 let lastStep = "";
 let lastEvent = "";
-export const getLastActivity = (): string => `step=${lastStep} last=${lastEvent}`;
+// Sub-phase inside the current step, set by task code at phase boundaries (the
+// cast sets it at every stage) so a silent stall names where it is.
+let phase = "";
+export const setPhase = (p: string): void => {
+	phase = p;
+};
+export const getLastActivity = (): string => `step=${lastStep} phase=${phase} last=${lastEvent}`;
 
 export const logEvent = (
 	category: string,
@@ -234,6 +240,7 @@ const logTick = (bot: Bot): void => {
 let lastInvSig = "";
 
 /** Start the 1-second tick logger */
+let hbInterval: ReturnType<typeof setInterval> | null = null;
 export const startTickLogger = (bot: Bot): void => {
 	if (tickInterval) clearInterval(tickInterval);
 	tickInterval = setInterval(() => {
@@ -243,6 +250,17 @@ export const startTickLogger = (bot: Bot): void => {
 			/* don't crash */
 		}
 	}, 1000);
+	// Heartbeat every 10s: step, sub-phase, last event, position. Every silent
+	// multi-minute stall of the last two days would have been named by this.
+	if (hbInterval) clearInterval(hbInterval);
+	hbInterval = setInterval(() => {
+		try {
+			const p = bot.entity?.position;
+			logEvent("hb", "beat", `step=${lastStep} phase=${phase} last=${lastEvent}`, p ? { x: p.x, y: p.y, z: p.z } : undefined);
+		} catch {
+			/* don't crash */
+		}
+	}, 10000);
 };
 
 const HOSTILE_MOBS = new Set([

@@ -8,7 +8,7 @@ import { createBot } from "typecraft";
 import { GYM_BY_SLUG } from "./src/lib/steve/gym/registry.ts";
 import { runGymStep } from "./src/lib/steve/gym/run.ts";
 import { registerBlockMemory } from "./src/lib/steve/lib/bot-utils.ts";
-import { initLogger } from "./src/lib/steve/lib/logger.ts";
+import { initLogger, startTickLogger } from "./src/lib/steve/lib/logger.ts";
 import { connect } from "./src/lib/steve/lib/rcon.ts";
 
 const SLUG = process.env.STEP ?? process.argv[2] ?? "gather-wood";
@@ -35,6 +35,7 @@ initLogger(`gymcli-${SLUG}-${Date.now()}`);
 
 bot.once("spawn", async () => {
 	await bot.waitForChunksToLoad();
+	startTickLogger(bot);
 	const res = await runGymStep(bot, step, (c) => rcon.command(c), {
 		log: (l) => console.log(l),
 	});
