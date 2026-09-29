@@ -1754,6 +1754,14 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 			if (distance(eye(), offset(p, 0.5, 0.5, 0.5)) > 5.2) return "skip";
 			if (!/(stone|iron|diamond|netherite)_pickaxe$/.test(bot.heldItem?.name ?? "")) {
 				if (!(await ensurePickaxe(bot))) return "nopick";
+				// ensurePickaxe may have trekked to a remembered table (race61 800: 81
+				// blocks): come back to the anchor before digging on, or every remaining
+				// cell is "skip" for reach and the floor loop stalls from afar.
+				const back = distance(bot.entity.position, vec3(bx + 0.5, by, bz + 0.5));
+				if (back > 6) {
+					logEvent("cast", "chamber_pick_return", `${Math.round(back)} from the anchor after re-picking`, bot.entity.position);
+					await goTo(bot, vec3(bx, by, bz), { range: 1, timeout: 45000 }).catch(() => {});
+				}
 			}
 			await digAt(bot, p);
 			return needsDig(p) ? "skip" : "done";
@@ -1785,13 +1793,23 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 		}
 		logEvent("cast", "chamber", `cleared ${cleared} skipped ${skipped} of ${cols.length * 7}`);
 	}
+	if (distance(bot.entity.position, vec3(bx + 0.5, by, bz + 0.5)) > 6)
+		await goTo(bot, vec3(bx, by, bz), { range: 1, timeout: 45000 }).catch(() => {});
+	let floorSkipped = 0;
 	for (let x = -1; x <= 4; x++) {
 		for (let z = -1; z <= 5; z++) {
 			const f = vec3(bx + x, by - 1, bz + z);
-			if (!isSolid(getBlock(bot, f)?.name) && !lavaTouching(f))
+			if (!isSolid(getBlock(bot, f)?.name) && !lavaTouching(f)) {
+				// Only cells in reach: placing from afar just burns place timeouts.
+				if (distance(bot.entity.position, offset(f, 0.5, 0.5, 0.5)) > 6) {
+					floorSkipped++;
+					continue;
+				}
 				await ensureSolid(bot, f);
+			}
 		}
 	}
+	if (floorSkipped > 0) logEvent("cast", "floor_skipped", `${floorSkipped} floor cells out of reach`, bot.entity.position);
 
 	// 4. Top up a lava bucket from the pool (refilled again every cast).
 	if (count(bot, "lava_bucket") < 1 && count(bot, "bucket") >= 1)

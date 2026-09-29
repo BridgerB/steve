@@ -205,8 +205,18 @@ export const ensurePickaxe = async (bot: Bot): Promise<boolean> => {
 	if (!table) return false;
 	await craftItem(bot, "stone_pickaxe", 1, table);
 	pick = findPick();
+	logEvent("craft", "pick_crafted", `stone_pickaxe ${pick ? "in inventory" : "MISSING"} window=${bot.currentWindow?.id ?? "none"}`);
 	if (pick) {
-		await equipItem(bot, pick.name, "hand");
+		// A crafting window still open here can make bot.equip wait on a transaction
+		// that never acks (race61 800: 3 silent minutes right after the craft). Close
+		// it and cap the equip.
+		if (bot.currentWindow) {
+			try {
+				bot.closeWindow(bot.currentWindow);
+			} catch {}
+		}
+		await Promise.race([equipItem(bot, pick.name, "hand"), sleep(4000)]);
+		logEvent("craft", "pick_equipped", `held=${bot.heldItem?.name ?? "nothing"}`);
 		return true;
 	}
 	return false;

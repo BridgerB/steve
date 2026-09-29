@@ -1790,6 +1790,15 @@ export const getCraftingTable = async (bot: Bot): Promise<Block | null> => {
 			// Have a table in the bag and the remembered one isn't right here — forget it
 			// and fall through to place a fresh table adjacent.
 			mem.craftingTablePos = null;
+		} else if (
+			d > 24 &&
+			(countItems(bot, "planks") >= 4 || windowItems(bot.inventory).some((i) => i.name.endsWith("_log")))
+		) {
+			// A table is 4 planks; a trek of 24+ blocks each way is never cheaper.
+			// race61 800 walked 81 blocks from its portal site to re-pick mid-chamber
+			// and lost the site (every remaining cell out of reach).
+			logEvent("craft", "table_far_recraft", JSON.stringify({ dist: Math.floor(d) }));
+			mem.craftingTablePos = null;
 		} else if (d < 150) {
 			const remembered = getBlock(
 				bot,
