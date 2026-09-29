@@ -648,33 +648,9 @@ const fillBucket = async (
 			const n = getBlock(bot, vec3(p.x + dx, p.y, p.z + dz))?.name;
 			return isSolid(n) && !isLava(n);
 		});
-	// Hypothesis (gym b4-7, b5-4 — both stuck at 8/10 with 10+ refill walks that never
-	// arrived): after the right column is cast its cup walls seal the straight route
-	// to the pool's far side, and the nearest rim sources all sit across that wall.
-	// Rank sources the bot can walk straight at (no solid block at feet/head on the
-	// line) ahead of blocked ones, then rim, then distance.
-	const walkClear = (p: { x: number; y: number; z: number }): boolean => {
-		const bp = bot.entity.position;
-		const fy = Math.floor(bp.y);
-		const tx = p.x + 0.5;
-		const tz = p.z + 0.5;
-		const n = Math.max(1, Math.ceil(Math.hypot(tx - bp.x, tz - bp.z)));
-		for (let i = 1; i < n; i++) {
-			const cx = Math.floor(bp.x + ((tx - bp.x) * i) / n);
-			const cz = Math.floor(bp.z + ((tz - bp.z) * i) / n);
-			for (const y of [fy, fy + 1]) {
-				const nm = getBlock(bot, vec3(cx, y, cz))?.name;
-				if (isSolid(nm) && !isLava(nm)) return false;
-			}
-		}
-		return true;
-	};
 	const srcs = (surf.length ? surf : pool)
 		.slice()
 		.sort((a, b) => {
-			const ca = walkClear(a) ? 0 : 1;
-			const cb = walkClear(b) ? 0 : 1;
-			if (ca !== cb) return ca - cb;
 			const ra = hasRim(a) ? 0 : 1;
 			const rb = hasRim(b) ? 0 : 1;
 			return ra !== rb ? ra - rb : d2(a) - d2(b);
