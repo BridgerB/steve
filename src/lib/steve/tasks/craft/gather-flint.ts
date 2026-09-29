@@ -116,7 +116,10 @@ const harvestPocket = async (
 	bot: Bot,
 	seed: Vec3,
 	deadlineMs: number,
-): Promise<void> => {
+): Promise<{ mined: number; missed: number; ms: number }> => {
+	const t0 = Date.now();
+	let mined = 0;
+	let missed = 0;
 	const seen = new Set<string>([key(seed)]);
 	const queue: Vec3[] = [seed];
 	while (queue.length && !findItem(bot, "flint") && Date.now() < deadlineMs) {
@@ -129,8 +132,11 @@ const harvestPocket = async (
 		const pos = queue.shift();
 		if (!pos) break;
 		if (getBlock(bot, pos)?.name !== "gravel") continue;
-		if (!(await approach(bot, pos))) continue;
-		await mineGravel(bot, pos);
+		if (!(await approach(bot, pos))) {
+			missed++;
+			continue;
+		}
+		if (await mineGravel(bot, pos)) mined++;
 		for (const [dx, dy, dz] of NEIGHBORS) {
 			const np = vec3(pos.x + dx, pos.y + dy, pos.z + dz);
 			if (seen.has(key(np))) continue;
@@ -138,6 +144,7 @@ const harvestPocket = async (
 			if (getBlock(bot, np)?.name === "gravel" && !wet(bot, np)) queue.push(np);
 		}
 	}
+	return { mined, missed, ms: Date.now() - t0 };
 };
 
 /**
@@ -318,10 +325,11 @@ export const gatherFlint = async (
 			if (bot.entity.isInWater) return false; // escape_water takes over
 			continue;
 		}
-		await harvestPocket(bot, seed, deadlineMs);
+		const hp = await harvestPocket(bot, seed, deadlineMs);
 		doneSeeds.add(key(seed));
 		lastSeed.delete(bot);
-		logEvent("flint", "pocket_done", `${key(seed)} flint=${findItem(bot, "flint") ? "yes" : "no"}`, seed);
+		const gravelN = (findItem(bot, "gravel") as { count?: number } | null)?.count ?? 0;
+		logEvent("flint", "pocket_done", `${key(seed)} flint=${findItem(bot, "flint") ? "yes" : "no"} mined=${hp.mined} missed=${hp.missed} gravel=${gravelN} ${Math.round(hp.ms / 1000)}s`, seed);
 	}
 	return !!findItem(bot, "flint");
 };
