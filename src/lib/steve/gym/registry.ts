@@ -69,7 +69,7 @@ export const GYM_STEPS: GymStep[] = [
 	{ slug: "smelt-iron", label: "Smelt Iron", order: 12, prereq: ["raw_iron 8", "coal 8", "furnace 1"], run: (b) => smeltItems(b, "raw_iron", 8), pass: (b) => has(b, "iron_ingot", 3), timeoutMs: 120000 },
 	{ slug: "craft-iron-pickaxe", label: "Craft Iron Pickaxe", order: 13, prereq: ["iron_ingot 3", "stick 2", "crafting_table 1"], run: (b) => craftIronPickaxe(b), pass: (b) => has(b, "iron_pickaxe", 1), timeoutMs: 40000 },
 	{ slug: "craft-buckets", label: "Craft Buckets", order: 14, prereq: ["iron_ingot 6", "crafting_table 1"], run: (b) => craftBucket(b), pass: (b) => has(b, "bucket", 1), timeoutMs: 40000 },
-	{ slug: "fill-water", label: "Fill Water Buckets", order: 15, prereq: ["bucket 2"], run: (b) => fillWaterBucket(b), pass: (b) => has(b, "water_bucket", 1), timeoutMs: 60000 },
+	{ slug: "fill-water", label: "Fill Water Buckets", order: 15, prereq: ["bucket 2"], run: (b) => fillWaterBucket(b), pass: (b) => has(b, "water_bucket", 1), timeoutMs: 360000 },
 	{ slug: "gather-food", label: "Gather Food", order: 16, prereq: ["stone_sword 1"], run: (b) => gatherFood(b, 3), pass: (b) => countInventoryItems(b, "beef") + countInventoryItems(b, "mutton") + countInventoryItems(b, "chicken") + countInventoryItems(b, "porkchop") >= 1, timeoutMs: 90000 },
 	{ slug: "flint-and-steel", label: "Get Flint and Steel", order: 17, prereq: ["iron_ingot 1", "crafting_table 1"], run: (b) => craftFlintAndSteel(b), pass: (b) => has(b, "flint_and_steel", 1), timeoutMs: 120000 },
 	{

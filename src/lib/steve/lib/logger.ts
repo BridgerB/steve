@@ -144,7 +144,7 @@ export const logEvent = (
 	pos?: { x: number; y: number; z: number },
 ): void => {
 	if (category === "step" && event === "start") lastStep = (detail ?? "").slice(0, 40);
-	else if (category !== "perf" && category !== "step")
+	else if (category !== "perf" && category !== "step" && category !== "hb")
 		lastEvent = `${category}/${event} ${(detail ?? "").slice(0, 60)}`;
 	if (!writer) return;
 	// Auto-capture the bot's current pose so every event line carries position +
