@@ -363,6 +363,12 @@ export const initDigging = (bot: Bot, _options: BotOptions): void => {
 			quickBar: bot.quickBarSlot,
 		});
 
+		// Re-assert the held slot right before the dig. The server's SelectedItemSlot
+		// was observed drifting from the client's quickBarSlot (a bot digging "with a
+		// stone pickaxe" while the server had andesite selected), so every client-side
+		// dig time was too short, the server rejected the break, and the client kept
+		// a phantom air block under its feet. One packet makes them agree.
+		bot.client.write("set_carried_item", { slotId: bot.quickBarSlot });
 		bot.client.write("player_action", {
 			status: 0,
 			location: { x: pos.x, y: pos.y, z: pos.z },
@@ -581,8 +587,16 @@ export const initDigging = (bot: Bot, _options: BotOptions): void => {
 			speed *= 0.3 ** (fatigue.amplifier + 1);
 		}
 
-		// Underwater penalty (unless Aqua Affinity helmet)
-		if (bot.entity.isInWater) {
+		// Underwater penalty (unless Aqua Affinity helmet). Vanilla applies it when
+		// the EYES are in water (isEyeInFluid), not when any part of the hitbox is:
+		// a player treading water at the surface digs the bank at the off-ground
+		// rate only. Using isInWater here made the client wait 25× for a dig the
+		// server completes at 5×, so bank-notch digs timed out while floating.
+		const eyeY = bot.entity.position.y + PLAYER_EYE_HEIGHT;
+		const eyeBlock = bot.blockAt(
+			vec3(Math.floor(bot.entity.position.x), Math.floor(eyeY), Math.floor(bot.entity.position.z)),
+		);
+		if (eyeBlock?.name.includes("water")) {
 			let hasAquaAffinity = false;
 			// Helmet is slot 5 in inventory
 			const helmet = bot.inventory?.slots[5];
@@ -621,6 +635,9 @@ export const initDigging = (bot: Bot, _options: BotOptions): void => {
 		const startTime = Date.now();
 		let collected = 0;
 		const itemEntityType = bot.registry?.entitiesByName.get("item")?.id;
+		// Attempts per item entity: an item we can't reach twice is skipped so the
+		// loop moves on to the next drop instead of spinning on it until timeout.
+		const tried = new Map<number, number>();
 
 		while (Date.now() - startTime < timeout) {
 			// Find nearest item entity
@@ -630,6 +647,7 @@ export const initDigging = (bot: Bot, _options: BotOptions): void => {
 				if (entity.id === bot.entity?.id) continue;
 				if (itemEntityType != null && entity.entityType !== itemEntityType)
 					continue;
+				if ((tried.get(entity.id) ?? 0) >= 2) continue;
 				const dx = entity.position.x - bot.entity.position.x;
 				const dy = entity.position.y - bot.entity.position.y;
 				const dz = entity.position.z - bot.entity.position.z;
@@ -642,6 +660,14 @@ export const initDigging = (bot: Bot, _options: BotOptions): void => {
 			}
 
 			if (!nearest) {
+				// The drop's spawn packet lands a few ticks after the dig completes:
+				// returning at once here logged a "pickup_miss" that the next dig then
+				// silently collected (race40 716/717: miss logged in the same second as
+				// dig_done, pickup_ok 1s later). Give the entity ~700ms to appear.
+				if (Date.now() - startTime < 700) {
+					await new Promise((r) => setTimeout(r, 100));
+					continue;
+				}
 				bot.emit("debug", "collect", {
 					event: "no_items",
 					entityCount: Object.keys(bot.entities).length,
@@ -710,6 +736,41 @@ export const initDigging = (bot: Bot, _options: BotOptions): void => {
 					if (Math.abs(bot.entity.position.y - nearest.pos.y) < 0.5) break; // fell down
 				}
 				bot.setControlState("forward", false);
+			}
+
+			// Close the last gap ON FOOT. The pathfinder stops within its goal range
+			// of the item's BLOCK corner, which can leave the bot 1.5-2.3 from the item
+			// itself — outside the server's ~1-block pickup box — and this loop then
+			// re-picked the same item until the timeout (race39 714: 5 pickup_miss in
+			// a row with the log lying 2 blocks away on flat ground).
+			tried.set(nearest.id, (tried.get(nearest.id) ?? 0) + 1);
+			{
+				const live = bot.entities[nearest.id];
+				if (live) {
+					const cur = live.position;
+					const gap = Math.hypot(
+						cur.x - bot.entity.position.x,
+						cur.z - bot.entity.position.z,
+					);
+					if (gap > 0.45 && Math.abs(cur.y - bot.entity.position.y) < 1.6) {
+						await bot.lookAt(vec3(cur.x, bot.entity.position.y + 1.6, cur.z));
+						bot.setControlState("forward", true);
+						for (let t = 0; t < 20; t++) {
+							await new Promise((r) => setTimeout(r, 100));
+							const e = bot.entities[nearest.id];
+							if (!e) break;
+							const g = Math.hypot(
+								e.position.x - bot.entity.position.x,
+								e.position.z - bot.entity.position.z,
+							);
+							if (g < 0.3) break;
+							// A 1-block lip between us and the drop: hop it.
+							bot.setControlState("jump", !!bot.entity.isCollidedHorizontally);
+						}
+						bot.setControlState("forward", false);
+						bot.setControlState("jump", false);
+					}
+				}
 			}
 
 			// Wait for server to process pickup

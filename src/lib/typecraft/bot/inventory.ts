@@ -347,6 +347,45 @@ export const initInventory = (bot: Bot, _options: BotOptions): void => {
 		bot.emit("windowClose", window);
 	};
 
+	// ── Resync the player inventory from the server ──
+	//
+	// The client model drifts after a rejected/mis-applied click (a bot was seen
+	// holding "dirt" client-side while the server had its stone pickaxe in the
+	// selected slot, so every equip and dig failed for minutes). Vanilla has no
+	// "send me my inventory" packet, but a container click whose stateId does not
+	// match makes the server IGNORE the click and answer with the full container
+	// contents (sendAllDataToRemote). Click an always-empty slot (the 2x2 craft
+	// result, slot 0) with a bogus stateId and an empty cursor, then wait for it.
+	bot.resyncInventory = async (): Promise<boolean> => {
+		if (!bot.inventory || !bot.registry) return false;
+		if (!bot.supportFeature("stateIdUsed")) return false;
+		bot.client.write("container_click", {
+			windowId: 0,
+			slot: 0,
+			mouseButton: 0,
+			mode: 0,
+			stateId: -1,
+			changedSlots: [],
+			cursorItem: toNotch(bot.registry, null),
+		});
+		const got = await new Promise<boolean>((resolve) => {
+			const timeout = setTimeout(() => {
+				bot.client.removeListener("container_set_content", onItems);
+				resolve(false);
+			}, 1500);
+			const onItems = (packet: Record<string, unknown>) => {
+				if ((packet.windowId as number) !== 0) return;
+				clearTimeout(timeout);
+				bot.client.removeListener("container_set_content", onItems);
+				resolve(true);
+			};
+			bot.client.on("container_set_content", onItems);
+		});
+		bot.updateHeldItem();
+		bot.emit("debug", "inventory", { event: "resync", got });
+		return got;
+	};
+
 	// ── Set quick bar slot ──
 
 	bot.setQuickBarSlot = (slot: number) => {
@@ -518,8 +557,21 @@ export const initInventory = (bot: Bot, _options: BotOptions): void => {
 		for (let i = 0; i < bot.inventory.slots.length; i++) {
 			const slotItem = bot.inventory.slots[i];
 			if (slotItem && slotItem.type === itemType) {
+				// Already in the hotbar → just select it (no window clicks at all).
+				if (destination === "hand" && i >= 36 && i <= 44) {
+					bot.setQuickBarSlot(i - 36);
+					return;
+				}
 				await bot.clickWindow(i, 0, 0);
 				await bot.clickWindow(destSlot, 0, 0);
+				// The item displaced from destSlot is now on the cursor: park it back
+				// in the source slot, otherwise it is silently lost on the next window
+				// close (the "planks vanish at the table" bug) and every later click
+				// starts with a stale cursor.
+				if (bot.inventory.selectedItem) await bot.clickWindow(i, 0, 0);
+				// "hand" is hotbar 0 — SELECT it, or the held item never changes when
+				// another hotbar slot is active (station_place_failed heldAfter=andesite).
+				if (destination === "hand") bot.setQuickBarSlot(0);
 				return;
 			}
 		}

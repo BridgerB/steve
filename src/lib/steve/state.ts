@@ -162,7 +162,15 @@ export const isDragonDead = (state: GameState): boolean =>
 // ============================================
 
 export const syncFromBot = (bot: Bot): GameState => {
-	const allSlots = bot.inventory?.slots ?? [];
+	// Include whatever is on the CURSOR: a hotbar swap (click src, click 36) leaves the
+	// item that WAS in slot 36 on the cursor until some window closes. race59 792's
+	// empty bucket vanished from the counts for 76s that way, mine_iron flipped to
+	// incomplete (kit = 4 < 7) and the bot went back down 34 levels for iron it had.
+	const allSlots = [
+		...(bot.inventory?.slots ?? []),
+		bot.inventory?.selectedItem ?? null,
+		bot.currentWindow?.selectedItem ?? null,
+	];
 	const registry = bot.registry;
 
 	// Resolve item name — use registry if item.name is "unknown"

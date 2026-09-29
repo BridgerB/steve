@@ -11,17 +11,18 @@
  */
 
 import type { Bot } from "typecraft";
-import { createBot as createMcBot, createWebViewer } from "typecraft";
+import { createBot as createMcBot, createWebViewer, forwardBotToRelay } from "typecraft";
 import {
 	attachSafety,
 	equipBestTool,
-	isInWaterTrap,
+	needsWaterEscape,
 	registerBlockMemory,
 } from "./lib/bot-utils.ts";
 import { type Channel, createChannel } from "./lib/channel.ts";
 import {
 	attachDiagnostics,
 	initLogger,
+	getLastActivity,
 	logEvent,
 	NOISY_DEBUG,
 	registerRace,
@@ -49,11 +50,14 @@ const log = (message: string) => {
 };
 
 
+let lifetimeArmed = false;
+
 export const startBot = async (): Promise<Bot> => {
 	// Bot lifetime timeout — only when explicitly requested (CLI races). In-server
 	// (SvelteKit) we omit STEVE_TIMEOUT so the bot runs until it disconnects and
 	// never calls process.exit (which would kill the host Node server).
-	if (process.env.STEVE_TIMEOUT) {
+	if (process.env.STEVE_TIMEOUT && !lifetimeArmed) {
+		lifetimeArmed = true; // once per process — a reconnect must not extend the race
 		const lifetimeMs = parseInt(process.env.STEVE_TIMEOUT, 10) * 1000;
 		setTimeout(() => {
 			log(`Lifetime timeout (${lifetimeMs / 1000}s) — exiting`);
@@ -97,9 +101,20 @@ export const startBot = async (): Promise<Bot> => {
 		return origDig(...args);
 	}) as typeof bot.dig;
 
-	// Start web viewer if port assigned (first 4 bots get viewers)
+	// Live 3D feed. On Cloudflare (STEVE_RELAY_URL set) forward the stream to the
+	// relay Worker's Durable Object; otherwise fall back to a local WS viewer
+	// server (STEVE_VIEWER_PORT) for local dev.
+	const relayUrl = process.env.STEVE_RELAY_URL;
 	const viewerPort = parseInt(process.env.STEVE_VIEWER_PORT ?? "0", 10);
-	if (viewerPort > 0) {
+	if (relayUrl) {
+		bot.once("spawn", () => {
+			forwardBotToRelay(bot, {
+				url: relayUrl,
+				id: process.env.MC_USERNAME ?? bot.username,
+				viewDistance: 4,
+			});
+		});
+	} else if (viewerPort > 0) {
 		bot.once("spawn", () => {
 			createWebViewer(bot, { port: viewerPort, viewDistance: 4 });
 		});
@@ -113,6 +128,19 @@ export const startBot = async (): Promise<Bot> => {
 	// Passive ore/log memory (blockSeen) — shared with the gym harness so both see the
 	// same no-X-ray sightings. (Deliberately excludes "water"; see registerBlockMemory.)
 	registerBlockMemory(bot);
+
+	// Event-loop watchdog: a synchronous scan that blocks the loop for seconds
+	// starves the keepalive and gets the bot kicked. Record the stall (and where
+	// the bot was) so the culprit is read from the DB, not guessed.
+	{
+		let last = Date.now();
+		setInterval(() => {
+			const now = Date.now();
+			const drift = now - last - 1000;
+			last = now;
+			if (drift > 1500) logEvent("perf", "event_loop_blocked", `${drift}ms ${getLastActivity()}`, bot.entity?.position);
+		}, 1000);
+	}
 
 	bot.once("spawn", async () => {
 		log("Spawned into the world");
@@ -181,7 +209,12 @@ export const startBot = async (): Promise<Bot> => {
 			let state: ReturnType<typeof syncFromBot> | null = null;
 			let inWaterTrap = false;
 			try {
-				inWaterTrap = isInWaterTrap(bot);
+				// The wade-tolerant trigger, not the raw trap predicate: raw isInWaterTrap
+				// preempted the running step the instant a foot touched a puddle, so a
+				// path through a 1-deep cave pool became Gather Wood → Get Out Of Water →
+				// Gather Wood every 5s, 36× (race23 650). Only submersion / a bounded
+				// crossing / being pinned at a bank warrants the override.
+				inWaterTrap = needsWaterEscape(bot);
 				state = syncFromBot(bot);
 			} catch {}
 			if (!state) return;
@@ -201,7 +234,7 @@ export const startBot = async (): Promise<Bot> => {
 			channel.put({
 				type: "tick",
 				state: syncFromBot(bot),
-				inWaterTrap: isInWaterTrap(bot),
+				inWaterTrap: needsWaterEscape(bot),
 			});
 		} catch {}
 	});
@@ -227,6 +260,7 @@ export const startBot = async (): Promise<Bot> => {
 	// On disconnect/kick: stop feeding the channel and close it — the parked go-loop
 	// takes CLOSED and exits, taking its run state with it. The logger stays alive;
 	// the SvelteKit supervisor restarts startBot (a fresh channel + loop) to resume.
+	let reconnectScheduled = false;
 	const onGone = () => {
 		if (onPhysicsTick) {
 			bot.removeListener("physicsTick", onPhysicsTick);
@@ -234,6 +268,19 @@ export const startBot = async (): Promise<Bot> => {
 		}
 		ch?.close();
 		ch = null;
+		// Race child: come back. The server drops bots with "lost connection: Timed
+		// out" when 4 fresh spawns make it generate chunks at once (race 610/611 died
+		// 26s after their teleport and ghosted for the whole race). The spawnpoint
+		// set at placement puts the rejoined bot back in its cell; inventory is kept
+		// (keep_inventory) and steps re-derive from it.
+		if (process.env.STEVE_BOT_MODE && !reconnectScheduled) {
+			reconnectScheduled = true;
+			log("Reconnecting in 5s…");
+			logEvent("lifecycle", "reconnect_scheduled");
+			setTimeout(() => {
+				startBot().catch((e) => log(`Reconnect failed: ${e instanceof Error ? e.message : e}`));
+			}, 5000);
+		}
 	};
 
 	bot.on("end", () => {
@@ -262,9 +309,16 @@ export const startBot = async (): Promise<Bot> => {
 // ============================================
 
 import { type ChildProcess, spawn } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { connectDb, type Sql } from "./lib/db.ts";
+
+
+// Per-bot stderr log file for the forked children (crash visibility).
+const errFd = (username: string): number => {
+	const dir = join(process.cwd(), "data", "bot-logs");
+	mkdirSync(dir, { recursive: true });
+	return openSync(join(dir, `${username}.log`), "a");
+};import { connectDb, type SteveDb } from "./lib/db.ts";
 
 interface InstanceResult {
 	idx: number;
@@ -302,7 +356,7 @@ const runRace = async (count: number, timeoutMs: number) => {
 
 	const allProcs: ChildProcess[] = [];
 	let winner: number | null = null;
-	let raceDb: Sql | null = null;
+	let raceDb: SteveDb | null = null;
 
 	const viewerBots: Bot[] = [];
 	const killAll = async () => {
@@ -323,7 +377,9 @@ const runRace = async (count: number, timeoutMs: number) => {
 		if (raceDb) {
 			const s = raceDb;
 			raceDb = null;
-			await s.end({ timeout: 2 }).catch(() => {});
+			try {
+				s.close();
+			} catch {}
 		}
 	};
 	process.on("SIGINT", () => {
@@ -344,7 +400,7 @@ const runRace = async (count: number, timeoutMs: number) => {
 		} catch {}
 	});
 
-	const getRaceDb = (): Sql | null => {
+	const getRaceDb = (): SteveDb | null => {
 		if (raceDb) return raceDb;
 		try {
 			raceDb = connectDb();
@@ -392,9 +448,11 @@ const runRace = async (count: number, timeoutMs: number) => {
 		for (const m of MILESTONES) {
 			if (milestonesHit.has(m.name)) continue;
 			try {
-				const rows = (await db`SELECT bot_id FROM inventory_snapshots WHERE race_id = ${RACE_ID} AND (${db.unsafe(m.query)}) LIMIT 1`) as unknown as {
-					bot_id: string;
-				}[];
+				// m.query is a trusted static condition from MILESTONES (no user input).
+				const rows = db.query<{ bot_id: string }>(
+					`SELECT bot_id FROM inventory_snapshots WHERE race_id = ? AND (${m.query}) LIMIT 1`,
+					RACE_ID,
+				);
 				const row = rows[0];
 				if (row) {
 					milestonesHit.add(m.name);
@@ -409,9 +467,11 @@ const runRace = async (count: number, timeoutMs: number) => {
 		const db = getRaceDb();
 		if (!db) return false;
 		try {
-			const rows = (await db`SELECT COUNT(*)::int AS c FROM events WHERE race_id = ${RACE_ID} AND bot_id = ${botId} AND event = 'success' AND detail LIKE 'Enter Nether:%'`) as unknown as {
-				c: number;
-			}[];
+			const rows = db.query<{ c: number }>(
+				`SELECT COUNT(*) AS c FROM events WHERE race_id = ? AND bot_id = ? AND event = 'success' AND detail LIKE 'Enter Nether:%'`,
+				RACE_ID,
+				botId,
+			);
 			return (rows[0]?.c ?? 0) > 0;
 		} catch {
 			return false;
@@ -422,9 +482,11 @@ const runRace = async (count: number, timeoutMs: number) => {
 		const db = getRaceDb();
 		if (!db) return "no data";
 		try {
-			const rows = (await db`SELECT item_name || 'x' || MAX(count)::text AS inv FROM inventory_snapshots WHERE race_id = ${RACE_ID} AND bot_id = ${botId} GROUP BY item_name ORDER BY MAX(count) DESC LIMIT 5`) as unknown as {
-				inv: string;
-			}[];
+			const rows = db.query<{ inv: string }>(
+				`SELECT item_name || 'x' || CAST(MAX(count) AS TEXT) AS inv FROM inventory_snapshots WHERE race_id = ? AND bot_id = ? GROUP BY item_name ORDER BY MAX(count) DESC LIMIT 5`,
+				RACE_ID,
+				botId,
+			);
 			return rows.map((r) => r.inv).join(", ") || "empty";
 		} catch {
 			return "db error";
@@ -463,9 +525,29 @@ const runRace = async (count: number, timeoutMs: number) => {
 	const FX = -3936 + ((raceNum % GRID) - Math.floor(GRID / 2)) * STEP;
 	const FZ =
 		3968 + ((Math.floor(raceNum / GRID) % GRID) - Math.floor(GRID / 2)) * STEP;
+	// The grid cell may be open ocean (race 588-595 dropped every bot into the sea
+	// for 5+ min). Ask the server for the nearest forest to the cell and start
+	// there — land AND trees, like a normal survival spawn. (spreadplayers was
+	// tried first: it fails outright over water and its wide-range search stalls
+	// the RCON connection.)
+	let baseX = FX;
+	let baseZ = FZ;
+	try {
+		const reply = await rcon(`execute positioned ${FX} 64 ${FZ} run locate biome minecraft:forest`);
+		const m = /\[(-?\d+), (?:~|-?\d+), (-?\d+)\]/.exec(reply);
+		if (m) {
+			baseX = parseInt(m[1]!, 10);
+			baseZ = parseInt(m[2]!, 10);
+			console.log(`  spawn: nearest forest to grid cell (${FX},${FZ}) is (${baseX},${baseZ})`);
+		} else {
+			console.log(`  spawn: locate biome gave no coords (${reply.slice(0, 80)}) — using grid cell`);
+		}
+	} catch (e) {
+		console.log(`  spawn: locate biome failed (${e instanceof Error ? e.message : e}) — using grid cell`);
+	}
 	const spawns: { x: number; z: number }[] = [];
 	for (let i = 0; i < count; i++) {
-		spawns.push({ x: FX + ((i % 5) - 2) * 24, z: FZ + Math.floor(i / 5) * 26 });
+		spawns.push({ x: baseX + ((i % 5) - 2) * 24, z: baseZ + Math.floor(i / 5) * 26 });
 	}
 
 	// Spawn all bot processes first, then teleport them
@@ -498,12 +580,15 @@ const runRace = async (count: number, timeoutMs: number) => {
 				STEVE_TIMEOUT: String(timeoutMs / 1000),
 				STEVE_VIEWER_PORT: i < NUM_VIEWERS ? String(3001 + i) : "",
 			},
-			stdio: ["ignore", "ignore", "ignore"],
+			// stderr → data/bot-logs/<name>.log: a crashed child was invisible (race36
+			// 703 "lost connection" at 12:14 and its process just vanished).
+			stdio: ["ignore", "ignore", errFd(username)],
 		});
 		allProcs.push(steveProc);
 		const entry = { proc: steveProc, username, exited: false };
-		steveProc.on("exit", () => {
+		steveProc.on("exit", (code, signal) => {
 			entry.exited = true;
+			console.log(`  ${username} process exited code=${code} signal=${signal} — see data/bot-logs/${username}.log`);
 		});
 		botProcs.push(entry);
 	}
@@ -520,12 +605,52 @@ const runRace = async (count: number, timeoutMs: number) => {
 				const x = spawns[i]?.x ?? 0;
 				const z = spawns[i]?.z ?? 0;
 				await rcon(`clear ${name}`);
-				await rcon(`tp ${name} ${x} 200 ${z}`);
+				// Drop from y200 and check where it LANDED. A cave mouth / ravine /
+				// pond-in-a-hole under the column swallows the bot (race23 650 fell to
+				// y35 in a cave with no tools, no cobble and a pool at its feet and
+				// looped Gather Wood ⇄ Get Out Of Water for 8 min). A real player
+				// spawns on the surface, so re-place it a few blocks over until it does.
+				let sx = x;
+				let sz = z;
+				for (let t = 0; t < 4; t++) {
+					await rcon(`tp ${name} ${sx} 200 ${sz}`);
+					await sleep(8000); // fall + chunk settle
+					let landedY = 200;
+					try {
+						const m = /\[(-?[\d.]+)d, (-?[\d.]+)d, (-?[\d.]+)d\]/.exec(
+							await rcon(`data get entity ${name} Pos`),
+						);
+						if (m) landedY = parseFloat(m[2]!);
+					} catch {}
+					// Lava under the column: race37 705 dropped from y200 straight into a
+					// lava pool ("tried to swim in lava", death 1). Treat as a bad landing.
+					let inLava = false;
+					let inWater = false;
+					try {
+						const probe = await rcon(`execute as ${name} at @s if block ~ ~ ~ minecraft:lava`);
+						const probe2 = await rcon(`execute as ${name} at @s if block ~ ~-1 ~ minecraft:lava`);
+						inLava = probe.includes("passed") || probe2.includes("passed");
+						// A lake under the column: race60 796 dropped into deep water at its
+						// spawn, drowned for 2 min (no buoyancy, nothing to pillar from) and
+						// died before the race had begun. Treat water like lava: re-place.
+						const w1 = await rcon(`execute as ${name} at @s if block ~ ~ ~ minecraft:water`);
+						const w2 = await rcon(`execute as ${name} at @s if block ~ ~-1 ~ minecraft:water`);
+						inWater = w1.includes("passed") || w2.includes("passed");
+					} catch {}
+					if (landedY >= 55 && landedY < 200 && !inLava && !inWater) break;
+					console.log(`  ${name} landed at y=${landedY} (${sx},${sz})${inLava ? " IN LAVA" : inWater ? " IN WATER" : " — underground"}, re-placing`);
+					sx = x + (t + 1) * 9;
+					sz = z + (t % 2 === 0 ? 7 : -7);
+				}
+				// The race cell IS this bot's world spawn: without this, a death sends
+				// it back to the real world spawn thousands of blocks from its mine,
+				// furnace and table (race 604 drowned and respawned 4000 blocks away).
+				await rcon(`spawnpoint ${name} ${sx} 200 ${sz}`);
 				// Stagger: the box has only 4 cores, so let each bot's fresh chunk
 				// generation settle before teleporting the next — otherwise 10
 				// simultaneous gens saturate the CPU and the server misses keepalives,
 				// dropping bots with "lost connection: Timed out".
-				await sleep(8000);
+				await sleep(7000);
 				placed.add(name);
 				console.log(`  ${name} → tp ${x}, ${z}`);
 			}
@@ -680,6 +805,11 @@ ${Array.from(
 // is imported (e.g. by the SvelteKit server to reuse startBot), the dispatch must
 // not run, or it would fork a whole race on import.
 if (process.env.STEVE_CLI === "1") {
+	// A stray rejection (a Promise.race loser rejecting after the timeout won) must
+	// not take the whole bot down — race59 793 exited code=1 mid-race on one.
+	process.on("unhandledRejection", (e) => {
+		console.error("[unhandledRejection]", e instanceof Error ? e.stack ?? e.message : String(e));
+	});
 	const isBotMode = process.env.STEVE_BOT_MODE === "1";
 
 	if (isBotMode) {

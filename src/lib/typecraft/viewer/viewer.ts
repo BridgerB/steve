@@ -395,18 +395,32 @@ export const setViewerPath = (
 			m = new StandardMaterial(`botPath_${kind}`, viewer.scene);
 			m.emissiveColor = new Color3(c[0], c[1], c[2]);
 			m.disableLighting = true;
-			m.backFaceCulling = false;
+			// Tubes are seen from any side; the dig/place marker CUBES must cull their
+			// back faces, or a marker on the bot's own cell (a pillar "place" cell is
+			// its feet) is seen from inside and paints the whole first-person view
+			// purple/orange — drawn in rendering group 1 it even sits over terrain.
+			// The tubes too: a "place" segment that starts in the bot's own cell (a
+			// pillar/bridge from where it stands) runs through the first-person
+			// camera, and from inside a tube its back faces fill the whole view
+			// purple (race27/28: full-screen purple on 664/668 during crafting).
+			m.backFaceCulling = true;
 			m.alpha = c[3];
 			ov.mats.set(kind, m);
 		}
 		return m;
 	};
 
+	const camPos = viewer.camera.position;
 	const flush = (a: number, b: number, kind: string): void => {
 		if (b - a < 1) return;
+		// Drop waypoints at/next to the camera: a "place" segment that starts in the
+		// bot's own cell (a pillar from where it stands) draws a purple V across the
+		// whole first-person view even with back faces culled (race34 692 at y27).
 		const pts = points
 			.slice(a, b + 1)
-			.map((p) => new Vector3(p.x + 0.5, p.y + 0.45, p.z + 0.5));
+			.map((p) => new Vector3(p.x + 0.5, p.y + 0.45, p.z + 0.5))
+			.filter((v) => Vector3.Distance(v, camPos) >= 3.5);
+		if (pts.length < 2) return;
 		const tube = MeshBuilder.CreateTube(
 			"botPath",
 			{ path: pts, radius: 0.16, tessellation: 6, cap: Mesh.CAP_ALL },
@@ -441,7 +455,12 @@ export const setViewerPath = (
 		cells: readonly { x: number; y: number; z: number }[],
 		kind: string,
 	): void => {
+		const cam = viewer.camera.position;
 		for (const c of cells) {
+			// Skip cells at/next to the camera: in first person a marker cube 1-2 blocks
+			// ahead fills the whole view with a purple/orange hexagon (race32/33: every
+			// crafting stop after a walk left the last route's place-marker in the face).
+			if (Math.hypot(c.x + 0.5 - cam.x, c.y + 0.5 - cam.y, c.z + 0.5 - cam.z) < 3.2) continue;
 			const box = MeshBuilder.CreateBox("botMark", { size: 0.72 }, viewer.scene);
 			box.position.set(c.x + 0.5, c.y + 0.5, c.z + 0.5);
 			box.renderingGroupId = 1;

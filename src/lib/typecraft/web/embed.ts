@@ -202,6 +202,8 @@ export type LiveState = {
 
 export type MountOptions = {
 	workerUrl?: string;
+	/** Where to fetch the (static) assets blob. Default /web/assets.json. */
+	assetsUrl?: string;
 	/** Live dashboard state pushed ~2×/s (vitals, inventory, run status). */
 	onState?: (state: LiveState) => void;
 	/** Bot pose on every move (fast) — for a snappy compass etc. */
@@ -227,9 +229,36 @@ export function mountViewer(
 	let worldHeight = 384;
 	let chunkCount = 0;
 	const pendingMessages: ServerMessage[] = [];
-	let es: EventSource | null = null;
+	const assetsUrl = opts.assetsUrl ?? "/web/assets.json";
+	let ws: WebSocket | null = null;
+	let assetsMsg: Extract<ServerMessage, { type: "assets" }> | null = null;
+	let retryTimer: ReturnType<typeof setTimeout> | null = null;
 	let closed = false;
 	let raf = 0;
+
+	// Camera smoothing: position packets arrive ~20Hz with jitter over the relay
+	// (p99 gaps >100ms), and hard-setting the camera per packet reads as stepping.
+	// Keep the latest packet as a target and ease the camera toward it every frame.
+	type Pose = { x: number; y: number; z: number; yaw: number; pitch: number };
+	let camTarget: Pose | null = null;
+	let camCur: Pose | null = null;
+	const TWO_PI = Math.PI * 2;
+	const lerpAngle = (a: number, b: number, t: number): number => {
+		const d = ((((b - a) % TWO_PI) + TWO_PI + Math.PI) % TWO_PI) - Math.PI; // shortest arc
+		return a + d * t;
+	};
+	// Same easing for entities: the relay batches their moves at ~10Hz, which
+	// would otherwise step visibly. Keep a target + current pose per entity.
+	type EntPose = { x: number; y: number; z: number; yaw: number };
+	const entTarget = new Map<number, EntPose>();
+	const entCur = new Map<number, EntPose>();
+	const setEntTarget = (id: number, x: number, y: number, z: number, yaw: number) => {
+		entTarget.set(id, { x, y, z, yaw });
+		if (!entCur.has(id)) {
+			entCur.set(id, { x, y, z, yaw });
+			if (viewer) updateViewerEntity(viewer, id, x, y, z, yaw); // first fix: snap
+		}
+	};
 
 	const sizeCanvas = () => {
 		const w = canvas.clientWidth || 300;
@@ -244,7 +273,15 @@ export function mountViewer(
 	const processMessage = (msg: ServerMessage): void => {
 		if (!viewer) return;
 		if (msg.type === "position") {
-			setViewerCamera(viewer, vec3(msg.x, msg.y, msg.z), msg.yaw, msg.pitch);
+			camTarget = { x: msg.x, y: msg.y, z: msg.z, yaw: msg.yaw, pitch: msg.pitch };
+			if (!camCur) {
+				// First fix (or after a teleport-sized jump): snap instead of easing.
+				camCur = { ...camTarget };
+				setViewerCamera(viewer, vec3(msg.x, msg.y, msg.z), msg.yaw, msg.pitch);
+			} else if (Math.hypot(msg.x - camCur.x, msg.y - camCur.y, msg.z - camCur.z) > 24) {
+				camCur = { ...camTarget };
+				setViewerCamera(viewer, vec3(msg.x, msg.y, msg.z), msg.yaw, msg.pitch);
+			}
 			opts.onPose?.({ x: msg.x, y: msg.y, z: msg.z, yaw: msg.yaw, pitch: msg.pitch });
 		} else if (msg.type === "chunk") {
 			const raw = Buffer.from(msg.buf, "base64");
@@ -277,9 +314,15 @@ export function mountViewer(
 				msg.skinUrl,
 			);
 		} else if (msg.type === "entityMove") {
-			updateViewerEntity(viewer, msg.id, msg.x, msg.y, msg.z, msg.yaw);
+			setEntTarget(msg.id, msg.x, msg.y, msg.z, msg.yaw);
+		} else if ((msg as { type: string }).type === "entityMoves") {
+			// Relay-batched entity moves (latest position per entity, ~10Hz) — eased in the render loop.
+			for (const m of (msg as unknown as { moves: { id: number; x: number; y: number; z: number; yaw: number }[] }).moves)
+				setEntTarget(m.id, m.x, m.y, m.z, m.yaw);
 		} else if (msg.type === "entityGone") {
 			removeViewerEntity(viewer, msg.id);
+			entTarget.delete(msg.id);
+			entCur.delete(msg.id);
 		} else if (msg.type === "entityEquip") {
 			updateEntityEquipment(viewer.entityRenderer, msg.id, msg.slot, msg.itemName);
 		} else if (msg.type === "path") {
@@ -287,20 +330,56 @@ export function mountViewer(
 		}
 	};
 
+	// Apply the (statically fetched) assets once the viewer exists. Idempotent.
+	const applyAssets = async (): Promise<void> => {
+		if (!viewer || !assetsMsg || assetsReady) return;
+		const msg = assetsMsg;
+		try {
+			const images = await decodeTextures(msg.textureNames, msg.textureData);
+			const atlas = createTextureAtlas(
+				msg.textureNames,
+				(name: string) => images.get(name.replace(".png", ""))!,
+			);
+			const blockStates = prepareBlockStates(
+				msg.blockStates,
+				msg.blockModels as Parameters<typeof prepareBlockStates>[1],
+				atlas.uvMap,
+			);
+			for (const worker of viewer.worldRenderer.workers) {
+				worker.postMessage({ type: "registryData", blocks: msg.blocks, biomes: msg.biomes });
+			}
+			setViewerAssets(viewer, atlas, blockStates, deserializeTints(msg.tints));
+			setEntityModels(msg.entityModels as Record<string, EntityModelDef>);
+			assetsReady = true;
+			for (const queued of pendingMessages) processMessage(queued);
+			pendingMessages.length = 0;
+		} catch (err) {
+			console.error("[viewer] asset error:", err);
+		}
+	};
+
+	// Fetch the big assets blob statically (it can't stream through the relay's
+	// 1MB-capped WebSocket), then apply it once the viewer is up.
+	fetch(assetsUrl)
+		.then((r) => r.json())
+		.then((m) => {
+			assetsMsg = m as Extract<ServerMessage, { type: "assets" }>;
+			void applyAssets();
+		})
+		.catch((err) => console.error("[viewer] assets fetch failed:", err));
+
 	const connect = () => {
 		if (closed) return;
-		// One-directional SSE stream (server → browser). EventSource auto-reconnects;
-		// the server replays init/assets/chunks on each (re)open, so reset on open.
-		es = new EventSource(wsUrl);
+		// Live WebSocket relay (Durable Object). On (re)connect the relay replays
+		// init/chunks/entities, so reset chunk/queue state on open.
+		ws = new WebSocket(wsUrl);
 
-		es.onopen = () => {
-			assetsReady = false;
+		ws.onopen = () => {
 			chunkCount = 0;
 			pendingMessages.length = 0;
-			if (viewer) clearViewerEntities(viewer);
 		};
 
-		es.onmessage = async (event) => {
+		ws.onmessage = (event) => {
 			const msg: ServerMessage = JSON.parse(event.data as string);
 			if ((msg as { type: string }).type === "state") {
 				opts.onState?.(msg as unknown as LiveState);
@@ -317,30 +396,9 @@ export function mountViewer(
 					sizeCanvas();
 					viewer = createViewer(canvas, { workerUrl });
 				}
+				void applyAssets();
 			} else if (msg.type === "assets") {
-				if (!viewer) return;
-				try {
-					const images = await decodeTextures(msg.textureNames, msg.textureData);
-					const atlas = createTextureAtlas(
-						msg.textureNames,
-						(name: string) => images.get(name.replace(".png", ""))!,
-					);
-					const blockStates = prepareBlockStates(
-						msg.blockStates,
-						msg.blockModels as Parameters<typeof prepareBlockStates>[1],
-						atlas.uvMap,
-					);
-					for (const worker of viewer.worldRenderer.workers) {
-						worker.postMessage({ type: "registryData", blocks: msg.blocks, biomes: msg.biomes });
-					}
-					setViewerAssets(viewer, atlas, blockStates, deserializeTints(msg.tints));
-					setEntityModels(msg.entityModels as Record<string, EntityModelDef>);
-					assetsReady = true;
-					for (const queued of pendingMessages) processMessage(queued);
-					pendingMessages.length = 0;
-				} catch (err) {
-					console.error("[viewer] asset error:", err);
-				}
+				// The relay never forwards assets (served statically); ignore if it does.
 			} else if (!assetsReady) {
 				pendingMessages.push(msg);
 			} else {
@@ -348,13 +406,45 @@ export function mountViewer(
 			}
 		};
 
-		es.onerror = () => {
-			// EventSource reconnects on its own; nothing to do.
+		ws.onclose = () => {
+			if (closed) return;
+			retryTimer = setTimeout(connect, 2000); // WebSocket doesn't auto-reconnect
+		};
+		ws.onerror = () => {
+			try {
+				ws?.close();
+			} catch {
+				/* ignore */
+			}
 		};
 	};
 
+	let lastFrame = performance.now();
 	const loop = () => {
 		try {
+			// Time-based easing (~90ms to converge) so it's frame-rate independent.
+			const now = performance.now();
+			const t = Math.min(1, (now - lastFrame) / 90);
+			lastFrame = now;
+			if (viewer && camTarget && camCur) {
+				camCur.x += (camTarget.x - camCur.x) * t;
+				camCur.y += (camTarget.y - camCur.y) * t;
+				camCur.z += (camTarget.z - camCur.z) * t;
+				camCur.yaw = lerpAngle(camCur.yaw, camTarget.yaw, t);
+				camCur.pitch += (camTarget.pitch - camCur.pitch) * t;
+				setViewerCamera(viewer, vec3(camCur.x, camCur.y, camCur.z), camCur.yaw, camCur.pitch);
+			}
+			if (viewer) {
+				for (const [id, tg] of entTarget) {
+					const c = entCur.get(id);
+					if (!c) continue;
+					c.x += (tg.x - c.x) * t;
+					c.y += (tg.y - c.y) * t;
+					c.z += (tg.z - c.z) * t;
+					c.yaw = lerpAngle(c.yaw, tg.yaw, t);
+					updateViewerEntity(viewer, id, c.x, c.y, c.z, c.yaw);
+				}
+			}
 			if (viewer) renderViewer(viewer);
 		} catch (_) {
 			// entity mesh hiccups must not kill the loop
@@ -370,9 +460,10 @@ export function mountViewer(
 	return () => {
 		closed = true;
 		cancelAnimationFrame(raf);
+		if (retryTimer) clearTimeout(retryTimer);
 		ro.disconnect();
 		try {
-			es?.close();
+			ws?.close();
 		} catch (_) {
 			/* ignore */
 		}

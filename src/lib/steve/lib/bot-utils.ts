@@ -21,10 +21,34 @@ import {
 	vec3,
 	windowItems,
 } from "typecraft";
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { StepResult } from "../types.ts";
 import { logEvent } from "./logger.ts";
 
 type Block = TypecraftBlock & { hardness: number | null };
+
+// ── Task cancellation ────────────────────────────────────────────────
+// The run-loop starts steps fire-and-forget and only IGNORES a displaced step's
+// eventual result (stale epoch) — it never stopped the step itself. A preempted
+// or timed-out Gather Wood kept running alongside its replacement for minutes:
+// every event doubled, both instances dug the same log, the second dig hit air
+// (→ "dug but didn't collect" ×12, race 588). Steps run inside `taskScope` with
+// their epoch; the shared primitives below (sleep/goTo/moveCloser) throw the
+// moment the bot's live epoch has moved on, unwinding the stale task at its
+// next await. Code outside a step (the safety guard) has no scope → never aborted.
+export const taskScope = new AsyncLocalStorage<{ bot: Bot; epoch: number }>();
+const liveEpoch = new WeakMap<Bot, number>();
+export const beginTaskEpoch = (bot: Bot, epoch: number): void => {
+	liveEpoch.set(bot, epoch);
+};
+export const throwIfPreempted = (): void => {
+	const s = taskScope.getStore();
+	if (!s) return;
+	const live = liveEpoch.get(s.bot);
+	if (live !== undefined && live !== s.epoch) {
+		throw new Error(`preempted (epoch ${s.epoch} → ${live})`);
+	}
+};
 
 /** Get block at position with position and hardness attached */
 export const getBlock = (bot: Bot, pos: Vec3): Block | null => {
@@ -175,6 +199,7 @@ export const goTo = async (
 	options: GoToOptions = {},
 ): Promise<boolean> => {
 	const { range = 2, timeout = 10000 } = options;
+	throwIfPreempted();
 
 	const dist = distance(bot.entity.position, pos);
 	if (dist <= range) return true;
@@ -245,6 +270,7 @@ export const moveCloser = async (
 	target: Vec3,
 	options: MoveCloserOptions = {},
 ): Promise<void> => {
+	throwIfPreempted();
 	const {
 		maxDistance = 4,
 		speedFactor = 150,
@@ -593,6 +619,10 @@ interface BotMemory {
 	// When the bot first entered its current stretch of water — used to bound how far
 	// it may wade before we force an escape back, so it never strands mid-lake.
 	waterEnterAt: number;
+	// Committed swim heading (unit vector) for an open-water escape with no dry
+	// land in the near scan. Kept across escape attempts until the bot is out.
+	waterHeading: { x: number; z: number } | null;
+	waterHeadingAt: number;
 }
 const botMemory = new WeakMap<Bot, BotMemory>();
 
@@ -607,6 +637,8 @@ export const getMemory = (bot: Bot): BotMemory => {
 			waterProgressPos: null,
 			waterProgressAt: 0,
 			waterEnterAt: 0,
+			waterHeading: null,
+			waterHeadingAt: 0,
 		};
 		botMemory.set(bot, mem);
 	}
@@ -622,10 +654,22 @@ export const rememberMineEntry = (
 	pos: { x: number; y: number; z: number },
 ) => {
 	const mem = getMemory(bot);
-	if (!mem.mineEntry || pos.y > mem.mineEntry.y) {
+	// Only a real footing counts: after a death the bot respawns falling from the
+	// sky point (y200) and mineDeepOre recorded THAT as the entry, then tried to
+	// staircase back up to y200 (race 647).
+	if (!bot.entity?.onGround || pos.y > 100) return;
+	// The entry is the SURFACE above this spot, not the bottom of the dig-down hole
+	// the bot is already standing in (race25 657 "returned" to y71 in a shaft whose
+	// rim was y78 and sat boxed there).
+	// Allow a deep gap: a dig-down that breaks into a cavern starts the mine on the
+	// cavern floor 15-20 below the real surface (race26 660 "returned to the
+	// surface" at y54 in a cavern, rim y70, and hunted water down there).
+	const rim = rimYAt(bot);
+	const entryY = rim > pos.y && rim <= pos.y + 40 ? rim : Math.floor(pos.y);
+	if (!mem.mineEntry || entryY > mem.mineEntry.y) {
 		mem.mineEntry = {
 			x: Math.floor(pos.x),
-			y: Math.floor(pos.y),
+			y: entryY,
 			z: Math.floor(pos.z),
 		};
 	}
@@ -643,7 +687,7 @@ export const getMineEntry = (
  */
 /** Topmost solid (non-air, non-water, non-leaves) block in a column → the y to
  *  stand on at the surface. Used to climb out when the mine-entry memory is gone. */
-const surfaceYAt = (bot: Bot, x: number, z: number): number => {
+export const surfaceYAt = (bot: Bot, x: number, z: number): number => {
 	for (let y = 110; y > 40; y--) {
 		const b = bot.blockAt({ x, y, z });
 		if (
@@ -651,7 +695,8 @@ const surfaceYAt = (bot: Bot, x: number, z: number): number => {
 			b.name !== "air" &&
 			b.name !== "cave_air" &&
 			!b.name.includes("water") &&
-			!b.name.includes("leaves")
+			!b.name.includes("leaves") &&
+			!b.name.endsWith("_log") // a trunk overhead is still "on the surface"
 		)
 			return y + 1;
 	}
@@ -680,6 +725,13 @@ export const digStaircaseUp = async (
 		b.name !== "cave_air" &&
 		b.name !== "bedrock" &&
 		!blocked(b);
+	// Equip any pickaxe so the dig isn't bare-handed-slow.
+	const pickSlot = bot.inventory.slots.findIndex((s) =>
+		s?.name.endsWith("_pickaxe"),
+	);
+	// Bare hands take ~7.5s on stone; a 4s cap cancelled every such dig, so a
+	// tool-less bot (spawned into a cave, race23 650) could never carve a way out.
+	const digCap = pickSlot >= 0 ? 4000 : 9000;
 	const digAt = async (b: ReturnType<typeof getBlock>): Promise<void> => {
 		if (!solid(b)) return;
 		const pos = (b as { position: Vec3 }).position;
@@ -687,22 +739,19 @@ export const digStaircaseUp = async (
 			await bot.lookAt(vec3(pos.x + 0.5, pos.y + 0.5, pos.z + 0.5));
 			await Promise.race([
 				(bot.dig(b as never, true) as Promise<void>).catch(() => {}),
-				sleep(4000),
+				sleep(digCap),
 			]);
 			bot.stopDigging();
 		} catch {
 			/* ignore */
 		}
 	};
-	// Equip any pickaxe so the dig isn't bare-handed-slow.
-	const pickSlot = bot.inventory.slots.findIndex((s) =>
-		s?.name.endsWith("_pickaxe"),
-	);
 	if (pickSlot >= 36 && pickSlot <= 44) bot.setQuickBarSlot(pickSlot - 36);
 	else if (pickSlot >= 0) {
 		try {
 			await bot.clickWindow(pickSlot, 0, 0);
 			await bot.clickWindow(36, 0, 0);
+			if (bot.inventory.selectedItem) await bot.clickWindow(pickSlot, 0, 0); // displaced item back, not left on the cursor
 			bot.setQuickBarSlot(0);
 		} catch {
 			/* ignore */
@@ -710,10 +759,14 @@ export const digStaircaseUp = async (
 	}
 
 	// A placeable block to pillar with (cobblestone is what a miner has plenty of).
-	const isFiller = (s: { name: string } | null): boolean =>
+	const isFiller = (s: { name: string; count?: number } | null): boolean =>
 		!!s &&
 		(s.name.includes("cobblestone") ||
 			s.name === "dirt" ||
+			// Planks pillar just as well; keep 9 back for a table + wooden pick. A
+			// fresh bot that fell into a cave under the trees (race35 698: 16 planks,
+			// no pick) otherwise stair-digs stone BARE-HANDED at 7.5s a block.
+			(s.name.endsWith("_planks") && (s.count ?? 0) > 9) ||
 			s.name === "stone" ||
 			s.name.includes("deepslate") ||
 			s.name.includes("granite") ||
@@ -739,6 +792,7 @@ export const digStaircaseUp = async (
 			try {
 				await bot.clickWindow(slot, 0, 0);
 				await bot.clickWindow(36, 0, 0);
+				if (bot.inventory.selectedItem) await bot.clickWindow(slot, 0, 0); // displaced item back, not left on the cursor
 				bot.setQuickBarSlot(0);
 			} catch {
 				/* ignore */
@@ -749,7 +803,87 @@ export const digStaircaseUp = async (
 	const fallable = (b: ReturnType<typeof getBlock>): boolean =>
 		!!b && (b.name.includes("sand") || b.name.includes("gravel"));
 
+	// The climb is vertical; when the two blocks overhead would open into water/lava
+	// (an aquifer or lake right above), tunnel SIDEWAYS 2-6 blocks to a column whose
+	// ceiling is dry and resume there. Breaking out instead left the caller failing
+	// the same spot every second (race31 681: 40× "Returning to surface for wood"
+	// in 2 min under a y49 aquifer, with 9 ingots in the pack).
+	// No filler in the pack (a fresh bot that fell into a cave under the trees):
+	// mine up to 6 wall blocks at feet/head level around us and pick up the
+	// cobble/dirt, so the CLIMB can pillar instead of the stair mode that made
+	// race35 698 wander a cave for 106s to gain 4 blocks.
+	const acquireFiller = async (fx: number, fy: number, fz: number): Promise<boolean> => {
+		let got = 0;
+		for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+			for (const dy of [0, 1]) {
+				if (got >= 6) break;
+				const b = B(fx + dx, fy + dy, fz + dz);
+				if (!solid(b) || fallable(b)) continue;
+				const n = b!.name;
+				// Bare hands drop nothing from stone — only dirt is worth digging then.
+				const rock = n === "stone" || n === "deepslate" || n === "granite" || n === "andesite" || n === "diorite" || n === "tuff";
+				if (!(n === "dirt" || (rock && pickSlot >= 0))) continue;
+				if (digExposesWater(bot, (b as { position: Vec3 }).position) || digExposesLava(bot, (b as { position: Vec3 }).position)) continue;
+				await digAt(b);
+				got++;
+			}
+		}
+		if (got === 0) return false;
+		try {
+			await bot.collectDrops(4, 2500, async (p) => {
+				await walkToXZ(bot, p.x, p.z, { targetDist: 0.4, maxTime: 1500 });
+			});
+		} catch {
+			/* ignore */
+		}
+		await walkToXZ(bot, fx + 0.5, fz + 0.5, { targetDist: 0.3, maxTime: 1500 }).catch(() => {});
+		return true;
+	};
+
+	let shifts = 0;
+	const wouldExpose = (b: ReturnType<typeof getBlock>): boolean =>
+		solid(b) &&
+		(digExposesWater(bot, (b as { position: Vec3 }).position) ||
+			digExposesLava(bot, (b as { position: Vec3 }).position));
+	const shiftUnderDryCeiling = async (fx: number, fy: number, fz: number): Promise<boolean> => {
+		if (++shifts > 4) return false;
+		for (const [dx, dz] of [[1, 0], [0, 1], [-1, 0], [0, -1]] as const) {
+			for (let k = 2; k <= 6; k++) {
+				const cx = fx + dx * k;
+				const cz = fz + dz * k;
+				const c1 = B(cx, fy + 2, cz);
+				const c2 = B(cx, fy + 3, cz);
+				if ([c1, c2].some((b) => blocked(b) || fallable(b))) break; // wetter that way
+				if ([c1, c2].some(wouldExpose)) continue;
+				let ok = true;
+				for (let j = 1; j <= k && ok; j++) {
+					const px = fx + dx * j;
+					const pz = fz + dz * j;
+					if (!solid(B(px, fy - 1, pz))) ok = false; // no floor: a cave/drop
+					const over = B(px, fy + 2, pz);
+					if (blocked(over) || fallable(over)) ok = false;
+					for (const dy of [0, 1]) {
+						const t = B(px, fy + dy, pz);
+						if (blocked(t) || fallable(t) || wouldExpose(t)) ok = false;
+					}
+				}
+				if (!ok) continue;
+				logEvent("nav", "stairs_shift", `dry ceiling ${k} blocks toward ${dx},${dz}`, bot.entity.position);
+				for (let j = 1; j <= k; j++) {
+					const px = fx + dx * j;
+					const pz = fz + dz * j;
+					await digAt(B(px, fy + 1, pz));
+					await digAt(B(px, fy, pz));
+					await walkToXZ(bot, px + 0.5, pz + 0.5, { targetDist: 0.3, maxTime: 2500 });
+				}
+				return true;
+			}
+		}
+		return false;
+	};
+
 	let stuck = 0;
+	let gravelDigs = 0;
 	while (Math.floor(bot.entity.position.y) < targetY && Date.now() < deadline) {
 		if ((bot.health ?? 20) < 8) break;
 		if (bot.entity?.isInWater) break;
@@ -763,15 +897,110 @@ export const digStaircaseUp = async (
 		// there's a real apex window to place into. Bail on liquids/falling blocks.
 		const ceil = B(fx, fy + 2, fz);
 		const ceil2 = B(fx, fy + 3, fz);
-		if ([ceil, ceil2].some((b) => blocked(b) || fallable(b))) break;
+		if ([ceil, ceil2].some(blocked)) {
+			if (await shiftUnderDryCeiling(fx, fy, fz)) continue;
+			break;
+		}
+		// Gravel/sand overhead: dig it and let the column settle onto the block
+		// above our head (our own cells stay occupied), then re-evaluate. Bailing
+		// silently here left race37 707 at y54 under a gravel seam failing
+		// "Returning to surface for wood" every 5s with 8 ingots in the pack.
+		if ([ceil, ceil2].some(fallable)) {
+			if (++gravelDigs > 16) break;
+			logEvent("nav", "stairs_gravel", `${ceil?.name}/${ceil2?.name} above y=${fy}`, bot.entity.position);
+			if (fallable(ceil)) await digAt(ceil);
+			else if (fallable(ceil2)) await digAt(ceil2);
+			await sleep(700);
+			continue;
+		}
+		// Never open the ceiling into a lake: race29 674 pillared from y28 to y47,
+		// broke the two blocks above into a capped aquifer and drowned in it.
+		if ([ceil, ceil2].some(wouldExpose)) {
+			logEvent("nav", "stairs_blocked", `liquid behind the ceiling at y=${fy + 2}`, bot.entity.position);
+			if (await shiftUnderDryCeiling(fx, fy, fz)) continue;
+			break;
+		}
 		await digAt(ceil);
 		await digAt(ceil2);
 		// Pillar up one: equip a block, look down, hold jump, and SPAM placeBlock under
 		// our feet until we rise — in a tight shaft the apex is brief, so a single
 		// timed place misses; spamming lands the block the instant the feet clear.
-		if (!equipFiller()) break; // out of blocks — can't pillar further
+		if (!equipFiller() && (await acquireFiller(fx, fy, fz)) && equipFiller()) {
+			logEvent("nav", "filler_acquired", `y=${fy}`, bot.entity.position);
+		}
+		if (!equipFiller()) {
+			// Out of blocks — carve a REAL stair instead (what the doc above promises):
+			// pick a side whose foot-level block is solid, clear the two above it, and
+			// hop up onto it. Turning to face rock in an open cave keeps a step ahead.
+			let stepped = false;
+			for (const [dx, dz] of [[1, 0], [0, 1], [-1, 0], [0, -1]] as const) {
+				const step = B(fx + dx, fy, fz + dz);
+				if (!solid(step)) continue;
+				const above = [1, 2, 3].map((dy) => B(fx + dx, fy + dy, fz + dz));
+				if (above.some((b) => blocked(b) || fallable(b))) continue;
+				const a1 = vec3(fx + dx, fy + 1, fz + dz);
+				const a2 = vec3(fx + dx, fy + 2, fz + dz);
+				if ([a1, a2].some((at) => digExposesWater(bot, at) || digExposesLava(bot, at))) continue;
+				await digAt(above[0]!);
+				await digAt(above[1]!);
+				bot.setControlState("jump", true);
+				await walkToXZ(bot, fx + dx + 0.5, fz + dz + 0.5, { targetDist: 0.3, maxTime: 2500 });
+				bot.setControlState("jump", false);
+				stepped = true;
+				break;
+			}
+			if (!stepped) break; // no rock to climb on any side
+			await sleep(300);
+			if (Math.floor(bot.entity.position.y) > fy) stuck = 0;
+			else if (++stuck > 5) break;
+			continue;
+		}
 		const floorRef = B(fx, fy - 1, fz);
 		if (!floorRef) break;
+		// Standing on a crafting table / furnace: a plain right-click OPENS it, so the
+		// pillar block never lands and the bot jumps in place until the deadline
+		// (race43 731: 3+ min on its own table at y33 with a full iron kit). Sneak
+		// while placing — the server then places instead of interacting.
+		const sneakPlace = /crafting_table|furnace|smoker|chest|barrel|anvil|bed|trapdoor|door|gate|lever|button/.test(floorRef.name);
+		if (sneakPlace) {
+			logEvent("nav", "pillar_sneak", `on ${floorRef.name} at y=${fy}`, bot.entity.position);
+			// Sneak-placing on a furnace still never lands (race57 784: pillar_sneak
+			// ×11 on its furnace at y22, 5+ min lost at the bottom of the mine).
+			// Step onto a plain neighbouring floor cell and pillar from there.
+			let moved = false;
+			for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+				const nf = B(fx + dx, fy - 1, fz + dz);
+				if (!solid(nf) || /crafting_table|furnace|smoker|chest|barrel|anvil|bed|trapdoor|door|gate|lever|button/.test(nf!.name)) continue;
+				const c0 = B(fx + dx, fy, fz + dz);
+				const c1 = B(fx + dx, fy + 1, fz + dz);
+				if (solid(c0) || solid(c1) || blocked(c0) || blocked(c1)) continue;
+				bot.setControlState("sneak", false);
+				await walkToXZ(bot, fx + dx + 0.5, fz + dz + 0.5, { targetDist: 0.2, maxTime: 1500 });
+				moved = Math.floor(bot.entity.position.x) === fx + dx && Math.floor(bot.entity.position.z) === fz + dz;
+				if (moved) break;
+			}
+			if (moved) continue;
+			// No plain neighbour (a table in a 1-wide tunnel — race59 793: pillar_sneak
+			// ×6 → pillar_stuck twice, Fill Water timed out at y25). Break the station
+			// under our feet instead: it drops, we land one lower on rock and pillar on.
+			logEvent("nav", "pillar_dig_station", `${floorRef.name} at y=${fy - 1}`, bot.entity.position);
+			bot.setControlState("sneak", false);
+			bot.setControlState("jump", false);
+			await bot.lookAt(vec3(fx + 0.5, fy - 0.5, fz + 0.5), true);
+			await Promise.race([handled(bot.dig(floorRef as never, true) as Promise<void>), sleep(5000)]);
+			await sleep(600);
+			if (++stuck > 5) {
+				logEvent("nav", "pillar_stuck", `station under feet would not break at y=${fy - 1}`, bot.entity.position);
+				break;
+			}
+			continue;
+		}
+		// Centre in the cell and sneak for EVERY pillar step, like cast.ts pillarUp
+		// (the climber that works): from a cell edge the block lands in the wrong
+		// column or inside our own hitbox and never registers — race47 746 logged
+		// pillar_stuck ×15 at y19 and 747 ×2 at y25, both on plain rock.
+		await walkToXZ(bot, fx + 0.5, fz + 0.5, { targetDist: 0.15, maxTime: 900 });
+		bot.setControlState("sneak", true);
 		await bot.lookAt(vec3(fx + 0.5, fy - 0.5, fz + 0.5), true);
 		bot.setControlState("jump", true);
 		for (let k = 0; k < 14; k++) {
@@ -781,7 +1010,7 @@ export const digStaircaseUp = async (
 			if (Math.floor(bot.entity.position.y) > fy) {
 				try {
 					await Promise.race([
-						bot.placeBlock(floorRef as never, vec3(0, 1, 0)) as Promise<void>,
+						handled(bot.placeBlock(floorRef as never, vec3(0, 1, 0)) as Promise<void>),
 						sleep(1200).then(() => {
 							throw new Error("place timeout");
 						}),
@@ -793,13 +1022,119 @@ export const digStaircaseUp = async (
 			if (solid(B(fx, fy, fz))) break; // a block landed under us — risen a level
 		}
 		bot.setControlState("jump", false);
+		bot.setControlState("sneak", false);
 		await sleep(350);
 
-		if (Math.floor(bot.entity.position.y) > fy) stuck = 0;
-		else if (++stuck > 5) break;
+		// Count a level GAINED only when a block actually landed under us: the old
+		// y > fy test was satisfied by the jump itself, so the stuck counter never
+		// tripped and a failing pillar looped until the step deadline.
+		// Only a block that actually landed in our old feet cell counts. The
+		// "on the ground one level higher" clause was fooled by a slope: a bot
+		// straddling two cells of different height jumped from the low cell,
+		// landed on the high one (y > fy), reset the counter, drifted back down,
+		// and repeated for the whole 90s budget with no block ever placed
+		// (race54 773, race55 776: 'reached y=66 (target 73)' with zero events).
+		if (solid(B(fx, fy, fz))) stuck = 0;
+		else if (++stuck > 5) {
+			logEvent("nav", "pillar_stuck", `no block landed at y=${fy} after 6 tries`, bot.entity.position);
+			break;
+		}
 	}
 	bot.clearControlStates();
 	return Math.floor(bot.entity.position.y);
+};
+
+/** Rise `levels` blocks while submerged by jumping off the floor and placing a
+ *  filler block underfoot each time (the ground jump works in water; only the
+ *  swim-up is weak). Returns the number of levels gained. */
+export const pillarInWater = async (bot: Bot, levels: number): Promise<number> => {
+	const isFiller = (s: { name: string } | null): boolean =>
+		!!s && /cobblestone|^dirt$|^stone$|deepslate|granite|andesite|diorite|tuff|netherrack/.test(s.name);
+	let gained = 0;
+	for (let i = 0; i < levels; i++) {
+		const hot = bot.inventory.slots.findIndex((s, k) => k >= 36 && k <= 44 && isFiller(s));
+		if (hot >= 0) bot.setQuickBarSlot(hot - 36);
+		else {
+			const slot = bot.inventory.slots.findIndex(isFiller);
+			if (slot < 0) break;
+			try {
+				await bot.clickWindow(slot, 0, 0);
+				await bot.clickWindow(36, 0, 0);
+				if (bot.inventory.selectedItem) await bot.clickWindow(slot, 0, 0); // displaced item back, not left on the cursor
+				bot.setQuickBarSlot(0);
+			} catch {
+				break;
+			}
+		}
+		const p = bot.entity.position;
+		const fx = Math.floor(p.x);
+		const fy = Math.floor(p.y);
+		const fz = Math.floor(p.z);
+		await walkToXZ(bot, fx + 0.5, fz + 0.5, { targetDist: 0.2, maxTime: 800 });
+		const isSolidRef = (b: ReturnType<typeof getBlock>): boolean =>
+			!!b && b.name !== "air" && b.name !== "cave_air" && !b.name.includes("water") && !b.name.includes("lava");
+		const isFillable = (b: ReturnType<typeof getBlock>): boolean =>
+			!!b && (b.name === "air" || b.name === "cave_air" || b.name.includes("water"));
+		const below = getBlock(bot, vec3(fx, fy - 1, fz));
+		let placed = false;
+		if (isFillable(below)) {
+			// FLOATING (no floor under us): fill the cell below our feet from the
+			// side, off a solid neighbour of that cell (the shaft/lake wall). No jump
+			// needed — the target is below the hitbox. Sinking 13 blocks to the floor
+			// took 45s and the bot drowned on the way (harness 'capped').
+			const sides: [number, number][] = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+			for (const [dx, dz] of sides) {
+				const ref = getBlock(bot, vec3(fx + dx, fy - 1, fz + dz));
+				if (!isSolidRef(ref)) continue;
+				await bot.lookAt(vec3(fx + 0.5, fy - 0.5, fz + 0.5), true);
+				try {
+					await Promise.race([
+						handled(bot.placeBlock(ref as never, vec3(-dx, 0, -dz)) as Promise<void>),
+						sleep(1200).then(() => {
+							throw new Error("place timeout");
+						}),
+					]);
+				} catch {
+					/* try the next side */
+				}
+				await sleep(150);
+				if (isSolidRef(getBlock(bot, vec3(fx, fy - 1, fz)))) {
+					placed = true;
+					break;
+				}
+			}
+			if (!placed) break; // open water with no wall to build off — caller sinks instead
+		} else {
+			// ON A FLOOR: ground-jump and place under the feet (works in water too).
+			const floorRef = below;
+			await bot.lookAt(vec3(fx + 0.5, fy - 0.5, fz + 0.5), true);
+			bot.setControlState("jump", true);
+			for (let k = 0; k < 16 && !placed; k++) {
+				await sleep(80);
+				if (Math.floor(bot.entity.position.y) > fy) {
+					try {
+						await Promise.race([
+							handled(bot.placeBlock(floorRef as never, vec3(0, 1, 0)) as Promise<void>),
+							sleep(1000).then(() => {
+								throw new Error("place timeout");
+							}),
+						]);
+					} catch {
+						/* retry next spin */
+					}
+				}
+				placed = isSolidRef(getBlock(bot, vec3(fx, fy, fz)));
+			}
+			bot.setControlState("jump", false);
+		}
+		// Settle onto the new block before the next level (5× digs need onGround).
+		const t0 = Date.now();
+		while (Date.now() - t0 < 2500 && !bot.entity.onGround) await sleep(100);
+		if (!placed) break;
+		gained++;
+	}
+	bot.clearControlStates();
+	return gained;
 };
 
 export const returnToSurface = async (bot: Bot): Promise<boolean> => {
@@ -825,10 +1160,27 @@ export const returnToSurface = async (bot: Bot): Promise<boolean> => {
 	// First let the pathfinder climb — with scaffolding enabled it pillars up open
 	// shafts cleanly. If it falls short (rock-capped column where A* would need a huge
 	// dig path), fall back to the explicit dig-ceiling + pillar climber.
-	await goTo(bot, vec3(entry.x, entry.y, entry.z), {
-		range: 2,
-		timeout: 45000,
-	});
+	// Water beside us (a flooded band): the pathfinder's route to the entry runs
+	// through the pool, escape_water preempts, and the climb restarts — race36 702
+	// looped climb_out → water → escape 10× in 90s at y13-14. Skip the walk and
+	// pillar straight up from this dry cell instead.
+	const wetNear = (): boolean => {
+		const p = bot.entity.position;
+		for (let dx = -2; dx <= 2; dx++)
+			for (let dz = -2; dz <= 2; dz++)
+				for (let dy = -1; dy <= 1; dy++)
+					if ((getBlock(bot, vec3(Math.floor(p.x) + dx, Math.floor(p.y) + dy, Math.floor(p.z) + dz))?.name ?? "").includes("water"))
+						return true;
+		return false;
+	};
+	if (wetNear()) {
+		logEvent("nav", "climb_wet", "water beside the climb start — pillaring in place", bot.entity.position);
+	} else {
+		await goTo(bot, vec3(entry.x, entry.y, entry.z), {
+			range: 2,
+			timeout: 45000,
+		});
+	}
 	if (!atEntry()) {
 		logEvent(
 			"nav",
@@ -836,11 +1188,73 @@ export const returnToSurface = async (bot: Bot): Promise<boolean> => {
 			`goTo fell short at y=${Math.floor(bot.entity.position.y)} → digStaircaseUp`,
 			bot.entity.position,
 		);
-		await digStaircaseUp(bot, entry.y, Date.now() + 50000);
+		// ~3.5s per level with a stone pick; a cavern-floor mine can be 20 below.
+		await digStaircaseUp(bot, entry.y, Date.now() + 100000);
+		// The staircase climber gave up (pillar_stuck / wet ceiling) well short of
+		// the entry: the cast pillar is the proven fallback (race47 747 rose 19
+		// levels on it right after pillar_stuck) — the mining boxed branch already
+		// used it; the bucket/wood climbs did not and looped 'still_underground'.
+		if (!atEntry() && !bot.entity.isInWater && Math.floor(bot.entity.position.y) < entry.y - 8) {
+			logEvent("nav", "pillar_fallback", `y=${Math.floor(bot.entity.position.y)} → ${entry.y}`, bot.entity.position);
+			const { pillarUp } = await import("../tasks/portal/cast.ts");
+			await pillarUp(bot, entry.y).catch(() => false);
+			bot.setControlState("sneak", false);
+		}
 	}
-	const reached = atEntry();
+	// The recorded entry can be the BOTTOM of a dig-down hole (Mine Cobblestone sinks
+	// the bot 6 blocks into a 1-wide shaft before Mine Iron records the entry), so
+	// "at the entry" still leaves it boxed below the rim. Climb out to the real rim.
+	const unboxed = await unboxToRim(bot);
+	const reached = atEntry() || unboxed;
 	if (reached) logEvent("nav", "reached_surface", undefined, bot.entity.position);
 	return reached;
+};
+
+/** Rim = the highest surface of this column's 4 neighbours (in a hole the own
+ *  column tops out at our feet). */
+export const rimYAt = (bot: Bot): number => {
+	const p = bot.entity.position;
+	const fx = Math.floor(p.x);
+	const fz = Math.floor(p.z);
+	return Math.max(
+		...[[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dz]) =>
+			surfaceYAt(bot, fx + dx!, fz + dz!),
+		),
+	);
+};
+
+/** If the bot is standing in a 1-wide hole below the surrounding surface, climb
+ *  out to the rim (pillar with cobble, else carve stairs). race25 657 sat in its
+ *  own 4-deep dig-down shaft with a bucket for 3 min: returnToSurface had
+ *  "reached" the recorded entry at the shaft's bottom and every exploreRandom
+ *  goTo from the boxed cell failed. Returns true when at/near the rim. */
+export const unboxToRim = async (bot: Bot, budgetMs = 60000): Promise<boolean> => {
+	const p = bot.entity?.position;
+	if (!p) return false;
+	const rim = rimYAt(bot);
+	if (Math.floor(p.y) >= rim - 1) return true;
+	if (rim - Math.floor(p.y) > 12) return false; // a mine, not a surface hole — callers handle mines
+	const fx = Math.floor(p.x);
+	const fy = Math.floor(p.y);
+	const fz = Math.floor(p.z);
+	const solidAt = (dx: number, dy: number, dz: number): boolean => {
+		const b = getBlock(bot, vec3(fx + dx, fy + dy, fz + dz));
+		return !!b && b.name !== "air" && b.name !== "cave_air" && !isPassableBlock(b);
+	};
+	const boxed = [[1, 0], [-1, 0], [0, 1], [0, -1]].every(
+		([dx, dz]) => solidAt(dx!, 0, dz!) || solidAt(dx!, 1, dz!),
+	);
+	if (!boxed) return false; // open ground below the rim (a valley) — not a hole
+	logEvent("nav", "unbox", `boxed at y=${fy}, rim y=${rim}`, p);
+	const { pillarUp } = await import("../tasks/portal/cast.ts");
+	let ok = await pillarUp(bot, rim);
+	bot.setControlState("sneak", false);
+	if (!ok) {
+		const got = await digStaircaseUp(bot, rim, Date.now() + budgetMs);
+		ok = got >= rim - 1;
+	}
+	logEvent("nav", "unbox_done", `ok=${ok} y=${Math.floor(bot.entity.position.y)}`, bot.entity.position);
+	return ok;
 };
 
 export const rememberResource = (
@@ -880,6 +1294,11 @@ const WATCHED_BLOCKS = [
 	"deepslate_coal_ore",
 	"iron_ore",
 	"deepslate_iron_ore",
+	// Gravel too: the flint step only sees exposed, line-of-sight gravel, so a bot
+	// whose descent crossed none roams the surface in 92s legs for nothing (race58
+	// 790: 'Need flint (dig gravel)' twice with a water bucket in hand). The mine
+	// and cave walls it just passed are full of it.
+	"gravel",
 ];
 
 /**
@@ -1006,7 +1425,11 @@ const STATION_NON_SOLID = new Set([
 const isStationGround = (name: string): boolean =>
 	!STATION_NON_SOLID.has(name) &&
 	!name.includes("leaves") &&
-	!name.includes("sapling");
+	!name.includes("sapling") &&
+	// A right-click on an interactive block OPENS it instead of placing: race57
+	// 784 picked its own furnace as the ground for a new crafting table, the
+	// place never landed, and Craft Buckets timed out (120s) with 8 ingots.
+	!/furnace|crafting_table|smoker|chest|barrel|anvil|bed|door|trapdoor|gate|lever|button|hopper|dropper|dispenser|shulker/.test(name);
 const isStationClear = (name: string): boolean =>
 	name === "air" || name === "cave_air" || STATION_NON_SOLID.has(name);
 
@@ -1367,6 +1790,15 @@ export const getCraftingTable = async (bot: Bot): Promise<Block | null> => {
 			// Have a table in the bag and the remembered one isn't right here — forget it
 			// and fall through to place a fresh table adjacent.
 			mem.craftingTablePos = null;
+		} else if (
+			d > 24 &&
+			(countItems(bot, "planks") >= 4 || windowItems(bot.inventory).some((i) => i.name.endsWith("_log")))
+		) {
+			// A table is 4 planks; a trek of 24+ blocks each way is never cheaper.
+			// race61 800 walked 81 blocks from its portal site to re-pick mid-chamber
+			// and lost the site (every remaining cell out of reach).
+			logEvent("craft", "table_far_recraft", JSON.stringify({ dist: Math.floor(d) }));
+			mem.craftingTablePos = null;
 		} else if (d < 150) {
 			const remembered = getBlock(
 				bot,
@@ -1515,6 +1947,10 @@ export const getCraftingTable = async (bot: Bot): Promise<Block | null> => {
  * window), so it's safe to call any time; skips the 4 armor slots.
  */
 export const reclaimCraftingGrid = async (bot: Bot): Promise<void> => {
+	// Pull the server's truth first: the client's grid view drifts under load and
+	// an "empty" grid slot may still hold a plank server-side.
+	await bot.resyncInventory().catch(() => false);
+	await sleep(150);
 	const win = bot.inventory;
 	// Slots 0..inventoryStart = output(0) + 2x2 craft grid + 4 armor slots. Sweep
 	// the output + grid (everything except the 4 armor slots right before the
@@ -1526,7 +1962,7 @@ export const reclaimCraftingGrid = async (bot: Bot): Promise<void> => {
 	// stray plank still sits in the grid we mint a junk oak_button (and consume the
 	// plank) instead of reclaiming it. Emptying the grid first breaks the recipe, so
 	// by the time we reach slot 0 it holds only a genuinely-stranded crafted result.
-	for (let slot = gridEnd - 1; slot >= 0; slot--) {
+	for (let slot = gridEnd - 1; slot >= 1; slot--) {
 		const s = win.slots[slot];
 		if (s && s.count > 0) {
 			try {
@@ -1535,6 +1971,16 @@ export const reclaimCraftingGrid = async (bot: Bot): Promise<void> => {
 			} catch {}
 		}
 	}
+	// The RESULT slot: never shift-click it. Shift-click on a craft output crafts
+	// the MAXIMUM the grid allows, and when the client's grid view has drifted
+	// from the server's (a plank the client thinks is gone), that minted 6
+	// buttons from 6 planks in one click (race36 700 at 11:52:42, "got
+	// acacia_button"). A plain click takes exactly one result; drop it into an
+	// empty inventory slot.
+	// The RESULT slot is a live recipe PREVIEW, never a stranded item: clicking it
+	// crafts whatever the server's grid currently forms (a plank the client no
+	// longer sees → a button, race38 708/710/711 still 1-2 buttons each after
+	// 0fadb04). Leave it alone; only the grid slots above get reclaimed.
 };
 
 export const craftItem = async (
@@ -1597,17 +2043,28 @@ export const craftItem = async (
 		return best;
 	};
 
-	const recipe = recipes.find((r) => {
-		if (r.inShape) {
-			return r.inShape.every((row) =>
-				row.every((item) => item.id === -1 || hasIngredient(item.id)),
-			);
-		}
-		if (r.ingredients) {
-			return r.ingredients.every((item) => hasIngredient(item.id));
-		}
-		return false;
-	});
+	const findRecipe = () =>
+		recipes.find((r) => {
+			if (r.inShape) {
+				return r.inShape.every((row) =>
+					row.every((item) => item.id === -1 || hasIngredient(item.id)),
+				);
+			}
+			if (r.ingredients) {
+				return r.ingredients.every((item) => hasIngredient(item.id));
+			}
+			return false;
+		});
+	let recipe = findRecipe();
+	if (!recipe) {
+		// The client's inventory view can momentarily lose a stack (race38 710: 29
+		// planks in hand, "No matching recipe for wooden_pickaxe", planks back a
+		// second later). Pull the server's truth and look once more.
+		await bot.resyncInventory().catch(() => false);
+		await sleep(300);
+		recipe = findRecipe();
+		if (recipe) logEvent("craft", "recipe_after_resync", itemName);
+	}
 
 	if (!recipe) {
 		return { success: false, message: `No matching recipe for ${itemName}` };
@@ -1649,10 +2106,20 @@ export const craftItem = async (
 				} else {
 					await moveCloser(bot, craftingTable.position, { maxDistance: 2.5 });
 				}
+				// goTo returns false (no throw) when it fell short: nudge the rest of
+				// the way rather than let bot.craft die "Too far to interact
+				// (dist=6.6, max=6)" (race42 725, race41 718).
+				if (distance(bot.entity.position, craftingTable.position) > 4) {
+					await moveCloser(bot, craftingTable.position, { maxDistance: 2.5, maxWalkTime: 3000 });
+				}
 				await bot.lookAt(offset(craftingTable.position, 0.5, 0.5, 0.5), true);
 				await sleep(150);
 			} catch {}
 		}
+		// Let typecraft's click loop unwind the moment this step's epoch is stale
+		// (timed-out step still crafting while the next dispatch opens its own
+		// window — race41 721 looped "No craft result"/"Promise timed out").
+		(bot as unknown as { preemptCheck?: () => void }).preemptCheck = throwIfPreempted;
 		await bot.craft(fixedRecipe, count, craftingTable ?? undefined);
 	};
 
@@ -1701,6 +2168,10 @@ export const craftItem = async (
 				} catch {}
 				await sleep(400);
 			}
+			// "Missing ingredient" with the ingredients plainly in the pack = the client
+			// inventory model drifted from the server's. Pull the server's truth
+			// before retrying instead of re-clicking phantom slots.
+			await bot.resyncInventory().catch(() => false);
 			await sleep(300);
 		}
 	}
@@ -1709,6 +2180,27 @@ export const craftItem = async (
 	const msg =
 		lastErr instanceof Error ? lastErr.message : `Failed to craft ${itemName}`;
 	logEvent("craft", "error", `${itemName}: ${msg}`);
+	// A table whose window never opens / never yields a result is a ghost (a
+	// placement the client registered but the server didn't) or otherwise dead:
+	// race38 709 looped "Promise timed out" / "No craft result" on one table for
+	// 3 minutes with the ingredients in hand. Forget it and break the block so the
+	// next attempt places a fresh table (a real one comes back as an item).
+	if (craftingTable && /timed out|No craft result|Non-crafting/.test(msg)) {
+		getMemory(bot).craftingTablePos = null;
+		logEvent("craft", "table_discard", `${craftingTable.position.x},${craftingTable.position.y},${craftingTable.position.z}: ${msg}`);
+		try {
+			const blk = bot.blockAt(craftingTable.position);
+			if (blk && blk.name === "crafting_table") {
+				await bot.lookAt(offset(craftingTable.position, 0.5, 0.5, 0.5), true);
+				await bot.dig(blk as never, true);
+				await bot.collectDrops(4, 2500, async (p) => {
+					await goTo(bot, p, { range: 1.2, timeout: 2500 });
+				}).catch(() => {});
+			}
+		} catch {
+			/* ghost block — nothing to dig */
+		}
+	}
 	return { success: false, message: msg };
 };
 
@@ -1810,6 +2302,7 @@ export const attackUntilDead = async (
  * ```
  */
 export const sleep = (ms: number): Promise<void> => {
+	throwIfPreempted();
 	return new Promise((resolve) => setTimeout(resolve, ms));
 };
 
@@ -1945,9 +2438,19 @@ export const needsWaterEscape = (bot: Bot): boolean => {
 	if (!isInWaterTrap(bot)) {
 		mem.waterProgressPos = null;
 		mem.waterEnterAt = 0;
+		// waterHeading is NOT cleared here: the trap signal blips off on a bubble
+		// column / a bob / mid-fall, and re-rolling the heading each time is what
+		// kept ocean-spawned bots circling. It's cleared on a confirmed escape.
 		return false;
 	}
-	if (bot.entity?.isInWater) return true; // submerged → drowning risk, escape now
+	// Submerged = the HEAD block is water. typecraft's isInWater is "any water in
+	// the hitbox", so it fired on a foot-deep puddle and made every wade an escape.
+	const hp = bot.entity?.position;
+	if (
+		hp &&
+		getBlock(bot, vec3(Math.floor(hp.x), Math.floor(hp.y) + 1, Math.floor(hp.z)))?.name.includes("water")
+	)
+		return true; // drowning risk, escape now
 	const now = Date.now();
 	if (!mem.waterEnterAt) mem.waterEnterAt = now;
 	// BOUND the crossing. Wading across a stream/puddle is fine, but without a limit
@@ -1979,6 +2482,9 @@ const DRY_PLANTS = new Set([
 	"snow_layer",
 	"vine",
 ]);
+/** Air (or a land plant) — NOT water. The headroom test for a real dry target. */
+const isDryAir = (b: ReturnType<typeof getBlock>): boolean =>
+	!b || b.name === "air" || b.name === "cave_air" || DRY_PLANTS.has(b.name);
 
 /**
  * PRIMARY water escape — winner of the /debug/swim strategy bake-off
@@ -2054,7 +2560,80 @@ const escapeViaPathfinder = async (bot: Bot): Promise<boolean> => {
 	}
 };
 
-export const escapeWater = async (
+// ONE escape per bot at a time. The escape_water step AND attachSafety's drown
+// guard both call escapeWater; when both ran at once each loop locked its own
+// bank and they alternated the control states every 350ms — the bot thrashed
+// between two targets at the shoreline for minutes (race 580s: "toward
+// -3397,5579" / "toward -3397,5581" interleaved). A second caller now just
+// awaits the escape already in flight.
+const escapeInFlight = new WeakMap<Bot, Promise<boolean>>();
+
+export const escapeWater = (
+	bot: Bot,
+	lastSafe?: Vec3,
+	opts: { final?: boolean } = {},
+): Promise<boolean> => {
+	const running = escapeInFlight.get(bot);
+	if (running) return running;
+	const p = escapeWaterInner(bot, lastSafe, opts)
+		.then(async (ok) => {
+			if (ok) {
+				getMemory(bot).waterHeading = null;
+				await settleInland(bot);
+			}
+			return ok;
+		})
+		.finally(() => escapeInFlight.delete(bot));
+	escapeInFlight.set(bot, p);
+	return p;
+};
+
+/** After an escape lands on the shore lip, walk a few blocks INLAND — to a
+ *  standing spot with no water within 2 blocks. Returning the instant we touch
+ *  the bank left the bot at the water's edge, and the resumed step (mine a
+ *  direction / walk to a shoreline tree) stepped straight back in: escape →
+ *  step → preempt → escape, 100+ s at one pond. Best-effort, short budget. */
+const settleInland = async (bot: Bot): Promise<void> => {
+	const p = bot.entity?.position;
+	if (!p) return;
+	const cx = Math.floor(p.x);
+	const cy = Math.floor(p.y);
+	const cz = Math.floor(p.z);
+	const wet = (x: number, y: number, z: number): boolean =>
+		!!getBlock(bot, vec3(x, y, z))?.name.includes("water");
+	const dryAround = (x: number, y: number, z: number): boolean => {
+		for (let dx = -2; dx <= 2; dx++)
+			for (let dz = -2; dz <= 2; dz++)
+				for (let dy = -2; dy <= 0; dy++) if (wet(x + dx, y + dy, z + dz)) return false;
+		return true;
+	};
+	if (dryAround(cx, cy, cz)) return;
+	let best: { v: Vec3; d: number } | null = null;
+	for (let dx = -8; dx <= 8; dx++) {
+		for (let dz = -8; dz <= 8; dz++) {
+			for (let y = cy + 3; y >= cy - 3; y--) {
+				const g = getBlock(bot, vec3(cx + dx, y, cz + dz));
+				if (!isStandableGround(g) || g?.name.includes("water")) continue;
+				if (!isPassableBlock(getBlock(bot, vec3(cx + dx, y + 1, cz + dz)))) break;
+				if (!isPassableBlock(getBlock(bot, vec3(cx + dx, y + 2, cz + dz)))) break;
+				if (!dryAround(cx + dx, y + 1, cz + dz)) break;
+				const d = Math.abs(dx) + Math.abs(dz) + Math.abs(y + 1 - cy);
+				if (!best || d < best.d) best = { v: vec3(cx + dx, y + 1, cz + dz), d };
+				break;
+			}
+		}
+	}
+	if (!best) return;
+	try {
+		await goTo(bot, best.v, { range: 0, timeout: 6000 });
+		bot.clearControlStates();
+		logEvent("nav", "settled_inland", `to ${best.v.x},${best.v.y},${best.v.z}`);
+	} catch {
+		/* best-effort */
+	}
+};
+
+const escapeWaterInner = async (
 	bot: Bot,
 	lastSafe?: Vec3,
 	opts: { final?: boolean } = {},
@@ -2063,8 +2642,9 @@ export const escapeWater = async (
 
 	// PRIMARY: route out to real shore with the pathfinder (fast + no bank-climbing
 	// flakiness). Only fall through to the manual carve-a-stair logic below when no
-	// reachable shore exists (a fully boxed pocket).
-	if (await escapeViaPathfinder(bot)) return true;
+	// reachable shore exists (a fully boxed pocket). STEVE_ESCAPE_NO_PF=1 (harness
+	// only) skips it so the manual swim/carve path can be exercised on its own.
+	if (!process.env.STEVE_ESCAPE_NO_PF && (await escapeViaPathfinder(bot))) return true;
 
 	// The first solid, diggable block straight up within reach — for a SEALED
 	// flooded cave (buoyancy presses our head to the cap), where pathfinding can't
@@ -2107,9 +2687,13 @@ export const escapeWater = async (
 				// out to sea.)
 				for (let y = cy + 8; y >= cy - 6; y--) {
 					const g = getBlock(bot, vec3(x, y, z));
-					if (!isStandableGround(g)) continue;
-					if (!isPassableBlock(getBlock(bot, vec3(x, y + 1, z)))) break;
-					if (!isPassableBlock(getBlock(bot, vec3(x, y + 2, z)))) break;
+					if (!isStandableGround(g) || g?.name.includes("water")) continue;
+					// DRY air above — water is "passable" too, and counting it made a
+					// seafloor bump the nearest "dry target": every ocean-spawned bot
+					// swam back to the same submerged bump and pocket-dug it for minutes
+					// (race 592-595) instead of heading for shore.
+					if (!isDryAir(getBlock(bot, vec3(x, y + 1, z)))) break;
+					if (!isDryAir(getBlock(bot, vec3(x, y + 2, z)))) break;
 					if (getBlock(bot, vec3(x, y - 1, z))?.name.includes("water")) break;
 					// Rank by horizontal distance PLUS how far we'd have to climb —
 					// otherwise an equidistant 2-block-high ledge can beat the 1-block
@@ -2145,11 +2729,31 @@ export const escapeWater = async (
 	const digAt = async (b: ReturnType<typeof getBlock>): Promise<void> => {
 		if (!diggable(b)) return;
 		const pos = (b as { position: Vec3 }).position;
+		// Hold a pickaxe for rock: pillaring leaves the filler block in hand, and a
+		// stone cap "dug" with cobblestone takes 37s under water — the server never
+		// finished a single cap block while the bot drowned on its pillar (harness).
+		if (!/dirt|grass_block|gravel|sand|clay|snow|podzol|mud/.test(b!.name) && !(bot.heldItem?.name ?? "").endsWith("_pickaxe")) {
+			const hot = bot.inventory.slots.findIndex((s, i) => i >= 36 && i <= 44 && !!s && s.name.endsWith("_pickaxe"));
+			if (hot >= 0) bot.setQuickBarSlot(hot - 36);
+			else {
+				const s = bot.inventory.slots.findIndex((x) => !!x && x.name.endsWith("_pickaxe"));
+				if (s >= 0) {
+					try {
+						await bot.clickWindow(s, 0, 0);
+						await bot.clickWindow(36, 0, 0);
+						if (bot.inventory.selectedItem) await bot.clickWindow(s, 0, 0); // displaced item back, not left on the cursor
+						bot.setQuickBarSlot(0);
+					} catch {
+						/* dig bare-handed */
+					}
+				}
+			}
+		}
 		try {
 			await bot.lookAt(vec3(pos.x + 0.5, pos.y + 0.5, pos.z + 0.5), true);
 			await Promise.race([
 				(bot.dig(b as never, true) as Promise<void>).catch(() => {}),
-				sleep(5000), // grounded-underwater dirt is ~3.75s (5× penalty); give it room
+				sleep(9000), // off-ground dirt is ~3.75s, picked stone ~5.6s (5× penalty); give it room
 			]);
 			bot.stopDigging();
 		} catch {
@@ -2159,7 +2763,7 @@ export const escapeWater = async (
 
 	logEvent("nav", opts.final ? "water_escape_final" : "swimming_out");
 	const start = Date.now();
-	const timeout = opts.final ? 90000 : 35000;
+	let timeout = opts.final ? 90000 : 35000;
 	const DIRS: [number, number][] = [
 		[1, 0],
 		[0, 1],
@@ -2196,8 +2800,61 @@ export const escapeWater = async (
 		return best;
 	};
 
-	let dirIdx = 0;
+	// No dry land inside dryTargets' 16-block scan (open ocean / big lake): pick ONE
+	// heading toward the nearest land in a wide coarse scan and keep it for the
+	// whole escape — and across escapes (memory) — so successive 35s attempts keep
+	// swimming the same way. Probing the 8 compass points 3 blocks out in turn
+	// netted zero displacement: race 590 sat 4 min at one spot in an ocean spawn
+	// while the shore was ~60 blocks south.
+	const farLandHeading = (): { x: number; z: number } => {
+		const mem = getMemory(bot);
+		// Re-scan once per escape attempt (we may have swum into range of land) —
+		// but if nothing is loaded/visible, KEEP the existing heading rather than
+		// re-rolling: the random heading is only useful if it's held for minutes.
+		if (mem.waterHeading && Date.now() - mem.waterHeadingAt < 5000) return mem.waterHeading;
+		const e = bot.entity?.position;
+		const cx = Math.floor(e?.x ?? 0);
+		const cy = Math.floor(e?.y ?? 64);
+		const cz = Math.floor(e?.z ?? 0);
+		let best: { dx: number; dz: number; d: number } | null = null;
+		for (let dx = -96; dx <= 96; dx += 3) {
+			for (let dz = -96; dz <= 96; dz += 3) {
+				if (Math.abs(dx) < 4 && Math.abs(dz) < 4) continue;
+				for (let y = cy + 8; y >= cy - 2; y--) {
+					const g = getBlock(bot, vec3(cx + dx, y, cz + dz));
+					if (!g) break; // unloaded column
+					if (!isStandableGround(g) || g.name.includes("water")) continue;
+					const a1 = getBlock(bot, vec3(cx + dx, y + 1, cz + dz));
+					const a2 = getBlock(bot, vec3(cx + dx, y + 2, cz + dz));
+					if (!a1 || a1.name.includes("water") || !isPassableBlock(a1)) break;
+					if (a2 && (a2.name.includes("water") || !isPassableBlock(a2))) break;
+					const d = Math.hypot(dx, dz);
+					if (!best || d < best.d) best = { dx, dz, d };
+					break;
+				}
+			}
+		}
+		mem.waterHeadingAt = Date.now();
+		if (!best && mem.waterHeading) return mem.waterHeading;
+		const h = best
+			? { x: best.dx / best.d, z: best.dz / best.d }
+			: (() => {
+					const a = Math.random() * Math.PI * 2;
+					return { x: Math.cos(a), z: Math.sin(a) };
+				})();
+		mem.waterHeading = h;
+		logEvent(
+			"nav",
+			"water_heading",
+			best ? `land ${best.d.toFixed(0)} blocks away at ${cx + best.dx},${cz + best.dz}` : "no land within 96 — random heading",
+			e,
+		);
+		return h;
+	};
+	const headingSign = (v: number): number => (Math.abs(v) >= 0.38 ? Math.sign(v) : 0);
+
 	let locked: Vec3 | null = null;
+	let notchTries = 0;
 	let lockUntil = 0;
 	// "Stuck" is tracked on a WALL CLOCK against an ABSOLUTE anchor, NOT per-target.
 	// In a tight pocket the target re-locks every second or two; resetting the
@@ -2214,6 +2871,9 @@ export const escapeWater = async (
 	// a staircase up it — re-deriving the direction each dig (from the constantly
 	// re-locking target) made the bot chip one block here, one there, never an exit.
 	let escapeDir: [number, number] | null = null;
+	// Set while deliberately sinking to the floor under a capped lake (see the
+	// capped branch): suppresses the press/jump so the bot actually goes down.
+	let sinkingSince = 0;
 
 	while (Date.now() - start < timeout) {
 		const p = bot.entity?.position;
@@ -2221,6 +2881,76 @@ export const escapeWater = async (
 		const fx = Math.floor(p.x);
 		const fy = Math.floor(p.y);
 		const fz = Math.floor(p.z);
+		if (sinkingSince) {
+			if (bot.entity.onGround) {
+				sinkingSince = 0;
+				stuckSince = Date.now() - 3000; // landed → straight into the capped branch
+			} else if (Date.now() - sinkingSince > 25000) {
+				sinkingSince = 0; // never landed (no floor in reach) — fall back to swimming
+			} else {
+				bot.clearControlStates();
+				await sleep(150);
+				continue;
+			}
+		}
+		// Capped column (water all the way up to solid rock): don't wait for the
+		// stall clock — bobbing at the cap resets it — and don't chase "dry targets"
+		// that sit on top of the cap. Go to the floor→pillar→dig routine at once,
+		// with a budget that covers a deep shaft (sink ~0.5 blocks/s, then pillar).
+		if (
+			B(fx, fy + 1, fz)?.name.includes("water") &&
+			(() => {
+				for (let dy = 1; dy <= 32; dy++) {
+					const b = B(fx, fy + dy, fz);
+					if (!b) return false;
+					if (b.name.includes("water")) continue;
+					return isStandableGround(b);
+				}
+				return false;
+			})()
+		) {
+			timeout = Math.max(timeout, 150000);
+			// Handle it HERE, before the press/jump below: pressing lifts the bot off
+			// the footing it just built, and the later stall branch then saw it
+			// floating again (harness 'capped': built a floor, drowned on it).
+			// Standing on the pillar we just built counts as landed even when the
+			// water physics never reports onGround: race39 715 sat on its +2 pillar at
+			// y60 under a 1-thick bank ledge, "sank" to a floor it was already on,
+			// never dug, and drowned after 106s.
+			const footing = isStandableGround(B(fx, fy - 1, fz)) && p.y - fy < 0.2;
+			if (bot.entity.onGround || footing) {
+				const ceil = reachableCeiling();
+				if (ceil) {
+					await digAt(ceil);
+					logEvent("nav", "drown_dig_up", ceil.name, ceil.position);
+				} else {
+					const rose = await pillarInWater(bot, 3);
+					logEvent("nav", "drown_pillar", `+${rose} on placed blocks`, bot.entity.position);
+					if (rose === 0) await sleep(300);
+				}
+			} else {
+				bot.clearControlStates();
+				const built = await pillarInWater(bot, 1);
+				if (built > 0) {
+					logEvent("nav", "drown_pillar", "+1 floor built off the wall", bot.entity.position);
+				} else if (reachableCeiling()) {
+					// Can't build a floor (the cap blocks the jump) but the cap itself is
+					// within reach: open it now instead of sinking away from it.
+					const ceil = reachableCeiling();
+					if (ceil) {
+						await digAt(ceil);
+						logEvent("nav", "drown_dig_up", `${ceil.name} (floating)`, ceil.position);
+					}
+				} else {
+					if (!sinkingSince) {
+						sinkingSince = Date.now();
+						logEvent("nav", "drown_sink", `capped at y=${fy}, sinking to the floor`, bot.entity.position);
+					}
+					await sleep(150);
+				}
+			}
+			continue;
+		}
 		if (isOnDryLand(bot)) {
 			if (!isInWaterTrap(bot)) {
 				// Don't declare victory on a momentary bob to the surface. In a 1-wide
@@ -2261,10 +2991,23 @@ export const escapeWater = async (
 			!dryTargets()[0] &&
 			!lastSafe
 		) {
+			// Digging while floating runs at 25× (off-ground × underwater): a stone cap
+			// never breaks and the bot drowns under it (race29 674, 100s submerged).
+			// So: SINK to the floor first (5×), and if the cap is out of reach from
+			// there, PILLAR UP on placed blocks — a jump from the floor clears the
+			// block even in water — until the cap is in reach, then dig it.
+			if (!bot.entity.onGround) {
+				bot.clearControlStates();
+				const t0 = Date.now();
+				while (Date.now() - t0 < 3000 && !bot.entity.onGround) await sleep(100);
+			}
 			const ceil = reachableCeiling();
-			if (ceil) {
+			if (ceil && bot.entity.onGround) {
 				await digAt(ceil);
 				logEvent("nav", "drown_dig_up", ceil.name, ceil.position);
+			} else if (!ceil && bot.entity.onGround) {
+				const rose = await pillarInWater(bot, 3);
+				logEvent("nav", "drown_pillar", `+${rose} on placed blocks`, bot.entity.position);
 			}
 		}
 
@@ -2281,8 +3024,8 @@ export const escapeWater = async (
 			if (t) {
 				locked = vec3(Math.floor(t.x), Math.floor(t.y), Math.floor(t.z));
 			} else {
-				const [dx, dz] = DIRS[dirIdx++ % DIRS.length];
-				locked = vec3(fx + dx * 3, fy, fz + dz * 3);
+				const h = farLandHeading();
+				locked = vec3(fx + Math.round(h.x * 6), fy, fz + Math.round(h.z * 6));
 			}
 			lockUntil = Date.now() + 3000;
 		}
@@ -2324,8 +3067,9 @@ export const escapeWater = async (
 			// it just slow open water? Commit toward the exit (nearest dry target, else
 			// the retreat); in a flooded tunnel that's the dead-end-free direction.
 			const exit = dryTargets()[0] ?? lastSafe;
-			const ux = exit ? Math.sign(exit.x - fx) : (escapeDir?.[0] ?? 0);
-			const uz = exit ? Math.sign(exit.z - fz) : (escapeDir?.[1] ?? 0);
+			const far = exit ? null : farLandHeading();
+			const ux = exit ? Math.sign(exit.x - fx) : far ? headingSign(far.x) : (escapeDir?.[0] ?? 0);
+			const uz = exit ? Math.sign(exit.z - fz) : far ? headingSign(far.z) : (escapeDir?.[1] ?? 0);
 			const walled =
 				diggable(B(fx + ux, fy, fz + uz)) ||
 				diggable(B(fx + ux, fy + 1, fz + uz));
@@ -2355,25 +3099,91 @@ export const escapeWater = async (
 								) ?? [1, 0]);
 				}
 				const [ex, ez] = escapeDir;
-				// GROUND FIRST. You can't dig while floating — mining is 5×(underwater) ×
-				// 5×(off-ground) = 25× slower, so a dig never finishes and the bot bobs
-				// forever. Stop pressing and let the (buoyancy-free) bot sink onto the
-				// floor so on_ground=true; then dirt breaks in ~3.75s (5×) instead of never.
-				bot.clearControlStates();
-				await sleep(600);
-				const gy = Math.floor(bot.entity?.position?.y ?? fy);
-				// Carve ONE ascending staircase step: clear the wall ahead at head + above
-				// (leaving the block ahead-below as the stair to step onto) + our own head.
-				await digAt(B(fx, gy + 1, fz));
-				await digAt(B(fx + ex, gy + 1, fz + ez));
-				await digAt(B(fx + ex, gy + 2, fz + ez));
-				logEvent(
-					"nav",
-					"pocket_dig",
-					`at ${fx},${gy},${fz} dir ${ex},${ez} og=${bot.entity?.onGround}`,
-				);
-				// Step up-and-forward onto the freshly-cut stair.
-				locked = vec3(fx + ex * 2, gy + 2, fz + ez * 2);
+				// SURFACE FIRST, then notch the bank ABOVE the water line. The old
+				// "ground first" carve dug the wall at head level from the pond floor —
+				// under water — so the notch flooded, the bot floated in it instead of
+				// standing on the step, and every dig from there ran at the 25×
+				// off-ground-underwater rate and never finished (race24 655 drowned in
+				// a 3-deep pit pond after 2 min; harness pocket3 reproduces it).
+				// Swim up (jump = +0.04/tick) while pressing into the wall, then dig the
+				// two wall blocks just above the water: they stay dry, the dig runs at
+				// the 5× off-ground rate only, and the out-of-liquid impulse + forward
+				// hops us into the notch onto dry footing.
+				bot.setControlState("forward", true);
+				bot.setControlState("jump", true);
+				await bot.lookAt(vec3(fx + ex + 0.5, fy + 1, fz + ez + 0.5), true);
+				const tSurf = Date.now();
+				let surfaced = false;
+				while (Date.now() - tSurf < 4000) {
+					const hp = bot.entity?.position;
+					if (!hp) break;
+					const head = B(Math.floor(hp.x), Math.floor(hp.y) + 1, Math.floor(hp.z));
+					if (head && !head.name.includes("water")) {
+						surfaced = true;
+						break;
+					}
+					await sleep(100);
+				}
+				if (surfaced) {
+					const sp = bot.entity.position;
+					const sx = Math.floor(sp.x);
+					const sz = Math.floor(sp.z);
+					// The top WATER block's level — not floor(y): a bot bobbing at y63.4 on
+					// water whose top block is y62 got sy=63, so the "notch" was dug at
+					// y64/65 (already air) while the bank block at y63 stayed, 30× in 5 min
+					// (race37 704, right after the fastest water fill ever).
+					let wy = Math.floor(sp.y);
+					while (wy > Math.floor(sp.y) - 3 && !(B(sx, wy, sz)?.name ?? "").includes("water")) wy--;
+					// And notch a CARDINAL wall block that is actually there: the diagonal
+					// exit direction (-1,1) pointed at an empty corner.
+					const order: [number, number][] = [
+						[ex, ez],
+						[1, 0],
+						[-1, 0],
+						[0, 1],
+						[0, -1],
+					].filter(([dx, dz]) => Math.abs(dx) + Math.abs(dz) === 1) as [number, number][];
+					const pick = order.find(([dx, dz]) => diggable(B(sx + dx, wy + 1, sz + dz))) ?? order[0]!;
+					const [nx, nz] = pick;
+					await bot.lookAt(vec3(sx + nx + 0.5, wy + 1.5, sz + nz + 0.5), true);
+					// Keep forward+jump held: bobbing at the surface against the wall keeps
+					// the head dry (5× dig, not 25×) and the two blocks in reach.
+					await digAt(B(sx + nx, wy + 1, sz + nz));
+					await digAt(B(sx + nx, wy + 2, sz + nz));
+					notchTries++;
+					logEvent(
+						"nav",
+						"bank_notch",
+						`at ${sx + nx},${wy + 1},${sz + nz} dir ${nx},${nz} wy=${wy} y=${sp.y.toFixed(1)} try=${notchTries}`,
+					);
+					locked = vec3(sx + nx * 2, wy + 1, sz + nz * 2);
+					// Still floating after 3 notches: make dry footing under us (a block in
+					// the water cell) so a real ground jump (0.42) clears the bank.
+					if (notchTries >= 3 && notchTries % 3 === 0) {
+						logEvent("nav", "bank_pillar", `notch ×${notchTries} — building footing`, bot.entity.position);
+						await pillarInWater(bot, 1);
+						bot.setControlState("jump", true);
+						await walkToXZ(bot, sx + nx + 0.5, sz + nz + 0.5, { targetDist: 0.3, maxTime: 3000 }).catch(() => {});
+						bot.setControlState("jump", false);
+					}
+				} else {
+					// Couldn't surface (capped by rock): the old floor-based carve — sink
+					// onto the floor so the dig is 5× not 25×, cut the wall at head level.
+					bot.clearControlStates();
+					const tSink = Date.now();
+					while (Date.now() - tSink < 3500 && !bot.entity?.onGround) await sleep(100);
+					const gy = Math.floor(bot.entity?.position?.y ?? fy);
+					await digAt(B(fx, gy + 1, fz));
+					await digAt(B(fx + ex, gy + 1, fz + ez));
+					await digAt(B(fx + ex, gy + 2, fz + ez));
+					logEvent(
+						"nav",
+						"pocket_dig",
+						`at ${fx},${gy},${fz} dir ${ex},${ez} og=${bot.entity?.onGround}`,
+					);
+					locked = vec3(fx + ex * 2, gy + 2, fz + ez * 2);
+				}
+				// Step up-and-forward into the freshly-cut notch.
 				lockUntil = Date.now() + 4000;
 				stuckSince = Date.now(); // give the climb a beat
 			}
@@ -2451,6 +3261,26 @@ export const dropColumnLavaFree = (
 		}
 	}
 	return true;
+};
+
+/** Is it safe to open the floor so the bot drops onto column (x, y, z)? `y` is the
+ *  block directly UNDER the one about to be dug. False when lava is near, when the
+ *  drop lands in water (race24 655 dug "ahead+below" over a cave lake, fell 10
+ *  blocks into 3-deep water and drowned), or when the fall is more than 2 blocks. */
+export const dropColumnSafe = (bot: Bot, x: number, y: number, z: number): boolean => {
+	if (!dropColumnLavaFree(bot, x, y, z, 4)) return false;
+	let gap = 0;
+	for (let dy = 0; dy < 8; dy++) {
+		const b = getBlock(bot, vec3(x, y - dy, z));
+		if (!b) return false;
+		if (b.name.includes("water") || b.name.includes("lava")) return false;
+		if (b.name === "air" || b.name === "cave_air") {
+			gap++;
+			continue;
+		}
+		break;
+	}
+	return gap <= 2;
 };
 
 /** Would breaking the block at `pos` let lava flow onto the bot? (sides + above) */
@@ -2581,12 +3411,16 @@ export const attachSafety = (bot: Bot): void => {
 		// Remember the last known-safe DRY footing to retreat toward — used by both
 		// the lava and drowning escapes. Must exclude water, or the drowning retreat
 		// target is itself underwater.
+		// !isInWaterTrap: standing on a seafloor bump with the head just above the
+		// surface passed the old test, so lastSafe became a submerged spot the
+		// escape then swam BACK to (race 592-595 ocean spawn).
 		if (
 			!escaping &&
 			!drowning &&
 			bot.entity.onGround &&
 			!lavaAround(bot) &&
-			!headUnderwater
+			!headUnderwater &&
+			!isInWaterTrap(bot)
 		) {
 			lastSafe = vec3(Math.floor(hp.x), Math.floor(hp.y), Math.floor(hp.z));
 		}
@@ -2628,6 +3462,12 @@ export const attachSafety = (bot: Bot): void => {
 			if (!inWaterSince) inWaterSince = Date.now();
 		} else {
 			inWaterSince = 0;
+			// Out of the trap entirely → the drown clock resets too. The 1.2s
+			// "brief surfacing" grace above kept submergedSince alive after a
+			// successful escape, so the guard re-fired ON DRY LAND
+			// ("inWater=0ms submerged=3045ms") and yanked the bot back into an escape.
+			submergedSince = 0;
+			lastWetTime = 0;
 		}
 
 		// Engage the water escape almost immediately: any time the bot has been in
@@ -2638,7 +3478,10 @@ export const attachSafety = (bot: Bot): void => {
 		// gives up (kept well under the ~30s thrash-kick window).
 		const drownStuck = submergedSince > 0 && Date.now() - submergedSince > 1500;
 		const inWaterMs = inWaterSince ? Date.now() - inWaterSince : 0;
-		const surfaceStuck = inWaterMs > 1500;
+		// Head-up in water: only when the wade-tolerant trigger says so (bounded
+		// crossing / pinned at a bank). A flat 1.5s fired on every foot-deep puddle
+		// the pathfinder crossed and yanked the bot off its path (race23 650).
+		const surfaceStuck = inWaterMs > 1500 && needsWaterEscape(bot);
 		const finalBackup = inWaterMs > 15000;
 		if (!escaping && !drowning && (drownStuck || surfaceStuck || finalBackup)) {
 			drowning = true;
@@ -2654,9 +3497,13 @@ export const attachSafety = (bot: Bot): void => {
 			} catch {
 				/* pathfinder may be idle */
 			}
-			escapeWater(bot, lastSafe, { final: finalBackup }).finally(() => {
-				drowning = false;
-			});
+			// .catch: the shared escape promise rejects if the step that started it is
+			// preempted (taskScope) — must not surface as an unhandled rejection.
+			escapeWater(bot, lastSafe, { final: finalBackup })
+				.catch(() => {})
+				.finally(() => {
+					drowning = false;
+				});
 		}
 	}, 100);
 	bot.on("end", () => clearInterval(guard));
@@ -2675,15 +3522,135 @@ export const attachSafety = (bot: Bot): void => {
  * await exploreRandom(bot, 30);
  * ```
  */
+/**
+ * Force a few blocks of progress along (dx,dz) when the pathfinder returned
+ * without moving: open leaves at feet/head level for two cells ahead (a bot that
+ * pillared up through a canopy stands with leaves at head height on every side —
+ * race43 728, race52 765 sat through 9 explore legs without moving) and then
+ * sprint-jump the bearing so a 1-high lip can't pin it either.
+ */
+export const nudgeThrough = async (bot: Bot, dx: number, dz: number, ms = 3000): Promise<void> => {
+	const here = bot.entity.position;
+	const fx = Math.floor(here.x);
+	const fy = Math.floor(here.y);
+	const fz = Math.floor(here.z);
+	// Soft blocks only: a dirt/grass lip at the rim of a dug pit pins the bot just
+	// like leaves do (race53 769: three nudges at a mountain-top pit moved ~1 block
+	// each because the wall ahead was dirt), and these dig in well under a second
+	// by hand. Stone is left alone — that is the pathfinder's job.
+	const soft = /leaves|dirt|grass_block|podzol|mycelium|sand|gravel|snow|moss|clay/;
+	for (let k = 0; k <= 2; k++) {
+		for (const dy of [0, 1, 2]) {
+			if (k === 0 && dy < 2) continue;
+			const lb = bot.blockAt(vec3(fx + dx * k, fy + dy, fz + dz * k));
+			if (lb && soft.test(lb.name)) {
+				try {
+					await bot.dig(lb as never, true);
+				} catch {}
+			}
+		}
+	}
+	await bot.lookAt(vec3(here.x + dx * 10, here.y, here.z + dz * 10));
+	bot.setControlState("forward", true);
+	bot.setControlState("sprint", true);
+	bot.setControlState("jump", true);
+	await sleep(ms);
+	bot.setControlState("forward", false);
+	bot.setControlState("sprint", false);
+	bot.setControlState("jump", false);
+};
+
 export const exploreRandom = async (bot: Bot, dist = 30): Promise<void> => {
 	if (!bot.entity?.position) return;
+	// From a boxed cell A* is exhaustive and fails; get out of the hole first.
+	await unboxToRim(bot).catch(() => false);
 	const angle = Math.random() * Math.PI * 2;
+	const p0 = bot.entity.position;
+	const before = vec3(p0.x, p0.y, p0.z);
 	const target = vec3(
-		bot.entity.position.x + Math.cos(angle) * dist,
-		bot.entity.position.y,
-		bot.entity.position.z + Math.sin(angle) * dist,
+		p0.x + Math.cos(angle) * dist,
+		p0.y,
+		p0.z + Math.sin(angle) * dist,
 	);
 	await goTo(bot, target, { range: 5 });
+	// Didn't move: the pathfinder gave up from this cell (leaves at head height,
+	// a lip). Punch through toward the target rather than burn the next leg too.
+	if (distance(bot.entity.position, before) < 3 && !bot.entity.isInWater) {
+		const dx = Math.sign(Math.round(Math.cos(angle)));
+		const dz = Math.sign(Math.round(Math.sin(angle)));
+		logEvent("nav", "explore_stuck", `moved <3 — nudge ${dx},${dz}`);
+		await nudgeThrough(bot, dx || 1, dz);
+	}
+};
+
+/**
+ * Other race bots (player entities that are not us) within `radius` blocks
+ * horizontally. Race bots are dropped ~24 blocks apart but converge on the same
+ * trees/shore, then each digs its shaft where it stands — race46 had all four
+ * shafts within 5 blocks at y24: 741 branch-mined straight through 743's furnace
+ * (8 raw_iron inside) and pocketed the drops, so 743 "smelted" +0 and re-mined.
+ */
+export const otherBotsNear = (bot: Bot, radius: number): Vec3[] => {
+	const me = bot.entity?.position;
+	if (!me) return [];
+	const out: Vec3[] = [];
+	// bot.players is keyed by the tab-list username and linked to the entity on
+	// spawn; entity.username itself is null when the entity spawned before the
+	// player_info packet, so don't rely on it.
+	// bot.players is EMPTY on this server (race50: 'players=0 linked=0' on every
+	// descend_start), so go by the entity list: every player entity that is not us.
+	const seen = new Set<number>();
+	for (const pl of Object.values(bot.players)) {
+		if (!pl || pl.username === bot.username) continue;
+		const e = pl.entity;
+		if (!e || e === bot.entity) continue;
+		seen.add(e.id);
+		const p = e.position;
+		if (p && Math.hypot(p.x - me.x, p.z - me.z) <= radius) out.push(p);
+	}
+	for (const e of Object.values(bot.entities)) {
+		if (!e || e.type !== "player" || e === bot.entity || e.id === bot.entity?.id || seen.has(e.id)) continue;
+		const p = e.position;
+		if (p && Math.hypot(p.x - me.x, p.z - me.z) <= radius) out.push(p);
+	}
+	return out;
+};
+
+/**
+ * Before sinking a mine shaft: if another bot is within `minDist` blocks, walk
+ * `moveDist` blocks straight away from the group's centroid (surface walk) so the
+ * shafts, branch tunnels, furnaces and tables don't overlap. Best effort — a
+ * failed walk still lets the caller dig where it stands.
+ */
+export const spreadFromOtherBots = async (
+	bot: Bot,
+	minDist = 14,
+	moveDist = 22,
+): Promise<boolean> => {
+	const me = bot.entity?.position;
+	if (!me) return false;
+	const near = otherBotsNear(bot, minDist);
+	if (near.length === 0) return false;
+	const cx = near.reduce((a, p) => a + p.x, 0) / near.length;
+	const cz = near.reduce((a, p) => a + p.z, 0) / near.length;
+	let dx = me.x - cx;
+	let dz = me.z - cz;
+	let len = Math.hypot(dx, dz);
+	if (len < 0.5) {
+		const ang = Math.random() * Math.PI * 2;
+		dx = Math.cos(ang);
+		dz = Math.sin(ang);
+		len = 1;
+	}
+	const tx = Math.floor(me.x + (dx / len) * moveDist);
+	const tz = Math.floor(me.z + (dz / len) * moveDist);
+	const ty = surfaceYAt(bot, tx, tz);
+	logEvent("nav", "spread", `${near.length} bot(s) within ${minDist} — moving to ${tx},${ty},${tz}`);
+	const ok = await goTo(bot, vec3(tx + 0.5, ty, tz + 0.5), { range: 4, timeout: 25000 }).catch(() => false);
+	const after = bot.entity.position;
+	const moved = Math.hypot(after.x - me.x, after.z - me.z);
+	logEvent("nav", "spread_done", `ok=${ok} moved=${moved.toFixed(1)} still_near=${otherBotsNear(bot, minDist).length}`);
+	return moved >= minDist / 2;
 };
 
 /**
@@ -2701,4 +3668,11 @@ export const searchForEntities = async (
 	bot.setControlState("forward", true);
 	await sleep(duration);
 	bot.setControlState("forward", false);
+};
+
+/** Mark a promise handled so a late rejection (after a Promise.race timeout won) can't
+ *  crash the process (race59 793 died: unhandled "Place block timeout" from placing.ts). */
+const handled = <T>(p: Promise<T>): Promise<T> => {
+	p.catch(() => {});
+	return p;
 };

@@ -454,6 +454,7 @@ export {
 export {
 	closeWebViewer,
 	createWebViewer,
+	forwardBotToRelay,
 	type WebViewer,
 	type WebViewerOptions,
 } from "./web/index.ts";
@@ -526,6 +527,7 @@ export {
 	type SpiralIterator2d,
 	saveAll,
 	saveColumn,
+	raycast,
 	setColumn,
 	startAutoSave,
 	stopAutoSave,

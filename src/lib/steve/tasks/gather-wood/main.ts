@@ -5,14 +5,18 @@
 import type { Bot } from "typecraft";
 import { createGoalNear, distance, offset, type Vec3, vec3 } from "typecraft";
 import {
+	digStaircaseUp,
 	escapeWater,
 	exploreRandom,
+	walkToXZ,
 	getBlock,
 	getMineEntry,
 	getPathfinder,
 	goTo,
 	returnToSurface,
 	sleep,
+	surfaceYAt,
+	throwIfPreempted,
 } from "../../lib/bot-utils.ts";
 import { logEvent } from "../../lib/logger.ts";
 import type { StepResult } from "../../types.ts";
@@ -44,6 +48,23 @@ const LEAF_TYPES = [
 ];
 
 const isLeafName = (name: string) => LEAF_TYPES.includes(name);
+
+// Trees whose walk put the bot in water, per bot, ACROSS calls. The in-call
+// `unreachable` set is rebuilt every time the step starts, and a water preempt
+// (escape_water) ends the call — so race48 751 re-picked the same oak across a
+// pond 34 times in 4 min (walk in → escape → same shore → walk in). Expires.
+const waterTrees = new WeakMap<Bot, Map<string, number>>();
+const WATER_TREE_TTL = 6 * 60_000;
+const waterTreeMap = (bot: Bot): Map<string, number> => {
+	let m = waterTrees.get(bot);
+	if (!m) {
+		m = new Map();
+		waterTrees.set(bot, m);
+	}
+	const now = Date.now();
+	for (const [k, exp] of m) if (exp < now) m.delete(k);
+	return m;
+};
 
 export const gatherWood = async (
 	bot: Bot,
@@ -124,6 +145,70 @@ export const gatherWood = async (
 	const unreachable = new Set<string>();
 	// Key by X,Z only — blacklist entire tree column, not individual blocks
 	const posKey = (p: Vec3) => `${Math.floor(p.x)},${Math.floor(p.z)}`;
+	const wetTrees = waterTreeMap(bot);
+	// Straight line from the bot to the tree crosses open water (the top block of
+	// the column, within ±6 of our level, is water) — a pond between us and it.
+	const lineCrossesWater = (to: Vec3): boolean => {
+		const from = botPos();
+		const dx = to.x - from.x;
+		const dz = to.z - from.z;
+		const len = Math.hypot(dx, dz);
+		if (len < 3) return false;
+		const fy = Math.floor(from.y);
+		for (let d = 2; d < len - 1; d += 2) {
+			const x = Math.floor(from.x + (dx / len) * d);
+			const z = Math.floor(from.z + (dz / len) * d);
+			for (let y = fy + 6; y >= fy - 6; y--) {
+				const n = getBlock(bot, vec3(x, y, z))?.name;
+				if (!n || n === "air" || n === "cave_air" || n.includes("leaves") || n.endsWith("_log")) continue;
+				if (n.includes("water")) return true;
+				break;
+			}
+		}
+		return false;
+	};
+
+	// A tree whose trunk stands IN water (base block or its 4 neighbours are water)
+	// can only be chopped from the pond — the bot walks in, the drown guard preempts,
+	// it escapes, walks back in (race 582: 5 preempts on one shoreline oak). Skip it.
+	const trunkInWater = (p: Vec3): boolean => {
+		let y = Math.floor(p.y);
+		const x = Math.floor(p.x);
+		const z = Math.floor(p.z);
+		// Walk down the log column to the trunk base.
+		while (y > 0 && isLogName(getBlock(bot, vec3(x, y - 1, z))?.name ?? "")) y--;
+		const cells: [number, number, number][] = [
+			[x, y - 1, z],
+			[x + 1, y, z],
+			[x - 1, y, z],
+			[x, y, z + 1],
+			[x, y, z - 1],
+			[x + 1, y - 1, z],
+			[x - 1, y - 1, z],
+			[x, y - 1, z + 1],
+			[x, y - 1, z - 1],
+		];
+		return cells.some(([cx, cy, cz]) =>
+			getBlock(bot, vec3(cx, cy, cz))?.name.includes("water"),
+		);
+	};
+
+	// How far a log sits above the ground under it (logs and leaves don't count as
+	// ground). Standing on that ground the bot can dig up to ~6 blocks up its own
+	// column; anything higher needs pillaring, which the wood stage can't do.
+	const logHeightAboveGround = (p: Vec3): number => {
+		const x = Math.floor(p.x);
+		const z = Math.floor(p.z);
+		const top = Math.floor(p.y);
+		for (let y = top - 1; y >= top - 12; y--) {
+			const b = getBlock(bot, vec3(x, y, z));
+			if (!b) return 99;
+			const n = b.name;
+			if (n === "air" || n === "cave_air" || isLogName(n) || isLeafName(n)) continue;
+			return top - y;
+		}
+		return 99;
+	};
 
 	// Find the closest reachable log block
 	const findClosestLog = (): { pos: Vec3; name: string } | null => {
@@ -142,9 +227,30 @@ export const gatherWood = async (
 			} as never);
 			if (positions.length === 0) continue;
 
-			const reachable = positions
+			const candidates = positions
 				.filter((p) => !unreachable.has(posKey(p)))
-				.sort((a, b) => distance(botPos(), a) - distance(botPos(), b));
+				.filter((p) => !wetTrees.has(posKey(p)))
+				.filter((p) => !trunkInWater(p))
+				.filter((p) => logHeightAboveGround(p) <= 6)
+				// A nearby log BELOW our feet is a trunk base in a dip: its drop lands
+				// a level down where the pickup box (feet-0.5) never reaches, and the
+				// bot digs the whole trunk from the rim collecting nothing (race57 786:
+				// 5 misses in a row standing still at y70 over logs at y69). Leave it;
+				// the logs at and above feet level drop onto the stub at our level.
+				.filter((p) => !(p.y < Math.floor(botPos().y) && Math.hypot(p.x - botPos().x, p.z - botPos().z) <= 5));
+			// Prefer trees we can reach without swimming; only if EVERY tree is across
+			// water do we take the swim (a real player would too).
+			const dry = candidates.filter((p) => !lineCrossesWater(p));
+			const reachable = (dry.length ? dry : candidates)
+				// Nearest first, but a log high in a canopy costs extra: acacia/jungle
+				// branch logs 5+ blocks up were picked by raw 3D distance, the walk-to
+				// failed (nothing to stand on), and the bot burned 11s + a blacklist per
+				// log before hopping away (race 586: 3 min on one savanna tree).
+				.sort(
+					(a, b) =>
+						distance(botPos(), a) + logHeightAboveGround(a) * 2 -
+						(distance(botPos(), b) + logHeightAboveGround(b) * 2),
+				);
 
 			for (const pos of reachable) {
 				const block = getBlock(bot, pos);
@@ -194,7 +300,9 @@ export const gatherWood = async (
 		const start = Date.now();
 		let lastDist = dist;
 		let stuckTicks = 0;
+		let climbed = false;
 
+		try {
 		while (Date.now() - start < timeout) {
 			await sleep(250);
 			if (!bot.entity?.position) {
@@ -211,6 +319,8 @@ export const gatherWood = async (
 			// Water escape
 			if (bot.entity.isInWater) {
 				pf.stop();
+				wetTrees.set(posKey(target), Date.now() + WATER_TREE_TTL);
+				logEvent("wood", "wet_tree", `walked into water toward ${posKey(target)} — blacklisted`, botPos());
 				await escapeWater(bot);
 				pf.setGoal(goal);
 				stuckTicks = 0;
@@ -226,13 +336,26 @@ export const gatherWood = async (
 			}
 			lastDist = currentDist;
 
-			if (stuckTicks >= 10) {
+			if (stuckTicks >= 16) {
 				logEvent(
 					"wood",
 					"nav_stuck",
 					`dist=${currentDist.toFixed(1)} after ${stuckTicks} ticks`,
 				);
 				pf.stop();
+				// A tree on a ledge above us (mountain spawns): the pathfinder can't
+				// scaffold up, so race38 711 blacklisted every tree within 10 blocks,
+				// hopped away and came back, for 6 minutes. Dig/pillar up to the
+				// tree's level once, then walk again.
+				if (!climbed && target.y - botPos().y >= 2) {
+					climbed = true;
+					logEvent("wood", "climb_to_tree", `to y=${Math.floor(target.y) - 1} from y=${Math.floor(botPos().y)}`, botPos());
+					await digStaircaseUp(bot, Math.floor(target.y) - 1, Date.now() + 25000);
+					pf.setGoal(goal);
+					stuckTicks = 0;
+					lastDist = distance(botPos(), target);
+					continue;
+				}
 				// Raw walk fallback
 				await bot.lookAt(target);
 				bot.setControlState("forward", true);
@@ -251,6 +374,13 @@ export const gatherWood = async (
 
 		pf.stop();
 		return distance(botPos(), target) <= 5;
+		} finally {
+			// escape_water preempts unwind through here while we are IN the pond.
+			if (bot.entity?.isInWater && !wetTrees.has(posKey(target))) {
+				wetTrees.set(posKey(target), Date.now() + WATER_TREE_TTL);
+				logEvent("wood", "wet_tree", `preempted in water toward ${posKey(target)} — blacklisted`, botPos());
+			}
+		}
 	};
 
 	// Mine a single block
@@ -274,14 +404,31 @@ export const gatherWood = async (
 		const block = getBlock(bot, pos);
 		if (!block || !isLogName(block.name)) return true; // already gone
 
+		// Dig from the GROUND. The walk-closer above jumps into jungle vines/leaves and
+		// the bot hangs there airborne; typecraft's dig then carries the 5× off-ground
+		// penalty (3s → 15s per log), the 5s timeout fires with the log still standing,
+		// and the same log is re-picked forever (race31 682: 0/5 logs in 12 min, one
+		// jungle_log "dig timeout" every 7s).
+		bot.setControlState("forward", false);
+		bot.setControlState("jump", false);
+		for (let w = 0; w < 30 && !bot.entity.onGround; w++) await sleep(50);
+		if (!bot.entity.onGround) {
+			bot.setControlState("sneak", true);
+			for (let w = 0; w < 20 && !bot.entity.onGround; w++) await sleep(50);
+			bot.setControlState("sneak", false);
+		}
+		dist = distance(botPos(), blockCenter);
+		if (dist > 4.8) return false;
+
 		await bot.lookAt(blockCenter);
 
 		logEvent("wood", "dig_start", `${block.name} dist=${dist.toFixed(1)}`, pos);
 		const logsBefore = countLogs();
+		throwIfPreempted();
 
 		try {
 			await Promise.race([
-				bot.dig(block, true),
+				handled(bot.dig(block, true)),
 				new Promise<void>((_, reject) =>
 					setTimeout(() => reject(new Error("dig timeout")), 5000),
 				),
@@ -291,18 +438,56 @@ export const gatherWood = async (
 			const msg = String(e instanceof Error ? e.message : e);
 			logEvent("wood", "dig_error", msg, pos);
 			bot.stopDigging();
-			return msg === "dig timeout"; // timeout = block probably broke, continue
+			if (msg !== "dig timeout") return false;
+			// Timeout with the log STILL there = the server refused/never finished the
+			// dig (off-ground penalty, out of reach) — report failure so the caller
+			// blacklists this log instead of re-picking it. Only a vanished block counts.
+			await sleep(300);
+			const still = getBlock(bot, pos);
+			return !still || !isLogName(still.name);
 		}
 
 		// Navigate to dropped item for pickup, then stand on the stump to vacuum
 		// logs that fell to the ground (upper-trunk drops often land below).
+		// Walk STRAIGHT at the drop / the stump instead of pathfinding: the drop
+		// lies at the trunk base, often a level below a bot that dug from a
+		// hillside 2-3 blocks away, and goTo returned without moving — race56
+		// logged 26 pickup_miss across 4 bots (~18s each) with the bot standing
+		// still on the same grass block the whole time.
 		await bot.collectDrops(6, 3000, async (p) => {
-			await goTo(bot, p, { range: 1.4, timeout: 3000 });
+			await walkToXZ(bot, p.x, p.z, { targetDist: 0.5, maxTime: 2500 });
 		});
-		await goTo(bot, pos, { range: 1, timeout: 3000 }).catch(() => {});
-		await bot.collectDrops(8, 2500, async (p) => {
-			await goTo(bot, p, { range: 1.2, timeout: 2500 });
-		});
+		if (countLogs() === logsBefore) {
+			// Breadcrumb: race58 788 missed 6 drops from 2 blocks away without ever
+			// moving — was the item entity even tracked, and did the walk move us?
+			const itemType = bot.registry?.entitiesByName.get("item")?.id;
+			const itemEnts = Object.values(bot.entities).filter((e) => itemType != null && e.entityType === itemType && distance(e.position, botPos()) <= 8);
+			const items = itemEnts.length;
+			const b0 = botPos();
+			const walked = await walkToXZ(bot, pos.x + 0.5, pos.z + 0.5, { targetDist: 0.6, maxTime: 2500 });
+			const b1 = botPos();
+			const near = itemEnts.map((e) => e.position).sort((a, b) => distance(a, b1) - distance(b, b1))[0];
+			logEvent("wood", "pickup_walk", `items=${items} walked=${walked} moved=${distance(b0, b1).toFixed(1)} sneak=${bot.controlState.sneak} to ${pos.x},${pos.y},${pos.z} from y${Math.floor(b0.y)}${near ? ` item ${near.x.toFixed(1)},${near.y.toFixed(1)},${near.z.toFixed(1)} dy=${(near.y - b1.y).toFixed(1)}` : ""}`, b1);
+			// The drop is sitting ON THE CANOPY above us (race60: every miss had the
+			// item 1-3 blocks above the feet, walked=false — the walk was never the
+			// problem). The pickup box only reaches ~0.5 above the head, so break the
+			// leaves/log under the item and let it fall to the ground.
+			for (const e of itemEnts) {
+				const ip = e.position;
+				if (ip.y - botPos().y < 1.5 || Math.hypot(ip.x - botPos().x, ip.z - botPos().z) > 4) continue;
+				const under = getBlock(bot, vec3(Math.floor(ip.x), Math.floor(ip.y) - 1, Math.floor(ip.z)));
+				if (!under || !/leaves|_log|_wood/.test(under.name)) continue;
+				logEvent("wood", "pickup_drop_canopy", `item ${ip.x.toFixed(1)},${ip.y.toFixed(1)},${ip.z.toFixed(1)} on ${under.name}`, ip);
+				try {
+					await bot.lookAt(offset(under.position, 0.5, 0.5, 0.5));
+					await Promise.race([handled(bot.dig(under, true)), sleep(4000)]);
+				} catch {}
+				await sleep(700);
+			}
+			await bot.collectDrops(8, 2500, async (p) => {
+				await walkToXZ(bot, p.x, p.z, { targetDist: 0.5, maxTime: 2000 });
+			});
+		}
 
 		const logsNow = countLogs();
 		if (logsNow > logsBefore) {
@@ -329,16 +514,64 @@ export const gatherWood = async (
 	// returnToSurface climbs to the LOCAL surface when the entry is gone; pillarUp
 	// falls back to a sea-level-ish target.
 	const entry = getMineEntry(bot);
-	const surfaceY = entry ? entry.y : 70;
-	if (botPos().y < surfaceY - 8 && !findClosestLog()) {
-		let reached = await returnToSurface(bot);
+	const p0 = botPos();
+	const localSurface = surfaceYAt(bot, Math.floor(p0.x), Math.floor(p0.z));
+	const surfaceY = entry ? entry.y : Math.max(localSurface, 64);
+	// Trigger on being UNDERGROUND, full stop. The old gate also required "no tree
+	// in sight" — but findClosestLog sees logs through rock (exposed:false), so a
+	// bot in its own 5-deep stone hole (y58, trees at y63) or a mine at y28 "found"
+	// a tree 40 blocks away, tried to walk to it, nav_stuck → blacklist → relocate
+	// for the whole step (race 616/617/619: 3 of 4 bots parked on Gather Wood).
+	// "Underground" is geometric, not "below the column-scan surface": a jungle
+	// canopy put that surface 8 blocks over a bot standing on grass (race 620/621
+	// looped "Returning to surface (y=76 → 84)"). Either boxed in rock on all four
+	// sides at feet+head (a 1-wide hole / shaft), or well below the surface with a
+	// rock ceiling overhead (a mine).
+	const earth = /stone|dirt|grass_block|gravel|sand|deepslate|andesite|diorite|granite|tuff|clay|terracotta|_ore|obsidian|podzol|mycelium|calcite|dripstone|moss_block|mud|packed_mud/;
+	const isEarth = (dx: number, dy: number, dz: number): boolean =>
+		earth.test(getBlock(bot, vec3(Math.floor(p0.x) + dx, Math.floor(p0.y) + dy, Math.floor(p0.z) + dz))?.name ?? "");
+	const boxed = [[1, 0], [-1, 0], [0, 1], [0, -1]].every(([dx, dz]) => isEarth(dx!, 0, dz!) && isEarth(dx!, 1, dz!));
+	// "Ceiling" = ANY earth between our head and the column's surface. A fixed
+	// 8-block look-up missed a tall cave (race23 650: y35, surface y65, cave roof
+	// 12 up) and let the bot chase surface trees from the cave floor for 8 min.
+	// A canopy column has only leaves/logs/air above the grass, so it still fails.
+	const span = Math.min(64, Math.max(0, localSurface - Math.floor(p0.y)));
+	let ceiling = false;
+	for (let dy = 2; dy <= span && !ceiling; dy++) ceiling = isEarth(0, dy, 0);
+	const deep = localSurface - p0.y >= 6 && ceiling;
+	if (boxed || deep) {
+		// The pit's own column tops out at our feet, so its "surface" IS our y; the
+		// rim is the neighbours' surface. And never hand a sealed pit to the
+		// pathfinder: A* from a boxed cell is an exhaustive synchronous search that
+		// froze the process ~20s and got the bot kicked (race 635, 3× in a row).
+		const rim = Math.max(
+			localSurface,
+			...[[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dz]) =>
+				surfaceYAt(bot, Math.floor(p0.x) + dx!, Math.floor(p0.z) + dz!),
+			),
+		);
+		logEvent("wood", "underground", `boxed=${boxed} deep=${deep} y=${Math.floor(p0.y)} surface=${localSurface} rim=${rim}`);
+		let reached = false;
+		if (boxed) {
+			const { pillarUp } = await import("../portal/cast.ts");
+			reached = await pillarUp(bot, rim);
+			bot.setControlState("sneak", false);
+		} else {
+			reached = await returnToSurface(bot);
+		}
 		if (!reached) {
 			// The pathfinder can't climb the staircase back up (deep mines defeat
 			// it) — so dig/pillar straight up to the surface instead. Digging the
 			// ceiling yields the cobble it re-places, so it's self-sustaining.
 			const { pillarUp } = await import("../portal/cast.ts");
-			reached = await pillarUp(bot, surfaceY - 2);
+			reached = await pillarUp(bot, rim); // straight up THIS column to the rim
 			bot.setControlState("sneak", false); // pillarUp leaves it on for the cast
+		}
+		if (!reached) {
+			// Nothing to pillar with (cave spawn, no tools): carve stairs up the rock.
+			const got = await digStaircaseUp(bot, rim, Date.now() + 120000);
+			reached = got >= rim - 1;
+			logEvent("wood", "climb_out_stairs", `reached y=${got} (target ${rim})`, botPos());
 		}
 		if (!reached) {
 			return {
@@ -367,6 +600,7 @@ export const gatherWood = async (
 	// unreachable, so the bot re-blacklists them and spins (race105/106/110: relocate_stuck
 	// fires but 30 blocks isn't enough to clear the pocket). Escalate 60→90→120→…→150.
 	let relocateCount = 0;
+	let climbOuts = 0; // pillar-out-of-a-pit attempts this step
 	let exploreAngle = Math.random() * Math.PI * 2;
 
 	while (
@@ -375,6 +609,7 @@ export const gatherWood = async (
 		blocksDug < targetCount * 3
 	) {
 		attempts++;
+		throwIfPreempted(); // displaced by a preempt/timeout/death → unwind
 
 		const target = findClosestLog();
 		if (!target) {
@@ -474,6 +709,42 @@ export const gatherWood = async (
 
 		const reached = await navigateTo(target.pos);
 		if (!reached) {
+			// Can't reach a tree AND we're below the local surface → we're in a pit
+			// (the dig-down hole opening into a side tunnel defeats the geometric
+			// "boxed" test: race 624 blacklisted tree after tree from y62 with the
+			// surface at y66). Pillar straight up before blaming the tree.
+			const here = botPos();
+			const hx = Math.floor(here.x);
+			const hz = Math.floor(here.z);
+			// Rim = highest surface of this column and its 4 neighbours (in a pit the
+			// own column tops out at our feet, which would read as "on the surface").
+			const surf = Math.max(
+				...[[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dz]) => surfaceYAt(bot, hx + dx!, hz + dz!)),
+			);
+			if (here.y < surf - 1 && climbOuts < 3) {
+				climbOuts++;
+				logEvent("wood", "climb_out", `nav_stuck at y=${Math.floor(here.y)}, surface y=${surf}`, here);
+				const { pillarUp } = await import("../portal/cast.ts");
+				let up = await pillarUp(bot, surf);
+				bot.setControlState("sneak", false);
+				// No blocks to pillar with (race 643 came out of its mine with 8 ingots
+				// and no cobble, into a valley 10 below the trees): dig a staircase up
+				// the slope instead — it yields the cobble as it goes.
+				if (!up) {
+					// 90s: bare hands take ~7.5s per stone block, ~3 blocks a level.
+					const got = await digStaircaseUp(bot, surf, Date.now() + 90000);
+					up = got >= surf - 1;
+					logEvent("wood", "climb_out_stairs", `reached y=${got} (target ${surf})`, botPos());
+					// The stair climb digs dirt for filler as it goes; if it still failed,
+					// the proven pillar (cast.ts) now has blocks to work with.
+					if (!up) {
+						up = await pillarUp(bot, surf);
+						bot.setControlState("sneak", false);
+						logEvent("wood", "climb_out_pillar2", `y=${Math.floor(botPos().y)} (target ${surf}) ok=${up}`, botPos());
+					}
+				}
+				if (up) continue; // try the same tree from the surface
+			}
 			unreachable.add(posKey(target.pos));
 			consecutiveFails++;
 			logEvent(
@@ -518,4 +789,11 @@ export const gatherWood = async (
 		success: logs >= targetCount || progressed,
 		message: `Gathered ${logs}/${targetCount} logs`,
 	};
+};
+
+/** Mark a promise handled so a late rejection (after a Promise.race timeout won) can't
+ *  crash the process (race59 793 died: unhandled "Place block timeout" from placing.ts). */
+const handled = <T>(p: Promise<T>): Promise<T> => {
+	p.catch(() => {});
+	return p;
 };

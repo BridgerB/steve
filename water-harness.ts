@@ -75,11 +75,53 @@ const arenas: Record<string, Arena> = {
 		],
 		dest: [BX - 3, 62, BZ],
 	},
+	// race24 655 killer: a small 3-deep pond in a flat field (water y60-62, grass
+	// rim to stand on at y63). Bot sinks to the floor and drowns; the 0.04 swim-up
+	// reached the surface once but it fell back in and never grabbed the bank.
+	pond3: {
+		build: [
+			`fill ${BX - 10} 55 ${BZ - 10} ${BX + 10} 62 ${BZ + 10} dirt`,
+			`fill ${BX - 1} 60 ${BZ - 1} ${BX + 1} 62 ${BZ + 1} water`,
+		],
+		dest: [BX, 60, BZ],
+	},
+	// race24 655's actual killer: a 3-deep pond at the bottom of a PIT — the
+	// walls rise 3 above the water, so the out-of-liquid impulse can't fire (the
+	// forward-shifted hitbox hits the wall) and the bot bobs at the surface until
+	// it drowns. Must carve a stair up the wall from the pond FLOOR.
+	pocket3: {
+		build: [
+			`fill ${BX - 4} 58 ${BZ - 4} ${BX + 4} 65 ${BZ + 4} dirt`,
+			`fill ${BX - 1} 60 ${BZ - 1} ${BX + 1} 65 ${BZ + 1} air`,
+			`fill ${BX - 1} 60 ${BZ - 1} ${BX + 1} 62 ${BZ + 1} water`,
+		],
+		dest: [BX, 60, BZ],
+	},
+	// race39 715's killer: a 7-deep pond whose bank LEDGE overhangs the water. The
+	// bot scooped from the ledge, fell in under it, pillared up to the ledge's
+	// underside, and drowned there. Water BX-3..BX+3 y56-62; a 3-thick dirt ledge
+	// covers columns BX-3..BX+1 at y63-65; BX+2..BX+3 stay open sky. Bot starts
+	// under the ledge. PASS = dig up through it or swim to the open side and climb.
+	overhang: {
+		build: [
+			`fill ${BX - 6} 50 ${BZ - 6} ${BX + 6} 66 ${BZ + 6} dirt`,
+			`fill ${BX - 3} 56 ${BZ - 3} ${BX + 3} 66 ${BZ + 3} air`,
+			`fill ${BX - 3} 56 ${BZ - 3} ${BX + 3} 62 ${BZ + 3} water`,
+			`fill ${BX - 3} 63 ${BZ - 3} ${BX + 1} 65 ${BZ + 3} dirt`,
+		],
+		dest: [BX - 1, 57, BZ],
+	},
+	// A REAL spot in the live world where a race bot drowned: no build, just tp
+	// there and run the escape. SITE="x y z" (feet position in the water).
+	site: {
+		build: [],
+		dest: (process.env.SITE ?? "0 60 0").split(/\s+/).map(Number) as [number, number, number],
+	},
 };
 
 const arena = arenas[MODE];
 if (!arena) {
-	console.log(`unknown mode ${MODE} — use tunnel|capped|deep|pocket`);
+	console.log(`unknown mode ${MODE} — use tunnel|capped|deep|pocket|pocket3|lakeedge|pond3|overhang|site`);
 	process.exit(1);
 }
 
@@ -102,17 +144,30 @@ bot.once("spawn", async () => {
 	await bot.waitForChunksToLoad();
 	await sleep(500);
 
-	// Force-load the arena so /fill applies even though no player is near it.
-	await cmd(`forceload add ${BX} ${BZ}`);
-	// Clear the whole arena volume to air FIRST so leftovers from a previous mode/run
-	// (dug staircases, another mode's stone tower) never pollute the test.
-	await cmd(`fill ${BX - 14} 50 ${BZ - 12} ${BX + 18} 95 ${BZ + 12} air`);
-	await sleep(400);
-	for (const c of arena.build) await cmd(c);
-	await sleep(1500);
+	if (arena.build.length > 0) {
+		// Force-load the arena so /fill applies even though no player is near it.
+		await cmd(`forceload add ${BX} ${BZ}`);
+		// Clear the whole arena volume to air FIRST so leftovers from a previous
+		// mode/run (dug staircases, another mode's stone tower) never pollute the
+		// test. Two slabs: one fill of the whole volume is 37950 blocks, over
+		// /fill's 32768 cap, so it silently did nothing and the previous mode's
+		// stone stayed put (pond3 ran under the deep mode's stone ceiling at y63).
+		await cmd(`fill ${BX - 14} 50 ${BZ - 12} ${BX + 18} 79 ${BZ + 12} air`);
+		await cmd(`fill ${BX - 14} 80 ${BZ - 12} ${BX + 18} 95 ${BZ + 12} air`);
+		await sleep(400);
+		for (const c of arena.build) await cmd(c);
+		await sleep(1500);
+	}
 
 	// Teleport in and WAIT for the bot to actually arrive submerged (RCON tp is
 	// async from the bot's POV — poll its position rather than trust a fixed sleep).
+	// A race bot at the water stage carries cobble and a stone pick; the capped
+	// escape pillars up on placed blocks and digs the cap, so give the same kit.
+	await cmd("clear InlineBot");
+	await cmd("effect give InlineBot minecraft:instant_health 1 10 true"); // full heal between runs
+	await cmd("give InlineBot cobblestone 64");
+	await cmd("give InlineBot stone_pickaxe 1");
+	await sleep(400);
 	const [dx, dy, dz] = arena.dest;
 	let arrived = false;
 	for (let i = 0; i < 20; i++) {
@@ -139,11 +194,25 @@ bot.once("spawn", async () => {
 
 	const retreat = arena.retreat ? vec3(...arena.retreat) : undefined;
 	const t0 = Date.now();
+	// Trajectory trace (every 4 physics ticks): the escape's own event log has no
+	// per-tick positions, and "did it rise / what was it pressing" is the question.
+	let tick = 0;
+	bot.on("physicsTick", () => {
+		if (++tick % 4 !== 0) return;
+		const e = bot.entity;
+		const c = bot.controlState as Record<string, boolean>;
+		const v = e.velocity;
+		console.log(
+			`t=${((Date.now() - t0) / 1000).toFixed(2)} x=${e.position.x.toFixed(2)} y=${e.position.y.toFixed(2)} z=${e.position.z.toFixed(2)} w=${e.isInWater ? 1 : 0} g=${e.onGround ? 1 : 0} col=${e.isCollidedHorizontally ? 1 : 0} vy=${v.y.toFixed(3)} fwd=${c.forward ? 1 : 0} jmp=${c.jump ? 1 : 0} yaw=${e.yaw.toFixed(2)}`,
+		);
+	});
 	const ok = await escapeWater(bot, retreat);
 	const p = bot.entity.position;
 	const dry = !bot.entity.isInWater;
+	// A death respawns the bot at world spawn, on dry land — that is NOT a pass.
+	const died = Math.hypot(p.x - dx, p.z - dz) > 40;
 	console.log(
-		`RESULT ${ok && dry ? "PASS" : "FAIL"} ok=${ok} took=${Date.now() - t0}ms x=${Math.round(p.x)} y=${Math.round(p.y * 10) / 10} z=${Math.round(p.z)} inWater=${bot.entity.isInWater} hp=${bot.health}`,
+		`RESULT ${ok && dry && !died ? "PASS" : "FAIL"}${died ? " (DIED)" : ""} ok=${ok} took=${Date.now() - t0}ms x=${Math.round(p.x)} y=${Math.round(p.y * 10) / 10} z=${Math.round(p.z)} inWater=${bot.entity.isInWater} hp=${bot.health}`,
 	);
 	await cmd(`forceload remove ${BX} ${BZ}`);
 	await sleep(300);
@@ -153,4 +222,4 @@ bot.once("spawn", async () => {
 setTimeout(() => {
 	console.log("TIMEOUT — never reached spawn/finish");
 	process.exit(1);
-}, 90000);
+}, 200000);

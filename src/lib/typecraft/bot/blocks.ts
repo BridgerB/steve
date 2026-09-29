@@ -5,6 +5,7 @@
 import { stateIdToBlock } from "../block.ts";
 import {
 	createChunkColumn,
+	getSectionBlock,
 	GLOBAL_BITS_PER_BIOME,
 	GLOBAL_BITS_PER_BLOCK,
 	loadChunkColumn,
@@ -12,6 +13,7 @@ import {
 import { type Vec3, vec3 } from "../vec3/index.ts";
 import {
 	createWorld,
+	getLoadedColumn,
 	onWorldEvent,
 	PLAYER_EYE_HEIGHT,
 	raycast,
@@ -20,7 +22,76 @@ import {
 	worldGetBlockStateId,
 	worldSetBlockStateId,
 } from "../world/index.ts";
+import type { ChunkColumn } from "../chunk/index.ts";
 import type { Bot, BotOptions, FindBlockOptions } from "./types.ts";
+
+const NEIGHBOURS = [
+	[1, 0, 0],
+	[-1, 0, 0],
+	[0, 1, 0],
+	[0, -1, 0],
+	[0, 0, 1],
+	[0, 0, -1],
+] as const;
+
+/** Could this section hold a watched block at all? Palette check — no cell walk. */
+const sectionMayContainWatched = (
+	bot: Bot,
+	section: ChunkColumn["sections"][number],
+	watchAll: boolean,
+): boolean => {
+	if (watchAll || !section) return !!section;
+	const hit = (sid: number): boolean => {
+		const def = bot.registry?.blocksByStateId.get(sid);
+		return !!def && bot.watchBlocks.has(def.name);
+	};
+	const d = section.data;
+	if (d.type === "single") return hit(d.value);
+	if (d.type === "indirect") return d.palette.some(hit);
+	return true; // direct palette — has to be walked
+};
+
+/** Emit blockSeen for every exposed watched block in a freshly loaded column. */
+const scanColumnForWatched = (bot: Bot, x: number, z: number, column: ChunkColumn): void => {
+	if (!bot.registry || !bot.world) return;
+	const watchAll = bot.watchBlocks.has("*");
+	const minY = bot.game.minY;
+	const sections = column.sections;
+	for (let si = 0; si < sections.length; si++) {
+		const section = sections[si];
+		if (!sectionMayContainWatched(bot, section, watchAll)) continue;
+		const sectionY = minY + si * 16;
+		for (let bx = 0; bx < 16; bx++) {
+			for (let by = 0; by < 16; by++) {
+				for (let bz = 0; bz < 16; bz++) {
+					const wx = x * 16 + bx;
+					const wy = sectionY + by;
+					const wz = z * 16 + bz;
+					const sid = worldGetBlockStateId(bot.world, vec3(wx, wy, wz));
+					if (sid == null || sid === 0) continue;
+					const def = bot.registry.blocksByStateId.get(sid);
+					if (!def) continue;
+					if (!watchAll && !bot.watchBlocks.has(def.name)) continue;
+					// Exposed check — at least one transparent neighbour
+					let exposed = false;
+					for (const [ox, oy, oz] of NEIGHBOURS) {
+						const nsid = worldGetBlockStateId(bot.world, vec3(wx + ox, wy + oy, wz + oz));
+						if (nsid == null || nsid === 0) {
+							exposed = true;
+							break;
+						}
+						const ndef = bot.registry.blocksByStateId.get(nsid);
+						if (ndef?.transparent) {
+							exposed = true;
+							break;
+						}
+					}
+					if (exposed) bot.emit("blockSeen", def.name, vec3(wx, wy, wz));
+				}
+			}
+		}
+	}
+};
 
 export const initBlocks = (bot: Bot, _options: BotOptions): void => {
 	// ── World creation ──
@@ -79,63 +150,24 @@ export const initBlocks = (bot: Bot, _options: BotOptions): void => {
 			setColumn(bot.world!, x, z, column);
 			bot.emit("chunkColumnLoad", vec3(x * 16, 0, z * 16));
 
-			// Emit blockSeen for exposed blocks in the newly loaded chunk
-			// Only blocks with at least one transparent neighbor — no X-ray
-			// watchBlocks can contain specific names or "*" for all blocks
+			// Emit blockSeen for exposed watched blocks in the newly loaded chunk —
+			// only blocks with a transparent neighbor (no X-ray). Deferred to the next
+			// event-loop turn and skipping sections whose palette holds no watched
+			// block: scanning ~100k cells per chunk synchronously while 100+ chunks
+			// stream in at a fresh spawn starved the keepalive responder on a loaded
+			// machine and the server dropped the bot ("lost connection: Timed out").
 			if (
 				bot.registry &&
 				bot.watchBlocks.size > 0 &&
 				bot.listenerCount("blockSeen") > 0
 			) {
-				const watchAll = bot.watchBlocks.has("*");
-				const minY = bot.game.minY;
-				const sections = column.sections;
-				for (let si = 0; si < sections.length; si++) {
-					const section = sections[si];
-					if (!section) continue;
-					const sectionY = minY + si * 16;
-					for (let bx = 0; bx < 16; bx++) {
-						for (let by = 0; by < 16; by++) {
-							for (let bz = 0; bz < 16; bz++) {
-								const wx = x * 16 + bx;
-								const wy = sectionY + by;
-								const wz = z * 16 + bz;
-								const sid = worldGetBlockStateId(bot.world!, vec3(wx, wy, wz));
-								if (sid == null || sid === 0) continue;
-								const def = bot.registry.blocksByStateId.get(sid);
-								if (!def) continue;
-								if (!watchAll && !bot.watchBlocks.has(def.name)) continue;
-								// Exposed check — at least one transparent neighbor
-								let exposed = false;
-								for (const [ox, oy, oz] of [
-									[1, 0, 0],
-									[-1, 0, 0],
-									[0, 1, 0],
-									[0, -1, 0],
-									[0, 0, 1],
-									[0, 0, -1],
-								] as const) {
-									const nsid = worldGetBlockStateId(
-										bot.world!,
-										vec3(wx + ox, wy + oy, wz + oz),
-									);
-									if (nsid == null || nsid === 0) {
-										exposed = true;
-										break;
-									}
-									const ndef = bot.registry.blocksByStateId.get(nsid);
-									if (ndef?.transparent) {
-										exposed = true;
-										break;
-									}
-								}
-								if (exposed) {
-									bot.emit("blockSeen", def.name, vec3(wx, wy, wz));
-								}
-							}
-						}
+				setImmediate(() => {
+					try {
+						scanColumnForWatched(bot, x, z, column);
+					} catch (err) {
+						bot.emit("error", err as Error);
 					}
-				}
+				});
 			}
 		} catch (err) {
 			bot.emit("error", err as Error);
@@ -365,60 +397,90 @@ export const initBlocks = (bot: Bot, _options: BotOptions): void => {
 							return def ? (matching as number[]).includes(def.id) : false;
 						};
 
-		// Scan expanding sphere around origin — closest blocks first
+		// Section-palette scan. The old expanding-sphere walk touched every block in
+		// the radius (radius 128 = ~9M lookups, synchronous) and froze the process
+		// long enough to be kicked for keepalive — steve's portal lava search did
+		// exactly that, in a loop. Now each 16³ chunk section is first checked by
+		// PALETTE (single/indirect containers list every state id they hold), so
+		// sections that cannot contain a match are skipped without touching a block.
+		// Results are sorted by distance so callers still get nearest-first.
 		const r = Math.ceil(maxDistance);
+		const r2 = maxDistance * maxDistance;
+		const ox = Math.floor(origin.x);
+		const oy = Math.floor(origin.y);
+		const oz = Math.floor(origin.z);
 		let blocksChecked = 0;
 		let chunksNull = 0;
-		for (let dist = 0; dist <= r; dist++) {
-			for (let dx = -dist; dx <= dist; dx++) {
-				for (let dy = -dist; dy <= dist; dy++) {
-					for (let dz = -dist; dz <= dist; dz++) {
-						// Only check the shell at this distance
-						if (
-							Math.abs(dx) !== dist &&
-							Math.abs(dy) !== dist &&
-							Math.abs(dz) !== dist
-						)
-							continue;
-						if (dx * dx + dy * dy + dz * dz > maxDistance * maxDistance)
-							continue;
-
-						const pos = vec3(
-							Math.floor(origin.x) + dx,
-							Math.floor(origin.y) + dy,
-							Math.floor(origin.z) + dz,
-						);
-
-						const stateId = worldGetBlockStateId(bot.world!, pos);
-						if (stateId == null) {
-							chunksNull++;
-							continue;
-						}
-						if (stateId === 0) continue;
-
-						blocksChecked++;
-						const block = stateIdToBlock(bot.registry!, stateId);
-						if (matchFn(block.name, stateId)) {
-							// Filter: exposed (has transparent neighbor) + line-of-sight from bot eye
-							if (useExposed) {
-								if (!isExposed(pos)) continue;
-								if (!bot.canSeeBlock(pos)) continue;
-							}
-							results.push(pos);
-							if (results.length >= count) {
-								bot.emit("debug", "findBlocks", {
-									results: results.length,
-									blocksChecked,
-									chunksNull,
-									maxDistance,
-									exposed: useExposed,
-								});
-								return results;
+		const matchMemo = new Map<number, boolean>();
+		const sidMatches = (sid: number): boolean => {
+			let m = matchMemo.get(sid);
+			if (m === undefined) {
+				m = matchFn(stateIdToBlock(bot.registry!, sid).name, sid);
+				matchMemo.set(sid, m);
+			}
+			return m;
+		};
+		const sectionMay = (section: ChunkColumn["sections"][number] | undefined): boolean => {
+			if (!section) return false;
+			const d = section.data as { type: string; value?: number; palette?: number[] };
+			if (d.type === "single") return d.value !== 0 && d.value != null && sidMatches(d.value);
+			if (d.type === "indirect") return (d.palette ?? []).some((sid) => sid !== 0 && sidMatches(sid));
+			return true; // direct palette — has to be walked
+		};
+		const found: { pos: Vec3; d2: number }[] = [];
+		for (let cx = (ox - r) >> 4; cx <= (ox + r) >> 4; cx++) {
+			for (let cz = (oz - r) >> 4; cz <= (oz + r) >> 4; cz++) {
+				const column = getLoadedColumn(bot.world, cx, cz);
+				if (!column) {
+					chunksNull++;
+					continue;
+				}
+				for (let si = 0; si < column.sections.length; si++) {
+					const sectionY = column.minY + si * 16;
+					if (sectionY + 15 < oy - r || sectionY > oy + r) continue;
+					const section = column.sections[si];
+					if (!sectionMay(section)) continue;
+					for (let by = 0; by < 16; by++) {
+						const wy = sectionY + by;
+						const dy = wy - oy;
+						if (dy * dy > r2) continue;
+						for (let bz = 0; bz < 16; bz++) {
+							const wz = cz * 16 + bz;
+							const dz = wz - oz;
+							for (let bx = 0; bx < 16; bx++) {
+								const wx = cx * 16 + bx;
+								const dx = wx - ox;
+								const d2 = dx * dx + dy * dy + dz * dz;
+								if (d2 > r2) continue;
+								const sid = getSectionBlock(section!, bx, by, bz);
+								if (sid === 0) continue;
+								blocksChecked++;
+								if (!sidMatches(sid)) continue;
+								const pos = vec3(wx, wy, wz);
+								// Cheap exposure filter here; the line-of-sight raycast is deferred
+								// to the nearest candidates only (below) — running it on every
+								// match froze the process for a radius-110 gravel search (gravel
+								// is in nearly every section; thousands of 110-block raycasts).
+								if (useExposed && !isExposed(pos)) continue;
+								found.push({ pos, d2 });
 							}
 						}
 					}
 				}
 			}
+		}
+		found.sort((a, b) => a.d2 - b.d2);
+		let rays = 0;
+		for (const f of found) {
+			if (useExposed) {
+				// Bound the raycast work: past this many misses the rest is out of
+				// sight anyway (or the caller asked for far more than is visible).
+				if (rays >= Math.max(64, count * 4)) break;
+				rays++;
+				if (!bot.canSeeBlock(f.pos)) continue;
+			}
+			results.push(f.pos);
+			if (results.length >= count) break;
 		}
 
 		bot.emit("debug", "findBlocks", {

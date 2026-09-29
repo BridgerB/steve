@@ -3,27 +3,36 @@
  */
 
 import type { Bot } from "typecraft";
-import { distance, offset, vec3 } from "typecraft";
+import { distance, offset, raycast, vec3 } from "typecraft";
 import {
 	craftItem,
 	digExposesLava,
 	digExposesWater,
+	digStaircaseUp,
 	dropColumnLavaFree,
+	dropColumnSafe,
 	equipItem,
 	escapeWater,
 	exploreRandom,
 	findBlock,
+	findBlocks,
 	forgetResource,
 	getCraftingTable,
 	getMineEntry,
 	getRememberedResource,
 	goTo,
 	isInWaterTrap,
+	lavaAround,
 	moveCloser,
 	rememberMineEntry,
 	returnToSurface,
 	sleep,
+	otherBotsNear,
+	spreadFromOtherBots,
 	success,
+	surfaceYAt,
+	throwIfPreempted,
+	walkToXZ,
 } from "../../lib/bot-utils.ts";
 import { logEvent } from "../../lib/logger.ts";
 import type { Block, StepResult } from "../../types.ts";
@@ -34,10 +43,11 @@ const safeDig = async (
 	block: Block,
 	timeout = 8000,
 ): Promise<void> => {
+	throwIfPreempted();
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	try {
 		await Promise.race([
-			bot.dig(block),
+			handled(bot.dig(block)),
 			new Promise<never>((_, reject) => {
 				timer = setTimeout(() => reject(new Error("dig timeout")), timeout);
 			}),
@@ -97,9 +107,12 @@ const DROP_ITEM: Record<string, string> = {
 const isAir = (b: Block | null): boolean =>
 	!b || b.name === "air" || b.name === "cave_air";
 const isLava = (b: Block | null): boolean => !!b && b.name.includes("lava");
-const isWater = (b: Block | null): boolean => !!b && b.name.includes("water");
+// bubble_column = the water column over magma/soul sand in an aquifer: it is
+// water for every purpose here (race39 712 dug into one at y27 and bobbed in it).
+const isWater = (b: Block | null): boolean =>
+	!!b && (b.name.includes("water") || b.name === "bubble_column");
 const isLiquid = (b: Block | null): boolean =>
-	!!b && (b.name.includes("water") || b.name.includes("lava"));
+	!!b && (b.name.includes("water") || b.name === "bubble_column" || b.name.includes("lava"));
 
 // Per-target event category (e.g. "mine:stone", "mine:coal_ore") so each mine
 // step's sub-tasks get their own timeline in the dashboard instead of sharing one.
@@ -122,6 +135,30 @@ const lookDig = async (bot: Bot, b: Block | null): Promise<boolean> => {
 	}
 };
 
+/** Clear every block between the bot's eyes and `ore` (max 3) so the ore is
+ *  actually exposed before it is broken. Refuses if the line crosses liquid. */
+const openLineToOre = async (bot: Bot, ore: Block): Promise<boolean> => {
+	for (let i = 0; i < 3; i++) {
+		const p = bot.entity.position;
+		const eye = vec3(p.x, p.y + 1.62, p.z);
+		const c = vec3(ore.position.x + 0.5, ore.position.y + 0.5, ore.position.z + 0.5);
+		const d = vec3(c.x - eye.x, c.y - eye.y, c.z - eye.z);
+		const len = Math.hypot(d.x, d.y, d.z) || 1;
+		const hit = raycast(bot.world as never, eye, vec3(d.x / len, d.y / len, d.z / len), 6);
+		if (!hit) return true; // nothing between us (or the ore is not a solid hit) — fine
+		if (
+			hit.position.x === ore.position.x &&
+			hit.position.y === ore.position.y &&
+			hit.position.z === ore.position.z
+		)
+			return true;
+		const b = bot.blockAt(hit.position) as Block | null;
+		if (!b || isLiquid(b) || isAir(b)) return false;
+		if (!(await lookDig(bot, b))) return false;
+	}
+	return false;
+};
+
 const STONE_PLUS_PICKS = new Set([
 	"netherite_pickaxe",
 	"diamond_pickaxe",
@@ -140,15 +177,23 @@ const invCount = (bot: Bot, sub: string): number =>
  * pickaxes, craft a fresh stone one from cobblestone + sticks, so a deep mine
  * stays self-sustaining.
  */
-const ensurePickaxe = async (bot: Bot): Promise<boolean> => {
+export const ensurePickaxe = async (bot: Bot): Promise<boolean> => {
 	const findPick = () =>
 		bot.inventory.slots.find((s) => s && STONE_PLUS_PICKS.has(s.name));
 	let pick = findPick();
 	if (pick) {
-		if (!bot.heldItem?.name.endsWith("_pickaxe")) {
+		if (!STONE_PLUS_PICKS.has(bot.heldItem?.name ?? "")) {
 			await equipItem(bot, pick.name, "hand");
+			// Still not holding it → the client inventory model has drifted from the
+			// server (race29 672: server had the stone pick in the selected hotbar
+			// slot, client showed dirt; 'no_pick' ×6). Pull the truth and retry once.
+			if (!STONE_PLUS_PICKS.has(bot.heldItem?.name ?? "")) {
+				await bot.resyncInventory();
+				const again = findPick();
+				if (again) await equipItem(bot, again.name, "hand");
+			}
 		}
-		return true;
+		return STONE_PLUS_PICKS.has(bot.heldItem?.name ?? "");
 	}
 	// None left — craft a stone pickaxe (3 cobblestone + 2 sticks, needs a table)
 	if (invCount(bot, "cobblestone") < 3) return false;
@@ -160,8 +205,18 @@ const ensurePickaxe = async (bot: Bot): Promise<boolean> => {
 	if (!table) return false;
 	await craftItem(bot, "stone_pickaxe", 1, table);
 	pick = findPick();
+	logEvent("craft", "pick_crafted", `stone_pickaxe ${pick ? "in inventory" : "MISSING"} window=${bot.currentWindow?.id ?? "none"}`);
 	if (pick) {
-		await equipItem(bot, pick.name, "hand");
+		// A crafting window still open here can make bot.equip wait on a transaction
+		// that never acks (race61 800: 3 silent minutes right after the craft). Close
+		// it and cap the equip.
+		if (bot.currentWindow) {
+			try {
+				bot.closeWindow(bot.currentWindow);
+			} catch {}
+		}
+		await Promise.race([equipItem(bot, pick.name, "hand"), sleep(4000)]);
+		logEvent("craft", "pick_equipped", `held=${bot.heldItem?.name ?? "nothing"}`);
 		return true;
 	}
 	return false;
@@ -198,7 +253,7 @@ export const descendStaircase = async (
 		// Continuing here would issue forward/down controls + digs that fight
 		// escapeWater's upward climb, leaving the bot bobbing in the flooded shaft.
 		if (bot.entity?.isInWater) return { y: floorY(bot), stopped: "in water" };
-		if (!bot.heldItem?.name.endsWith("_pickaxe")) await ensurePickaxe(bot);
+		if (!STONE_PLUS_PICKS.has(bot.heldItem?.name ?? "")) await ensurePickaxe(bot);
 		const p = bot.entity.position;
 		const fx = Math.floor(p.x);
 		const fy = Math.floor(p.y);
@@ -340,12 +395,18 @@ const branchMineOre = async (
 	level: number,
 	dropItem: string,
 	deadline: number,
-): Promise<{ mined: number; dug: number; lostDrops: boolean }> => {
+): Promise<{ mined: number; dug: number; lostDrops: boolean; noOre?: boolean; fell?: number }> => {
 	let mined = 0;
 	let dug = 0;
 	let dir = pickDigDir(bot);
 	// Progress is the drop item actually in the pack, not blocks dug.
 	const have = () => invCount(bot, dropItem);
+	// Where the time goes (race59 795: "dug 11" in 221s, ~20s per cell, no events).
+	let tNear = 0;
+	let tStep = 0;
+	let nStuck = 0;
+	let nNear = 0;
+	const timing = () => `near=${nNear}x/${Math.round(tNear / 1000)}s step=${Math.round(tStep / 1000)}s stuck=${nStuck}`;
 
 	const mineNearbyOre = async (): Promise<boolean> => {
 		// Prefer remembered ore (blockSeen), then a wider scan
@@ -370,12 +431,81 @@ const branchMineOre = async (
 		// Skip ore whose drop would fall into lava — scan down to where the raw_iron
 		// would land; if that's lava, it burns before we can collect it (this is what
 		// made y14 mining break 100 ore and net ~0). Belt to the y40 level change.
+		// And skip ore whose drop LANDS out of reach: race24 652/653 mined ore high
+		// in cavern walls, the raw_iron settled on ledges 5-7 blocks above their feet
+		// (confirmed on the server), collectDrops couldn't climb to it, and every
+		// ore became a "drops_lost" relocate — 13 min in the band for 0 iron.
 		{
 			let dy = 1;
 			while (dy <= 8 && isAir(bot.blockAt(offset(ore.position, 0, -dy, 0)))) dy++;
 			if (isLava(bot.blockAt(offset(ore.position, 0, -dy, 0)))) {
 				if (fromMem) forgetResource(bot, blockType, ore.position);
 				return false;
+			}
+			const landingY = ore.position.y - dy + 1;
+			if (landingY > floorY(bot) + 1) {
+				// The drop would land on a ledge above us. Don't give up yet: CLIMB to
+				// that ledge (the pathfinder scaffolds with our cobble) and mine from
+				// there. Cave-riddled bands had every visible ore 2-10 blocks up the
+				// walls and the bot rejected all of it (race35 696: ore_unreachable ×9,
+				// 697/699 ×3-4 each, 13 min for 4 raw iron between them).
+				const climb = landingY - floorY(bot);
+				const landing = vec3(ore.position.x, landingY, ore.position.z);
+				if (climb <= 12 && distance(bot.entity.position, landing) <= 18) {
+					logEvent(mineCat(blockType), "ore_climb", `to y=${landingY} from y=${floorY(bot)} for ${ore.position.x},${ore.position.y},${ore.position.z}`);
+					// The pathfinder can't scaffold through rock to a ledge, so goTo
+					// returned instantly (race36 701: 4 climbs, 0 reached). Do it by hand:
+					// tunnel to the ore's column at this level, then dig/pillar straight up
+					// until the ore is the ceiling — mining it drops the raw iron on us.
+					const p0 = bot.entity.position;
+					const ddx = ore.position.x - Math.floor(p0.x);
+					if (ddx !== 0) await tunnelToward(bot, Math.sign(ddx), 0, Math.abs(ddx));
+					const p1 = bot.entity.position;
+					const ddz = ore.position.z - Math.floor(p1.z);
+					if (ddz !== 0) await tunnelToward(bot, 0, Math.sign(ddz), Math.abs(ddz));
+					const p2 = bot.entity.position;
+					if (Math.floor(p2.x) === ore.position.x && Math.floor(p2.z) === ore.position.z) {
+						await digStaircaseUp(bot, ore.position.y - 1, Date.now() + 25000);
+						await bot.collectDrops(8, 4000, async (pp) => {
+							await goTo(bot, pp, { range: 1, timeout: 3000 });
+						}).catch(() => {});
+						const left = bot.blockAt(ore.position);
+						if (!left || !isTarget(left.name)) {
+							mined++;
+							// The climb itself took ~60s; don't let the "50s no collection"
+							// watchdog fire on the very next tick (race38 710: ore 1/8 (climbed)
+							// → drops_lost → 2-min climb-out in the same second).
+							lastCollectAt = Date.now();
+							logEvent(mineCat(blockType), "ore", `${blockType} ${mined}/${targetCount} (climbed)`);
+							return true;
+						}
+					} else {
+						await goTo(bot, landing, { range: 1.5, timeout: 12000 }).catch(() => {});
+					}
+				}
+			}
+			if (landingY > floorY(bot) + 1) {
+				logEvent(mineCat(blockType), "ore_unreachable", `${ore.position.x},${ore.position.y},${ore.position.z} lands y=${landingY}, feet y=${floorY(bot)}`);
+				if (fromMem) forgetResource(bot, blockType, ore.position);
+				return false;
+			}
+		}
+		// Water on the straight line to the ore → the pathfinder walks the bot into it
+		// (no buoyancy, escape_water preempts, the step restarts and does it again —
+		// race59 793: 17 rounds in 3 min at a flooded pit). Skip and forget that ore.
+		{
+			const p = bot.entity.position;
+			const steps = Math.ceil(distance(p, ore.position));
+			for (let i = 1; i < steps; i++) {
+				const t = i / steps;
+				const cx = Math.floor(p.x + (ore.position.x + 0.5 - p.x) * t);
+				const cz = Math.floor(p.z + (ore.position.z + 0.5 - p.z) * t);
+				const cy = Math.floor(p.y + (ore.position.y - p.y) * t);
+				if ([-1, 0, 1].some((dy) => isWater(bot.blockAt(vec3(cx, cy + dy, cz))))) {
+					logEvent(mineCat(blockType), "ore_wet", `${ore.position.x},${ore.position.y},${ore.position.z} — water on the way at ${cx},${cy},${cz}`);
+					if (fromMem) forgetResource(bot, blockType, ore.position);
+					return false;
+				}
 			}
 		}
 		try {
@@ -388,6 +518,20 @@ const branchMineOre = async (
 			// path through tunnel walls) spawns the drop out of pickup range, so the
 			// counter rises but nothing is collected.
 			if (distance(bot.entity.position, ore.position) > 4.5) return false;
+			// TUNNEL TO THE ORE FIRST. findBlock sees ore through rock, and the server
+			// happily breaks a block 3-4 away behind a wall — the raw_iron then drops
+			// into the sealed cavity where the ore was and can never be collected
+			// (race26 660: two "drops_lost" relocates, both drops found on the server
+			// 3-4 blocks inside the wall). Dig the blocks on the eye→ore ray so the
+			// drop falls into an opening the bot can walk into.
+			if (!(await openLineToOre(bot, ore))) return false;
+			// Never break ore without a stone-or-better pick: the stone pick wears out
+			// mid-band, the wooden spare takes over silently and the ore drops NOTHING
+			// (race27 664: two ores "mined", 0 raw_iron, drops_lost relocate).
+			if (!(await ensurePickaxe(bot)) || !STONE_PLUS_PICKS.has(bot.heldItem?.name ?? "")) {
+				logEvent(mineCat(blockType), "no_pick", `held=${bot.heldItem?.name ?? "nothing"}`);
+				return false;
+			}
 			const above = bot.blockAt(offset(ore.position, 0, 1, 0)) as Block | null;
 			if (above && !isAir(above) && !isLiquid(above)) await lookDig(bot, above);
 			if (await lookDig(bot, ore)) {
@@ -433,10 +577,10 @@ const branchMineOre = async (
 				] as const
 			).some((o) => {
 				const b = bot.blockAt(vec3(cx + o[0], cy + o[1], cz + o[2]));
-				return !!b && b.name.includes("water");
+				return isWater(b);
 			});
 		if (
-			[head, feet, floor].some((b) => !!b && b.name.includes("water")) ||
+			[head, feet, floor].some((b) => isWater(b)) ||
 			touchesWater(fx + dx, fy, fz + dz) ||
 			touchesWater(fx + dx, fy + 1, fz + dz)
 		)
@@ -513,6 +657,12 @@ const branchMineOre = async (
 
 	let turns = 0;
 	let forward = 0;
+	// The lowest level this call LEGITIMATELY dug to (start, lowered by digDownOne).
+	// An ore_climb tunnel or a pathfinder goTo can open onto a cave and drop the bot
+	// 20-40 levels (race51 760/761, race52 767: y35 → y-12 in 6s), after which it
+	// strip-mines deepslate far below the band with a stone pick. Detect the fall
+	// and hand back to the caller to climb back to the band.
+	let legitY = floorY(bot);
 	// Detect ore whose drops we can't collect (broken over lava — the count rises but
 	// raw_iron never lands in the pack). Without this the loop chases scattered cavern
 	// ore for the full deadline, collecting nothing, and the bot never relocates.
@@ -523,6 +673,19 @@ const branchMineOre = async (
 		// take over cleanly instead of this dig loop fighting it underwater.
 		if (isInWaterTrap(bot)) return { mined, dug, lostDrops: false };
 		if ((bot.health ?? 20) < 7) return { mined, dug, lostDrops: false };
+		if (level > 0 && floorY(bot) < legitY - 6) {
+			logEvent(mineCat(blockType), "fell", `y=${floorY(bot)} below band y=${legitY} — climbing back`);
+			bot.clearControlStates();
+			return { mined, dug, lostDrops: false, fell: legitY };
+		}
+		// Lava two blocks away is already too close for a bot with no buoyancy: the
+		// in-lava guard fires too late to swim out (race 647 died in 4s at y21 after
+		// 90s of tunnelling). Back off now and let the caller relocate sideways.
+		if (lavaAround(bot, 2)) {
+			logEvent(mineCat(blockType), "lava_near", `backing off at y=${floorY(bot)}`);
+			bot.clearControlStates();
+			return { mined, dug, lostDrops: false, noOre: true };
+		}
 		if (have() > collected) {
 			collected = have();
 			lastCollectAt = Date.now();
@@ -531,13 +694,31 @@ const branchMineOre = async (
 		// cavern (goTo keeps failing) or its drops fall into lava. Bail so mineDeepOre
 		// relocates to fresh solid rock. Time-based so it survives the ~2min process
 		// reconnects that reset the per-bot stuck counter.
-		if (Date.now() - lastCollectAt > 50000) {
-			logEvent(mineCat(blockType), "drops_lost", `50s no collection at y=${floorY(bot)} — relocating`);
+		// Only a real loss counts as lost drops: ore WAS broken and nothing landed in
+		// the pack. With mined=0 the tunnel simply hasn't hit a vein yet — race 628
+		// was declared "drops_lost" after 50s of clean strip-mining, pillared 14
+		// blocks up out of the band and started over. Give a barren spot longer,
+		// then report it as barren so the caller relocates sideways, not up.
+		if (mined > 0 && Date.now() - lastCollectAt > 50000) {
+			logEvent(mineCat(blockType), "drops_lost", `50s no collection at y=${floorY(bot)} (mined ${mined}) — relocating | ${timing()}`);
 			return { mined, dug, lostDrops: true };
+		}
+		// The relocate (20-cell tunnel + optional goTo) needs ~60-80s; fire it while
+		// the step budget can still hold it. race59 795: the loop-head check only runs
+		// between sub-calls, no_ore fired at 259s of a 300s step, the relocate was
+		// cut off by the timeout and the fresh step dug the same barren spot again.
+		const late = Date.now() > deadline - 80000;
+		if (mined === 0 && (Date.now() - lastCollectAt > 120000 || late)) {
+			logEvent(mineCat(blockType), "no_ore", `${late ? "budget low" : "120s"} no ore at y=${floorY(bot)} (dug ${dug}) — relocating sideways | ${timing()}`);
+			return { mined, dug, lostDrops: false, noOre: true };
 		}
 		await ensurePickaxe(bot);
 		// Grab any ore the tunnel has already exposed in its walls/floor/ceiling.
-		if (await mineNearbyOre()) {
+		const tn = Date.now();
+		const gotOre = await mineNearbyOre();
+		tNear += Date.now() - tn;
+		nNear++;
+		if (gotOre) {
 			turns = 0;
 			continue;
 		}
@@ -547,7 +728,10 @@ const branchMineOre = async (
 		// with sparse ore it exposes no vein at all (mined=0 dug=18); the ribs multiply
 		// the exposed wall area — the no-X-ray way to actually surface a vein — and
 		// digBranch harvests + retreats each one. (digBranch was previously dead code.)
+		const t0 = Date.now();
 		const r = await digStep(dir[0], dir[1]);
+		tStep += Date.now() - t0;
+		if (r === "stuck") nStuck++;
 		if (r === "ok") {
 			turns = 0;
 			forward++;
@@ -566,6 +750,7 @@ const branchMineOre = async (
 			if (++turns >= 4) {
 				if (await digDownOne()) {
 					turns = 0;
+					legitY = Math.min(legitY, floorY(bot));
 				} else {
 					return { mined, dug, lostDrops: false };
 				}
@@ -595,9 +780,39 @@ export const branchMineExplore = async (
 // big cavern's walls counts dug>0 (so the "boxed in" climb-out never fires) and
 // grabbing the odd reachable ore resets any dry counter — but if the bot isn't
 // MOVING it's wedged at a cavern mouth and should relocate to fresh rock.
+/** Cut a straight 1x2 tunnel `n` cells in (dx,dz) at the current level and walk it.
+ *  Refuses cells that touch lava/water or have no floor; returns cells advanced. */
+export const tunnelToward = async (bot: Bot, dx: number, dz: number, n: number): Promise<number> => {
+	await ensurePickaxe(bot);
+	let moved = 0;
+	for (let i = 0; i < n; i++) {
+		throwIfPreempted();
+		const p = bot.entity.position;
+		const fx = Math.floor(p.x);
+		const fy = Math.floor(p.y);
+		const fz = Math.floor(p.z);
+		const head = bot.blockAt(vec3(fx + dx, fy + 1, fz + dz));
+		const feet = bot.blockAt(vec3(fx + dx, fy, fz + dz));
+		const floor = bot.blockAt(vec3(fx + dx, fy - 1, fz + dz));
+		if ([head, feet, floor].some((bb) => isLiquid(bb)) || isAir(floor)) break;
+		const cell = vec3(fx + dx, fy, fz + dz);
+		const cellUp = vec3(fx + dx, fy + 1, fz + dz);
+		if ([cell, cellUp].some((c) => digExposesLava(bot, c) || digExposesWater(bot, c))) break;
+		// lookDig returns false for AIR too — an already-open cell ahead ended the
+		// tunnel at 0 cells (race33 689/690: "relocated 0/20 cells"). Only a refused
+		// dig on a solid block stops us.
+		if (!isAir(head) && !(await lookDig(bot, head))) break;
+		if (!isAir(feet) && !(await lookDig(bot, feet))) break;
+		await walkToXZ(bot, fx + dx + 0.5, fz + dz + 0.5, { targetDist: 0.3, maxTime: 1500 });
+		if (Math.floor(bot.entity.position.x) === fx && Math.floor(bot.entity.position.z) === fz) break;
+		moved++;
+	}
+	return moved;
+};
+
 const mineStuckState = new WeakMap<
 	Bot,
-	{ x: number; z: number; n: number; iron: number }
+	{ x: number; z: number; n: number; iron: number; rx?: number; rz?: number; dir?: [number, number] }
 >();
 // Relocate horizontally `cells` blocks onto fresh SOLID rock, digging the 1x2 opening
 // as it goes, to route the vertical dig-down around a hazard directly below (lava,
@@ -753,7 +968,8 @@ const relocateToDryGround = async (bot: Bot): Promise<boolean> => {
 				const h = bot.blockAt(vec3(cx + dx, y + 1, cz + dz)); // head
 				if (!g || isAir(g) || isLava(g) || isWater(g)) continue;
 				if (!isAir(f) || !isAir(h)) continue;
-				if (isWater(bot.blockAt(vec3(cx + dx, y - 2, cz + dz)))) continue; // not a water table
+				// Not a water table: a beach aquifer sits 2-4 under the sand (race31 683).
+				if ([2, 3, 4].some((k) => isWater(bot.blockAt(vec3(cx + dx, y - k, cz + dz))))) continue;
 				const d = dx * dx + dz * dz;
 				if (d < bestD) {
 					bestD = d;
@@ -770,6 +986,51 @@ const relocateToDryGround = async (bot: Bot): Promise<boolean> => {
 	return distance(bot.entity.position, best) <= 2.5;
 };
 
+/**
+ * Beach/shore stall: the column under the bot is dry for 1-2 blocks and then hits
+ * the sea-level aquifer, so every dig-down attempt within a 12-block random hop
+ * lands on the same water table (race31 683: 3× "Stuck descending at y=58" on a
+ * beach, 60s each). Walk to the HIGHEST dry terrain within R instead — inland rises
+ * away from the water table — and let the retry start its shaft there.
+ */
+const relocateToHighGround = async (bot: Bot): Promise<boolean> => {
+	const p = bot.entity.position;
+	const cx = Math.floor(p.x);
+	const cz = Math.floor(p.z);
+	const here = Math.floor(p.y);
+	let best: Vec3 | null = null;
+	let bestScore = -Infinity;
+	const R = 40;
+	for (let dx = -R; dx <= R; dx += 4) {
+		for (let dz = -R; dz <= R; dz += 4) {
+			if (Math.abs(dx) + Math.abs(dz) < 12) continue;
+			const x = cx + dx;
+			const z = cz + dz;
+			const sy = surfaceYAt(bot, x, z); // feet y on the surface
+			if (sy <= here + 2) continue; // must be meaningfully higher than this shore
+			const g = bot.blockAt(vec3(x, sy - 1, z));
+			if (!g || isAir(g) || isWater(g) || isLava(g)) continue;
+			let wet = false;
+			for (let k = 2; k <= 6; k++) {
+				const b = bot.blockAt(vec3(x, sy - k, z));
+				if (!b || isWater(b) || isLava(b)) wet = true;
+			}
+			if (wet) continue;
+			const score = sy * 4 - Math.hypot(dx, dz);
+			if (score > bestScore) {
+				bestScore = score;
+				best = vec3(x, sy, z);
+			}
+		}
+	}
+	if (!best) return false;
+	logEvent("mine", "relocate_high", `${best.x},${best.y},${best.z} from y=${here}`);
+	try {
+		await goTo(bot, best, { range: 2, timeout: 25000 });
+	} catch {}
+	return distance(bot.entity.position, best) <= 4;
+};
+
 export const digDownVertical = async (
 	bot: Bot,
 	targetY: number,
@@ -778,10 +1039,16 @@ export const digDownVertical = async (
 ): Promise<{ y: number; stopped: string | null }> => {
 	await ensurePickaxe(bot);
 	let sideTries = 0;
+	let sideSteps = 0;
+	let lastFloor = floorY(bot);
 	while (floorY(bot) > targetY && Date.now() < deadline) {
+		if (floorY(bot) < lastFloor) {
+			lastFloor = floorY(bot);
+			sideSteps = 0; // descended — the sidestep budget resets
+		}
 		if ((bot.health ?? 20) < 8) return { y: floorY(bot), stopped: "low health" };
 		if (bot.entity?.isInWater) return { y: floorY(bot), stopped: "in water" };
-		if (!bot.heldItem?.name.endsWith("_pickaxe")) await ensurePickaxe(bot);
+		if (!STONE_PLUS_PICKS.has(bot.heldItem?.name ?? "")) await ensurePickaxe(bot);
 		// Harvest ore the shaft has EXPOSED in its walls as we pass through the band —
 		// the 1-wide shaft slices veins, and mining those faces (drops land at our feet)
 		// collects much of the target on the way down. No X-ray: only uncovered walls.
@@ -789,6 +1056,14 @@ export const digDownVertical = async (
 		// Dig only while standing on solid ground (see 5× airborne penalty above).
 		for (let w = 0; w < 12 && !bot.entity.onGround; w++) await sleep(50);
 
+		// Stand in the CENTRE of the cell. On a cell edge the 0.6-wide hitbox still
+		// rests on the neighbour after the block underfoot is dug, so the bot never
+		// drops in: "air below, on ground" for the whole 60s descent budget
+		// ("Stuck descending", once per race: 658 y66, 665 y60, 670 y53).
+		{
+			const c = bot.entity.position;
+			await walkToXZ(bot, Math.floor(c.x) + 0.5, Math.floor(c.z) + 0.5, { targetDist: 0.2, maxTime: 1200 });
+		}
 		const p = bot.entity.position;
 		const fx = Math.floor(p.x);
 		const fy = Math.floor(p.y);
@@ -798,7 +1073,9 @@ export const digDownVertical = async (
 		let lavaClose = false;
 		for (let d = 1; d <= 4; d++)
 			if (isLava(bot.blockAt(vec3(fx, fy - d, fz)))) lavaClose = true;
-		const waterBelow = isWater(below);
+		// Water 1-3 under the floor: the last dig would open onto it (lookDig refuses
+		// anyway) — treat it as the hazard it is up front instead of burning a dig.
+		const waterBelow = [1, 2, 3].some((d) => isWater(bot.blockAt(vec3(fx, fy - d, fz))));
 		// Air below = cave/void: gauge the drop. A short step down is fine; a deep one
 		// (fall damage) or lava/water at the bottom is a hazard to route around.
 		let deepDrop = false;
@@ -810,13 +1087,23 @@ export const digDownVertical = async (
 		}
 
 		if (lavaClose || waterBelow || deepDrop) {
-			if (await sidestepToSolid(bot, 2)) continue;
+			// A 2-cell sidestep "succeeds" onto the next cell over the SAME lake and the
+			// loop ping-pongs there until the 60s descent budget dies (race33 688: 3×
+			// "Stuck descending at y=53" over water at y49). After 3 sidesteps with no
+			// descent, stop sidestepping: relocate, else report the water table.
+			if (sideSteps < 3 && (await sidestepToSolid(bot, 2))) {
+				sideSteps++;
+				continue;
+			}
 			// Sidestep couldn't escape (wide water table) — pathfind to dry ground.
 			if (await relocateToDryGround(bot)) {
 				sideTries = 0;
+				sideSteps = 0;
 				continue;
 			}
-			if (++sideTries > 7)
+			// Each failed relocate burns an 8s goTo; 7 of them ate the whole 60s descent
+			// budget standing still on a beach. Two misses = a wide water table: bail.
+			if (++sideTries > 1)
 				return {
 					y: floorY(bot),
 					stopped: lavaClose
@@ -839,7 +1126,7 @@ export const digDownVertical = async (
 					sideTries = 0;
 					continue;
 				}
-				if (++sideTries > 7)
+				if (++sideTries > 1)
 					return { y: floorY(bot), stopped: "blocked (liquid)" };
 				continue;
 			}
@@ -872,7 +1159,17 @@ const mineDeepOre = async (
 	// staircase ate the entire budget just getting down and early-returned before
 	// mining a single block — so one gym run (a single call) never collected any ore.
 	if (floorY(bot) > level + 2) {
+		// Don't sink the shaft on top of another bot's (see spreadFromOtherBots).
+		if (floorY(bot) >= 50) await spreadFromOtherBots(bot);
 		const startY = floorY(bot);
+		// Breadcrumb: race48 749 sat 5 min at y51 in this step with NO events and
+		// timed out; the retry descended in 35s. This pins whether the hang is
+		// before or inside the dig-down.
+		{
+			const pls = Object.values(bot.players);
+			const linked = pls.filter((p) => p?.entity && p.username !== bot.username).length;
+			logEvent(mineCat(blockType), "descend_start", `y=${startY} pick=${bot.heldItem?.name ?? "none"} players=${pls.length} linked=${linked} near=${otherBotsNear(bot, 14).length}`, bot.entity.position);
+		}
 		// Cap how far down one call digs: most spawns (y60-90) reach the band at `level`;
 		// only an extreme mountain (y100+) is capped so descent can't eat the whole call.
 		const target = Math.max(level, startY - 80);
@@ -884,17 +1181,24 @@ const mineDeepOre = async (
 		// Only hard-fail if stranded high in the near-oreless zone with essentially no
 		// progress (instantly boxed by a surface aquifer). Otherwise branch-mine right
 		// where we are — the descent already swept iron's band (and harvested through it).
-		if (res.y > 75 && startY - res.y < 3)
+		// No progress and still far above the band → don't branch-mine up here (race
+		// 641 strip-mined at y61-63 for 120s and found nothing). Shift a few blocks so
+		// the next attempt starts a fresh column, and let the step retry.
+		if (startY - res.y < 3 && res.y > level + 15) {
+			logEvent(mineCat(blockType), "descent_stalled", `y=${res.y} (${res.stopped ?? "no progress"}) — shifting`);
+			const wet = /water|liquid/.test(res.stopped ?? "");
+			if (!wet || !(await relocateToHighGround(bot))) await exploreRandom(bot, 12);
 			return {
 				success: false,
 				message: `Stuck descending at y=${res.y} (${res.stopped ?? "?"})`,
 			};
+		}
 		logEvent(mineCat(blockType), "mine_in_place", `at y=${res.y}, branch-mining`);
 	}
 
 	// At the band — branch-mine until enough of the DROP is actually in the pack.
 	const before = invCount(bot, dropItem);
-	const { dug, lostDrops } = await branchMineOre(
+	const { dug, lostDrops, noOre, fell } = await branchMineOre(
 		bot,
 		blockType,
 		isTarget,
@@ -908,21 +1212,33 @@ const mineDeepOre = async (
 		mineStuckState.delete(bot);
 		return success(`Collected ${have} ${dropItem}`);
 	}
+	// Fell out of the band into a cave: climb straight back to the level we were
+	// mining at (staircase, then the manual pillar) instead of mining deepslate
+	// 30 levels down or climbing 100 levels to the surface entry.
+	if (fell !== undefined) {
+		const y0 = floorY(bot);
+		await digStaircaseUp(bot, fell, Date.now() + 45000).catch(() => {});
+		if (floorY(bot) < fell - 6) {
+			const { pillarUp } = await import("../portal/cast.ts");
+			await pillarUp(bot, fell).catch(() => {});
+			bot.setControlState("sneak", false); // pillarUp leaves it on
+		}
+		const ok = floorY(bot) >= fell - 6;
+		logEvent(mineCat(blockType), "fell_climb", `y=${y0} → ${floorY(bot)} band y=${fell} ok=${ok}`);
+		return { success: ok, message: `Fell to y=${y0} — climbed back to y=${floorY(bot)}` };
+	}
 	// Fully boxed in (no new drops AND no tunnel cut) and stuck well below the mine
 	// entry → climb back up by placing blocks, rather than jittering at the bottom
 	// of a dead-end shaft. returnToSurface now pillars via the pathfinder; pillarUp
 	// is the proven manual fallback (same sequence gather-wood uses).
-	if (have <= before && dug === 0) {
-		const entry = getMineEntry(bot);
-		if (entry && floorY(bot) < entry.y - 6) {
-			logEvent(mineCat(blockType),"climb_out", `boxed at y=${floorY(bot)} → entry y=${entry.y}`);
-			if (!(await returnToSurface(bot))) {
-				const { pillarUp } = await import("../portal/cast.ts");
-				await pillarUp(bot, entry.y);
-				bot.setControlState("sneak", false); // pillarUp leaves it on
-			}
-		}
-	}
+	// Lost drops are a sideways-relocate case, not "boxed": race38 710 mined a
+	// climbed ore, the watchdog fired, and dug===0 sent it on a 2-min climb to the
+	// y111 mine entry before relocating at y81 (out of the band).
+	// A "boxed" call (race47 747: one failed ore_climb ate the whole call, dug=0)
+	// first tries the sideways relocate below like any other stall; the climb to
+	// the entry is the LAST resort, only when even a 1x2 tunnel can't be cut
+	// (747 climbed 49 levels, got pillar_stuck beside water, and lost the descent).
+	const boxed = have <= before && dug === 0 && !lostDrops;
 	// Stuck detection by displacement AND ore gain from a fixed anchor. Wedged at a
 	// cavern mouth the bot still breaks ore (dug>0) but its raw_iron drops fall into
 	// lava (collected stays 0) while branch-mining only jitters it a few blocks. Count
@@ -935,22 +1251,29 @@ const mineDeepOre = async (
 	const near = !!anc && Math.hypot(cur.x - anc.x, cur.z - anc.z) <= 5;
 	const gained = !!anc && have > anc.iron;
 	const stuckN = near && !gained && anc ? anc.n + 1 : 0;
+	const lastReloc = anc && anc.rx !== undefined ? { rx: anc.rx, rz: anc.rz, dir: anc.dir } : {};
 	mineStuckState.set(
 		bot,
 		stuckN > 0 && anc
-			? { x: anc.x, z: anc.z, n: stuckN, iron: anc.iron }
-			: { x: cur.x, z: cur.z, n: 0, iron: have },
+			? { x: anc.x, z: anc.z, n: stuckN, iron: anc.iron, ...lastReloc }
+			: { x: cur.x, z: cur.z, n: 0, iron: have, ...lastReloc },
 	);
-	if ((stuckN >= 3 || lostDrops) && have < targetCount) {
-		mineStuckState.set(bot, { x: cur.x, z: cur.z, n: 0, iron: have });
+	if ((stuckN >= 3 || lostDrops || noOre || boxed) && have < targetCount) {
 		const fx = Math.floor(cur.x);
 		const fz = Math.floor(cur.z);
-		const dirs: [number, number][] = [
-			[1, 0],
-			[-1, 0],
-			[0, 1],
-			[0, -1],
-		];
+		// Relocating AGAIN from (near) the same origin means the last relocate moved
+		// nothing / led nowhere ("relocated 0/20", "Relocated toward" the same target
+		// every cycle — race55 777 ×3, 779 ×7). Don't pick that direction again.
+		const repeat =
+			!!anc?.dir && anc.rx !== undefined && anc.rz !== undefined && Math.hypot(fx - anc.rx, fz - anc.rz) <= 6;
+		const dirs: [number, number][] = (
+			[
+				[1, 0],
+				[-1, 0],
+				[0, 1],
+				[0, -1],
+			] as [number, number][]
+		).filter((d) => !(repeat && anc?.dir && d[0] === anc.dir[0] && d[1] === anc.dir[1]));
 		let best = dirs[0];
 		let bestSolid = -1;
 		for (const d of dirs) {
@@ -970,8 +1293,15 @@ const mineDeepOre = async (
 		// AWAY from the ore band, so there we relocate HORIZONTALLY at the current level
 		// instead. Pillar target is capped underground so it never reaches daylight.
 		const feetY = floorY(bot);
-		const deep = feetY < 45;
-		logEvent(mineCat(blockType), "relocate", `lost=${lostDrops} stuck=${stuckN} at ${fx},${fz},y${feetY} deep=${deep} solid=${bestSolid}`);
+		// A barren spot at the right band is relocated SIDEWAYS at this level; the
+		// climb is only for drops lost to lava below.
+		// … and only when lava is actually nearby — that's the case the climb was
+		// written for (drops burning below). Lost drops with no lava in sight (race
+		// 641/642: ore broken in a cavern wall, drop rolled off) still pillared 10
+		// blocks up out of the band.
+		const deep = feetY < 45 && !noOre && lavaAround(bot, 6);
+		mineStuckState.set(bot, { x: cur.x, z: cur.z, n: 0, iron: have, rx: fx, rz: fz, dir: best });
+		logEvent(mineCat(blockType), "relocate", `lost=${lostDrops} noOre=${!!noOre} stuck=${stuckN} at ${fx},${fz},y${feetY} deep=${deep} solid=${bestSolid} dir=${best[0]},${best[1]}${repeat ? " (rotated)" : ""}`);
 		if (deep) {
 			const climbTo = Math.min(level + 14, 50); // stay underground, never the sky
 			if (climbTo > feetY) {
@@ -981,9 +1311,28 @@ const mineDeepOre = async (
 			}
 		}
 		const baseY = Math.floor(bot.entity.position.y);
-		const tx = Math.floor(bot.entity.position.x) + best[0] * 12;
-		const tz = Math.floor(bot.entity.position.z) + best[1] * 12;
-		await goTo(bot, vec3(tx, baseY, tz), { range: 3, timeout: 25000 });
+		const hop = noOre ? 20 : 12;
+		const tx = Math.floor(bot.entity.position.x) + best[0] * hop;
+		const tz = Math.floor(bot.entity.position.z) + best[1] * hop;
+		// The chosen direction is by construction the one with the MOST rock ahead, so
+		// goTo (pathfinder) returned early / no-path and the bot stayed put: race32 685
+		// "Relocated toward" twice from the exact same cell, 120s per cycle. Cut a
+		// straight 1x2 tunnel there ourselves — that's what a branch-miner does anyway.
+		const moved = await tunnelToward(bot, best[0], best[1], hop);
+		if (boxed && moved === 0) {
+			const entry = getMineEntry(bot);
+			if (entry && floorY(bot) < entry.y - 6) {
+				logEvent(mineCat(blockType), "climb_out", `boxed at y=${floorY(bot)} → entry y=${entry.y}`);
+				if (!(await returnToSurface(bot))) {
+					const { pillarUp } = await import("../portal/cast.ts");
+					await pillarUp(bot, entry.y);
+					bot.setControlState("sneak", false); // pillarUp leaves it on
+				}
+				return { success: false, message: `Boxed at y=${feetY} — climbed out` };
+			}
+		}
+		if (moved < hop / 2) await goTo(bot, vec3(tx, baseY, tz), { range: 3, timeout: 15000 }).catch(() => {});
+		logEvent(mineCat(blockType), "relocated", `${moved}/${hop} cells toward ${best[0]},${best[1]} → ${Math.floor(bot.entity.position.x)},${Math.floor(bot.entity.position.z)}`);
 		return { success: true, message: `Relocated toward ${tx},${tz}` };
 	}
 	// Collecting ore OR cutting fresh tunnel both count as progress, so a
@@ -1001,7 +1350,9 @@ export const mineBlock = async (
 	targetCount: number,
 ): Promise<StepResult> => {
 	let mined = 0;
-	const deadline = Date.now() + 110_000; // Return cleanly before 120s step timeout
+	// Return cleanly before the step timeout: deep ores (iron/coal band mining)
+	// have a 300s step budget in run-loop.ts, surface stone 120s.
+	const deadline = Date.now() + (blockType in DEEP_ORE_LEVEL ? 280_000 : 110_000);
 
 	// Equip best pickaxe before mining — prioritize higher tier
 	const pickTier = [
@@ -1025,20 +1376,107 @@ export const mineBlock = async (
 		try {
 			await bot.clickWindow(pickSlot, 0, 0); // pick up
 			await bot.clickWindow(36, 0, 0); // place in hotbar slot 0
+			if (bot.inventory.selectedItem) await bot.clickWindow(pickSlot, 0, 0); // displaced item back, not left on the cursor
 			bot.setQuickBarSlot(0);
 		} catch {}
 	}
 
-	// For stone, we get cobblestone drops
+	// For stone, we get cobblestone drops — so "stone" must be EXACTLY stone. The old
+	// substring match took sandstone/red_sandstone/blackstone as stone: race31 680 spent
+	// 16 min on a beach "mining stone 16/16" and banked 16 sandstone, 0 cobblestone.
 	const isStone = blockType === "stone";
 	const searchTypes = isStone ? ["stone"] : [blockType];
-	const isTarget = (name: string) => searchTypes.some((t) => name.includes(t));
+	const isTarget = (name: string) =>
+		isStone ? name === "stone" : searchTypes.some((t) => name.includes(t));
 
 	// Deep ores (iron, diamond, …): descend to the ore band and strip-mine
 	// instead of wandering the surface. Resumable across step ticks.
 	if (blockType in DEEP_ORE_LEVEL) {
 		return await mineDeepOre(bot, blockType, isTarget, targetCount, deadline);
 	}
+
+	// Surface stone next to a pond is a trap: the nearest exposed stone is the
+	// pond's bank/floor, the walk to it ends in the water, escape_water preempts,
+	// and the next attempt picks the very same block (race 608: 8 preempts in
+	// 2 min at one pond). Prefer the nearest target with no water within 2 blocks.
+	const nearWater = (p: Vec3): boolean => {
+		for (let dx = -2; dx <= 2; dx++)
+			for (let dz = -2; dz <= 2; dz++)
+				for (let dy = -1; dy <= 1; dy++)
+					if (isWater(bot.blockAt(vec3(p.x + dx, p.y + dy, p.z + dz)) as Block | null)) return true;
+		return false;
+	};
+	// Targets the pathfinder could not get within reach of, twice: a stone up a
+	// lakeside cliff was re-picked 10× in 40s (race43 729, "nav_short still 7.0
+	// away" each time) until the bot walked into the lake.
+	const navMiss = new Map<string, number>();
+	const findDryTarget = (radius: number): Block | null => {
+		// Keep this scan small: findBlocks walks the whole radius when there are few
+		// matches, synchronously. radius 64 / count 48 on a dirt plateau scanned ~2M
+		// blocks per call, starved the keepalive and got the bot kicked every 30s
+		// (race 635: EPIPE → reconnect → EPIPE). Stone is dug down to anyway.
+		const positions = findBlocks(bot, isTarget, Math.min(radius, 24), 12).filter(
+			(p) => (navMiss.get(`${p.x},${p.y},${p.z}`) ?? 0) < 2,
+		);
+		// Stone: dry candidates only — the wet fallback is exactly the pond trap, and
+		// digDownToStone below is the better fallback. Ores keep the nearest match.
+		const dry = positions.find((p) => !nearWater(p)) ?? (isStone ? undefined : positions[0]);
+		return dry ? (bot.blockAt(dry) as Block | null) : null;
+	};
+	// Flat terrain (a forest floor at y63-68) has no exposed stone for 64 blocks —
+	// race 612-615 all failed "Could not find stone" repeatedly, or walked into the
+	// one exposed patch at a pond. Stone is 3-5 blocks under the grass: dig a 1-wide
+	// hole straight down (lava/water-checked) until the block under our feet is stone.
+	const digDownToStone = async (): Promise<Block | null> => {
+		// 16 levels, not 8: grass + 4 dirt + a diorite/granite blob is common (race37
+		// 704 dug 8 levels to y56, hit no stone, spent 72s unboxing back to the rim,
+		// and repeated it — "Mine Cobblestone timed out" twice on plain hills).
+		for (let i = 0; i < 16; i++) {
+			throwIfPreempted();
+			const p = bot.entity?.position;
+			if (!p) return null;
+			const fx = Math.floor(p.x);
+			const fy = Math.floor(p.y);
+			const fz = Math.floor(p.z);
+			// Stand in the CENTRE of the cell first: on a block edge the bot doesn't
+			// drop into the 1-wide hole it just dug, the next look-down sees air and
+			// the whole dig-down was abandoned after one block (race 645: "Could not
+			// find stone" ×4 on plain grass).
+			await walkToXZ(bot, fx + 0.5, fz + 0.5, { targetDist: 0.2, maxTime: 1500 });
+			let below = bot.blockAt(vec3(fx, fy - 1, fz)) as Block | null;
+			if (below && isAir(below)) {
+				// We're above the hole — let gravity take us, then re-evaluate.
+				for (let w = 0; w < 20 && Math.floor(bot.entity.position.y) >= fy; w++) await sleep(50);
+				const ny = Math.floor(bot.entity.position.y);
+				below = bot.blockAt(vec3(fx, ny - 1, fz)) as Block | null;
+				if (below && isAir(below)) return null; // still floating over air — a cave
+				if (!below) return null;
+				if (isTarget(below.name)) return below;
+				continue;
+			}
+			if (!below) return null;
+			if (isTarget(below.name)) return below;
+			// Breadcrumbs: race57 786 stopped after 3 dirt blocks at y67 with no
+			// event and then explored from inside its own pit ('Could not find
+			// stone' ×2, explore_stuck ×6) — which guard fired was invisible.
+			const stop = (why: string): null => {
+				logEvent(mineCat(blockType), "dig_down_stop", `${why} at y=${fy - 1} (${below?.name})`);
+				return null;
+			};
+			if (isLiquid(below) || below.name === "bedrock") return stop("liquid/bedrock");
+			if (!dropColumnSafe(bot, fx, fy - 2, fz)) return stop("column unsafe");
+			if (digExposesWater(bot, below.position) || digExposesLava(bot, below.position)) return stop("exposes liquid");
+			try {
+				await bot.lookAt(offset(below.position, 0.5, 0.5, 0.5));
+				await safeDig(bot, below);
+			} catch (e) {
+				return stop(`dig failed: ${String((e as Error)?.message ?? e).slice(0, 40)}`);
+			}
+			await sleep(700); // drop onto the next block and settle
+			logEvent(mineCat(blockType), "dig_down", `${below.name} y=${fy - 1}`);
+		}
+		return null;
+	};
 
 	// Find initial block — check memory first, then scan
 	const remembered = getRememberedResource(bot, blockType);
@@ -1059,12 +1497,26 @@ export const mineBlock = async (
 		}
 	}
 	if (!startBlock) {
-		startBlock = findBlock(bot, isTarget, 64);
+		startBlock = findDryTarget(64);
+	}
+	if (!startBlock && isStone) {
+		await spreadFromOtherBots(bot);
+		startBlock = await digDownToStone();
 	}
 	// Explore before giving up — walk around and search wider
 	if (!startBlock) {
 		for (let attempt = 0; attempt < 3; attempt++) {
 			logEvent(mineCat(blockType),"exploring", `${blockType} attempt ${attempt + 1}/3`);
+			// At a lake shore the dig-down stops on water and every random explore
+			// leg walks into the lake (race57 785: 6 Mine Cobblestone restarts and
+			// 4 escape_water preempts in 3 min with a full water bucket). Move to
+			// high dry ground first and dig down there.
+			const wetHere = bot.findBlocks({ matching: (n: string) => n === "water", maxDistance: 6, count: 1 }).length > 0;
+			if (isStone && wetHere && (await relocateToHighGround(bot))) {
+				startBlock = await digDownToStone();
+				if (startBlock) break;
+				continue;
+			}
 			await exploreRandom(bot, 40);
 			// Check memory again — blockSeen may have fired during exploration
 			const newRemembered = getRememberedResource(bot, blockType);
@@ -1084,7 +1536,7 @@ export const mineBlock = async (
 					forgetResource(bot, blockType, newRemembered);
 				}
 			}
-			startBlock = findBlock(bot, isTarget, 64);
+			startBlock = findDryTarget(64);
 			if (startBlock) break;
 		}
 	}
@@ -1117,11 +1569,21 @@ export const mineBlock = async (
 	let bestCount = 0;
 	for (const [dx, dz] of dirs) {
 		let count = 0;
+		// A direction that runs into liquid is not a mining direction. Picking the
+		// pond side (dx toward the water we just escaped) walked the bot straight
+		// back in every attempt at the shoreline.
+		let liquidAhead = false;
 		for (let i = 1; i <= 8; i++) {
 			const b = bot.blockAt(offset(p, dx * i, 0, dz * i)) as Block | null;
 			const bBelow = bot.blockAt(offset(p, dx * i, -1, dz * i)) as Block | null;
+			const bBelow2 = bot.blockAt(offset(p, dx * i, -2, dz * i)) as Block | null;
+			if (isLiquid(b) || isLiquid(bBelow) || isLiquid(bBelow2)) {
+				liquidAhead = true;
+				break;
+			}
 			if ((b && isTarget(b.name)) || (bBelow && isTarget(bBelow.name))) count++;
 		}
+		if (liquidAhead) continue;
 		if (count > bestCount) {
 			bestCount = count;
 			bestDir = [dx, dz];
@@ -1136,11 +1598,15 @@ export const mineBlock = async (
 	// Cap total digs at 3x so an unreachable-drop spot can't spin forever.
 	const dropItem = DROP_ITEM[blockType] ?? blockType;
 	const collected = () => invCount(bot, dropItem);
+	let fillerDug = 0;
 	while (
 		collected() < targetCount &&
 		mined < targetCount * 3 &&
 		Date.now() < deadline
 	) {
+		// Displaced by a preempt/timeout/death → unwind here even if a catch below
+		// swallowed the primitive's throw on the previous iteration.
+		throwIfPreempted();
 		// In the water trap → bail so escape_water (priority 0) takes over cleanly.
 		if (isInWaterTrap(bot))
 			return { success: false, message: "in water — yielding to escape_water" };
@@ -1156,6 +1622,7 @@ export const mineBlock = async (
 					try {
 						await bot.clickWindow(idx, 0, 0);
 						await bot.clickWindow(36, 0, 0);
+						if (bot.inventory.selectedItem) await bot.clickWindow(idx, 0, 0); // displaced item back, not left on the cursor
 						bot.setQuickBarSlot(0);
 					} catch {}
 					break;
@@ -1191,10 +1658,59 @@ export const mineBlock = async (
 		] as (Block | null)[];
 
 		let block: Block | null = null;
-		for (const b of candidates) {
-			if (b && isTarget(b.name)) {
-				block = b;
+		for (const [ci, b] of candidates.entries()) {
+			if (!b || !isTarget(b.name)) continue;
+			// The two DOWNWARD candidates drop the bot onto whatever is under them.
+			// Race 581 dug "straight below" twice at one XZ and fell into a lava
+			// pocket (20→0 hp in 3s). Refuse a downward dig unless the landing
+			// column (and its 4 neighbours) is lava-free a few blocks down.
+			const downward = ci <= 1;
+			if (
+				downward &&
+				!dropColumnSafe(bot, b.position.x, b.position.y - 1, b.position.z)
+			) {
+				logEvent(mineCat(blockType), "skip_unsafe_below", `${b.position.x},${b.position.y},${b.position.z}`);
+				continue;
+			}
+			block = b;
+			break;
+		}
+
+		// Stone only: the tunnel ran into a granite/diorite/andesite/tuff blob (they
+		// don't drop cobblestone). Tunnel THROUGH it — blobs are a few blocks thick —
+		// instead of "Could not find stone" every 20s (race32 684: 3 fails in a granite
+		// pocket at y58 with 9/16 cobble). Capped so a huge blob can't eat the budget.
+		if (!block && isStone && fillerDug < 14) {
+			const isFillerRock = (bb: Block | null): boolean =>
+				!!bb && /^(granite|diorite|andesite|tuff|dirt|deepslate|calcite)$/.test(bb.name);
+			let dugNow = false;
+			for (const [ci, bb] of candidates.entries()) {
+				if (ci === 3 || !isFillerRock(bb)) continue;
+				if (ci <= 1 && !dropColumnSafe(bot, bb!.position.x, bb!.position.y - 1, bb!.position.z)) continue;
+				if (digExposesWater(bot, bb!.position) || digExposesLava(bot, bb!.position)) continue;
+				try {
+					const over = bot.blockAt(offset(bb!.position, 0, 1, 0)) as Block | null;
+					if (over && ci === 2 && over.name !== "air" && !isLiquid(over)) {
+						await bot.lookAt(offset(over.position, 0.5, 0.5, 0.5));
+						await safeDig(bot, over);
+					}
+					await bot.lookAt(offset(bb!.position, 0.5, 0.5, 0.5));
+					await safeDig(bot, bb!);
+					fillerDug++;
+					dugNow = true;
+					logEvent(mineCat(blockType), "through_filler", `${bb!.name} ${fillerDug}`);
+					await sleep(150);
+				} catch {}
 				break;
+			}
+			// Only loop back if we actually opened a cell THIS iteration. `fillerDug > 0`
+			// re-looped forever once any filler had ever been dug: race36 702 stood on a
+			// grass block 90s with no events ("Mined 0 stone").
+			if (dugNow) {
+				// Step into what we opened (ahead) or drop (below) before re-scanning.
+				const p2 = bot.entity.position;
+				await walkToXZ(bot, Math.floor(p2.x) + 0.5 + dirX * 0.6, Math.floor(p2.z) + 0.5 + dirZ * 0.6, { targetDist: 0.3, maxTime: 800 }).catch(() => {});
+				continue;
 			}
 		}
 
@@ -1233,7 +1749,7 @@ export const mineBlock = async (
 
 			// Search if memory didn't help
 			if (!block) {
-				block = findBlock(bot, isTarget, 32);
+				block = findDryTarget(32);
 			}
 			if (!block) {
 				return {
@@ -1242,6 +1758,9 @@ export const mineBlock = async (
 				};
 			}
 			const dist = distance(bot.entity.position, block.position);
+			// Trace: race36 702 stood still 90s on Mine Cobblestone with no events at
+			// all ("Mined 0 stone") — log what it chose and whether it got there.
+			logEvent(mineCat(blockType), "target", `${block.name} at ${block.position.x},${block.position.y},${block.position.z} dist=${dist.toFixed(1)}`);
 			try {
 				if (dist > 4) {
 					await goTo(bot, block.position, { range: 2, timeout: 8000 });
@@ -1250,6 +1769,12 @@ export const mineBlock = async (
 				}
 			} catch {
 				logEvent(mineCat(blockType),"nav_fail", "couldn't reach block");
+				continue;
+			}
+			if (distance(bot.entity.position, block.position) > 5.5) {
+				const k = `${block.position.x},${block.position.y},${block.position.z}`;
+				navMiss.set(k, (navMiss.get(k) ?? 0) + 1);
+				logEvent(mineCat(blockType), "nav_short", `still ${distance(bot.entity.position, block.position).toFixed(1)} away (miss ${navMiss.get(k)})`);
 				continue;
 			}
 		}
@@ -1276,8 +1801,11 @@ export const mineBlock = async (
 			logEvent(mineCat(blockType),"mined", `${blockType} ${mined}/${targetCount}`);
 			await sleep(100);
 
-			// Navigate to dropped item for pickup
+			// Navigate to dropped item for pickup — but never into water: race24 655
+			// chased cobble that had rolled into a cave lake, 20 preempt/escape cycles.
 			await bot.collectDrops(6, 3000, async (p) => {
+				if (isWater(bot.blockAt(p) as Block | null) || isWater(bot.blockAt(offset(p, 0, -1, 0)) as Block | null))
+					throw new Error("drop is in water");
 				await goTo(bot, p, { range: 1.4, timeout: 3000 });
 			});
 		} catch (err) {
@@ -1431,4 +1959,11 @@ const staircaseMine = async (
 	} catch {}
 
 	return null;
+};
+
+/** Mark a promise handled so a late rejection (after a Promise.race timeout won) can't
+ *  crash the process (race59 793 died: unhandled "Place block timeout" from placing.ts). */
+const handled = <T>(p: Promise<T>): Promise<T> => {
+	p.catch(() => {});
+	return p;
 };

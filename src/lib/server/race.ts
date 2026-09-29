@@ -1,23 +1,17 @@
-// Reads the live steve race data from the shared Postgres DB (written by the
-// bots) and shapes it into the per-bot / per-step structure the dashboard
-// renders. Because it reads a shared Postgres server (not a local SQLite file),
-// the dashboard can run anywhere — it no longer has to live on the race box.
+// Reads the live steve race data from Cloudflare D1 (written by the bots) and
+// shapes it into the per-bot / per-step structure the dashboard renders. Runs on
+// the Worker via the D1 binding (platform.env.DB); no Node APIs here.
 
-import postgres from 'postgres';
-import { env } from '$env/dynamic/private';
 import { STEP_IDX } from '$lib/steps';
 
 // Console keeps a rolling tail of at most this many most-recent events.
 const LOG_TAIL = 200;
 
-let sql: ReturnType<typeof postgres> | null = null;
-function getSql(): ReturnType<typeof postgres> {
-	if (!sql) {
-		if (!env.DATABASE_URL) throw new Error('DATABASE_URL is not set');
-		// Small pool — shared Postgres with limited slots (see lib/steve/lib/db.ts).
-		sql = postgres(env.DATABASE_URL, { max: 3 });
-	}
-	return sql;
+/** Run a D1 query and return its rows. */
+async function all<T>(db: D1Database, query: string, ...params: unknown[]): Promise<T[]> {
+	const stmt = params.length ? db.prepare(query).bind(...params) : db.prepare(query);
+	const res = await stmt.all<T>();
+	return res.results ?? [];
 }
 
 export type BotInfo = {
@@ -74,38 +68,47 @@ type TickRow = {
 
 const str = (n: number | null): string => (n == null ? '?' : String(n));
 
-export async function getRaceData(): Promise<RaceData> {
+export async function getRaceData(db: D1Database | undefined): Promise<RaceData> {
+	if (!db) return { raceId: '?', raceStartMs: null, bots: [], error: 'D1 binding (DB) not available' };
 	try {
-		const sql = getSql();
 		// The interactive steve-mcp bot logs into the SAME db under a `mcp-…` race_id;
 		// exclude it so its ticks never hijack the main dashboard (it has its own /mcp page).
-		const latest = (await sql`
-			SELECT race_id FROM events WHERE race_id NOT LIKE 'mcp%' ORDER BY id DESC LIMIT 1
-		`) as unknown as { race_id: string }[];
+		const latest = await all<{ race_id: string }>(
+			db,
+			`SELECT race_id FROM events WHERE race_id NOT LIKE 'mcp%' ORDER BY id DESC LIMIT 1`
+		);
 		if (latest.length === 0) return { raceId: '?', raceStartMs: null, bots: [] };
 		const raceId = latest[0].race_id;
 
-		const startRow = (await sql`
-			SELECT MIN(ts) AS t FROM events WHERE race_id = ${raceId}
-		`) as unknown as { t: string | null }[];
+		const startRow = await all<{ t: string | null }>(
+			db,
+			`SELECT MIN(ts) AS t FROM events WHERE race_id = ?`,
+			raceId
+		);
 		const raceStartMs = startRow[0]?.t ? Date.parse(startRow[0].t) : null;
 
-		const stepRows = (await sql`
-			SELECT bot_id, event, detail, ts FROM events
-			WHERE race_id = ${raceId} AND category = 'step' AND event IN ('start', 'success')
-			ORDER BY id
-		`) as unknown as StepRow[];
+		const stepRows = await all<StepRow>(
+			db,
+			`SELECT bot_id, event, detail, ts FROM events
+			 WHERE race_id = ? AND category = 'step' AND event IN ('start', 'success')
+			 ORDER BY id`,
+			raceId
+		);
 
-		const lastRows = (await sql`
-			SELECT bot_id, category, event FROM events
-			WHERE id IN (SELECT MAX(id) FROM events WHERE race_id = ${raceId} GROUP BY bot_id)
-		`) as unknown as LastRow[];
+		const lastRows = await all<LastRow>(
+			db,
+			`SELECT bot_id, category, event FROM events
+			 WHERE id IN (SELECT MAX(id) FROM events WHERE race_id = ? GROUP BY bot_id)`,
+			raceId
+		);
 
-		const tickRows = (await sql`
-			SELECT bot_id, CAST(health AS INT) AS health, CAST(x AS INT) AS x,
-			       CAST(y AS INT) AS y, CAST(z AS INT) AS z, dimension, is_in_water FROM ticks
-			WHERE id IN (SELECT MAX(id) FROM ticks WHERE race_id = ${raceId} GROUP BY bot_id)
-		`) as unknown as TickRow[];
+		const tickRows = await all<TickRow>(
+			db,
+			`SELECT bot_id, CAST(health AS INTEGER) AS health, CAST(x AS INTEGER) AS x,
+			        CAST(y AS INTEGER) AS y, CAST(z AS INTEGER) AS z, dimension, is_in_water FROM ticks
+			 WHERE id IN (SELECT MAX(id) FROM ticks WHERE race_id = ? GROUP BY bot_id)`,
+			raceId
+		);
 
 		const bots = new Map<string, BotInfo>();
 		const get = (id: string): BotInfo => {
@@ -148,8 +151,13 @@ export async function getRaceData(): Promise<RaceData> {
 			const w = getWalk(r.bot_id);
 			const ms = Date.parse(r.ts);
 			if (r.event === 'success') {
+				// A success row's detail is the step's RESULT message ("Smelted raw_iron
+				// (+8)"), not its name, so the name lookup never hit and every bot's
+				// `done` stayed empty (the ladder ticks came only from the live feed and
+				// the leader pick always fell back to bots[0]). Credit the step whose
+				// round is active (set by its 'start' row).
 				const name = (r.detail ?? '').split(': ')[0];
-				const i = STEP_IDX.get(name);
+				const i = STEP_IDX.get(name) ?? (w.active !== null ? w.active : undefined);
 				if (i !== undefined) {
 					if (!b.done.includes(i)) b.done.push(i);
 					if (b.doneAt[i] === undefined && !Number.isNaN(ms)) b.doneAt[i] = ms;
@@ -194,49 +202,58 @@ export async function getRaceData(): Promise<RaceData> {
 		// The get-out-of-water override is authoritative via its own events (it also
 		// fires for lily-pad/bobbing cases a tick's is_in_water flag misses). Latest
 		// 'override' event per bot: escape_water = active, escape_done = cleared.
-		const ovRows = (await sql`
-			SELECT bot_id, event FROM events
-			WHERE category = 'override'
-			  AND id IN (
-			    SELECT MAX(id) FROM events
-			    WHERE race_id = ${raceId} AND category = 'override' GROUP BY bot_id
-			  )
-		`) as unknown as { bot_id: string; event: string }[];
+		const ovRows = await all<{ bot_id: string; event: string }>(
+			db,
+			`SELECT bot_id, event FROM events
+			 WHERE category = 'override'
+			   AND id IN (
+			     SELECT MAX(id) FROM events
+			     WHERE race_id = ? AND category = 'override' GROUP BY bot_id
+			   )`,
+			raceId
+		);
 		for (const r of ovRows) get(r.bot_id).inWater = r.event === 'escape_water';
 
 		// Death count per bot this race (lifecycle 'death' events).
-		const deathRows = (await sql`
-			SELECT bot_id, COUNT(*)::int AS deaths FROM events
-			WHERE race_id = ${raceId} AND category = 'lifecycle' AND event = 'death'
-			GROUP BY bot_id
-		`) as unknown as { bot_id: string; deaths: number }[];
+		const deathRows = await all<{ bot_id: string; deaths: number }>(
+			db,
+			`SELECT bot_id, CAST(COUNT(*) AS INTEGER) AS deaths FROM events
+			 WHERE race_id = ? AND category = 'lifecycle' AND event = 'death'
+			 GROUP BY bot_id`,
+			raceId
+		);
 		for (const r of deathRows) get(r.bot_id).deaths = r.deaths;
 
 		// Each bot's latest inventory snapshot: all rows at its most recent ts,
 		// summed per item, count-desc. (Each tick writes a full snapshot of the
 		// bot's non-empty slots, so the newest ts is its current inventory.)
-		const invRows = (await sql`
-			WITH latest AS (
+		const invRows = await all<{ bot_id: string; name: string; count: number }>(
+			db,
+			`WITH latest AS (
 				SELECT bot_id, MAX(ts) AS ts FROM inventory_snapshots
-				WHERE race_id = ${raceId} GROUP BY bot_id
+				WHERE race_id = ? GROUP BY bot_id
 			)
-			SELECT i.bot_id, i.item_name AS name, SUM(i.count)::int AS count
+			SELECT i.bot_id, i.item_name AS name, CAST(SUM(i.count) AS INTEGER) AS count
 			FROM inventory_snapshots i
 			JOIN latest l ON l.bot_id = i.bot_id AND l.ts = i.ts
-			WHERE i.race_id = ${raceId}
+			WHERE i.race_id = ?
 			GROUP BY i.bot_id, i.item_name
-			ORDER BY count DESC
-		`) as unknown as { bot_id: string; name: string; count: number }[];
+			ORDER BY count DESC`,
+			raceId,
+			raceId
+		);
 		for (const r of invRows) get(r.bot_id).inv.push({ name: r.name, count: r.count });
 
 		// Latest timestamp of each event per (category) per bot — drives the per-step
 		// sub-task views and the time shown on each sub-task.
-		const evRows = (await sql`
-			SELECT bot_id, category, event, MAX(ts) AS ts FROM events
-			WHERE race_id = ${raceId}
-			  AND (category IN ('wood', 'smelt') OR category LIKE 'mine:%')
-			GROUP BY bot_id, category, event
-		`) as unknown as { bot_id: string; category: string; event: string; ts: string }[];
+		const evRows = await all<{ bot_id: string; category: string; event: string; ts: string }>(
+			db,
+			`SELECT bot_id, category, event, MAX(ts) AS ts FROM events
+			 WHERE race_id = ?
+			   AND (category IN ('wood', 'smelt') OR category LIKE 'mine:%')
+			 GROUP BY bot_id, category, event`,
+			raceId
+		);
 		for (const r of evRows) {
 			const ms = Date.parse(r.ts);
 			if (Number.isNaN(ms)) continue;
@@ -246,11 +263,13 @@ export async function getRaceData(): Promise<RaceData> {
 
 		// Recent events for the live log console (newest first from the DB → reverse
 		// to chronological so the console reads top→bottom oldest→newest).
-		const logRows = (await sql`
-			SELECT ts, category, event, detail, x, y, z FROM events
-			WHERE race_id = ${raceId}
-			ORDER BY id DESC LIMIT ${LOG_TAIL}
-		`) as unknown as LogLine[];
+		const logRows = await all<LogLine>(
+			db,
+			`SELECT ts, category, event, detail, x, y, z FROM events
+			 WHERE race_id = ?
+			 ORDER BY id DESC LIMIT ${LOG_TAIL}`,
+			raceId
+		);
 		const log = logRows.reverse();
 
 		return {

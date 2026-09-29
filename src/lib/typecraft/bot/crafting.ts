@@ -70,6 +70,13 @@ export const initCrafting = (bot: Bot, _options: BotOptions): void => {
 
 		const times = count ?? 1;
 		let windowCraftingTable: Window | null = null;
+		// Host-provided cancellation: steve's run-loop lets a timed-out step keep
+		// running in the background and dispatches the next one; two crafts then
+		// interleave clicks on different window ids and both fail ("No craft
+		// result" / "Promise timed out", race41 721). The host sets bot.preemptCheck
+		// to throw once its epoch moved on; we call it before every click.
+		const check = (): void =>
+			(bot as unknown as { preemptCheck?: () => void }).preemptCheck?.();
 
 		const doCraft = async () => {
 			bot.emit("debug", "craft", {
@@ -165,6 +172,12 @@ export const initCrafting = (bot: Bot, _options: BotOptions): void => {
 
 					let originalSourceSlot: number | null = null;
 
+					// Forget the client's idea of the result slot before placing: the
+					// server clears slot 0 after a result is taken and resends it once the
+					// grid changes, so anything still cached here is stale (race42 725:
+					// grid empty, result "crafting_table" — a leftover from the previous
+					// craft — which the take-the-result step then trusted).
+					window.slots[0] = null;
 					// Place shaped ingredients
 					bot.emit("debug", "craft", {
 						event: "place",
@@ -190,9 +203,11 @@ export const initCrafting = (bot: Bot, _options: BotOptions): void => {
 										throw new Error("Missing ingredient");
 									if (originalSourceSlot === null)
 										originalSourceSlot = sourceSlot;
+									check();
 									await bot.clickWindow(sourceSlot, 0, 0);
 								}
 
+								check();
 								await bot.clickWindow(slot(x, y), 1, 0);
 							}
 						}
@@ -227,9 +242,11 @@ export const initCrafting = (bot: Bot, _options: BotOptions): void => {
 								});
 								if (originalSourceSlot === null)
 									originalSourceSlot = sourceSlot;
+								check();
 								await bot.clickWindow(sourceSlot, 0, 0);
 							}
 
+							check();
 							await bot.clickWindow(destSlot, 1, 0);
 						}
 					}
@@ -249,7 +266,7 @@ export const initCrafting = (bot: Bot, _options: BotOptions): void => {
 							const timeout = setTimeout(() => {
 								window.onSlotUpdate = prevCb;
 								resolve();
-							}, 2000);
+							}, 3000);
 							window.onSlotUpdate = (slot, _old, newItem) => {
 								prevCb?.(slot, _old, newItem);
 								if (slot === 0 && newItem) {
@@ -259,6 +276,40 @@ export const initCrafting = (bot: Bot, _options: BotOptions): void => {
 								}
 							};
 						});
+					}
+
+					// VERIFY the result is the recipe's item before taking it. A right-click
+					// that didn't land (window desync under load) leaves e.g. ONE plank in the
+					// grid, whose result is a button/pressure plate; taking it blindly wasted
+					// the wood (race34 692: 25 birch buttons, 25 planks gone; 686: a door +
+					// stairs). Put the grid back and let the caller retry instead.
+					const got = window.slots[0];
+					// One line per craft showing what actually sits in the grid vs the
+					// result the server offered — the only way to tell a rejected click
+					// from a wrong pattern when "No craft result" comes back.
+					bot.emit("debug", "craft", {
+						event: "grid",
+						window: window.id,
+						grid: Array.from({ length: w * h }, (_, i) => {
+							const it = window.slots[i + 1];
+							return it ? `${it.name}x${it.count}` : "-";
+						}).join(","),
+						result: got ? `${got.name}x${got.count}` : null,
+						cursor: window.selectedItem?.name ?? null,
+					});
+					check();
+					if (got && got.type !== recipe.result.id) {
+						bot.emit("debug", "craft", { event: "wrong_result", got: got.name, want: recipe.result.id });
+						for (let s = 1; s <= w * h; s++) {
+							if (window.slots[s]) await bot.putAway(s);
+						}
+						throw new Error(`Wrong craft result: ${got.name}`);
+					}
+					if (!got) {
+						for (let s = 1; s <= w * h; s++) {
+							if (window.slots[s]) await bot.putAway(s);
+						}
+						throw new Error("No craft result");
 					}
 
 					// Take the result from slot 0
@@ -276,14 +327,30 @@ export const initCrafting = (bot: Bot, _options: BotOptions): void => {
 						}
 					}
 
-					// Clear any items left in the crafting grid back to inventory (including result slot 0)
-					for (let s = 0; s <= w * h; s++) {
+					// Clear any items left in the crafting grid back to inventory. GRID FIRST,
+					// result slot LAST: taking slot 0 while a stray plank still sits in the
+					// grid *crafts* that plank into a button (race35 696/699 still minted
+					// oak_buttons after the result check — from this sweep, not the take).
+					for (let s = w * h; s >= 1; s--) {
 						if (window.slots[s]) {
 							await bot.putAway(s);
 						}
 					}
+					if (window.slots[0] && window.slots[0].type === recipe.result.id) {
+						await bot.putAway(0);
+					}
 				}
 			} finally {
+				// Closing a window while an item is on the cursor DROPS it on the ground.
+				// Park it in any inventory slot first and say so (race38 710: 14 planks
+				// vanished at a table craft).
+				const w = windowCraftingTable ?? bot.inventory;
+				if (w?.selectedItem) {
+					bot.emit("debug", "craft", { event: "cursor_stuck", item: w.selectedItem.name, count: w.selectedItem.count });
+					try {
+						await bot.putSelectedItemRange(w.inventoryStart, w.inventoryEnd, w, 0);
+					} catch {}
+				}
 				if (windowCraftingTable) {
 					bot.closeWindow(windowCraftingTable);
 				}

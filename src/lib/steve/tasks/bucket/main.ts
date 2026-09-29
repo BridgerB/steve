@@ -5,14 +5,18 @@
 import type { Bot } from "typecraft";
 import { distance, offset, type Vec3, vec3, windowItems } from "typecraft";
 import {
+	digStaircaseUp,
 	exploreRandom,
+	nudgeThrough,
 	forgetResource,
-	getMineEntry,
 	getRememberedResource,
 	goTo,
 	interactReliably,
 	returnToSurface,
+	rimYAt,
 	sleep,
+	surfaceYAt,
+	throwIfPreempted,
 } from "../../lib/bot-utils.ts";
 import { logEvent } from "../../lib/logger.ts";
 import type { StepResult } from "../../types.ts";
@@ -26,6 +30,59 @@ import type { StepResult } from "../../types.ts";
 // it (this is what killed the first bot to reach the water step).
 const failedWater = new WeakMap<Bot, Set<string>>();
 const waterKey = (p: Vec3) => `${p.x},${p.y},${p.z}`;
+// The last pond a hunt found, per bot. The step's budget can expire right after
+// a long_hunt finds water (race36 700: found at 12:05:54, timed out 12:06:23), and
+// the next call started over — surfacing to the mine rim 100 blocks away and
+// re-exploring from there. Go straight back to it first.
+const lastFound = new WeakMap<Bot, Vec3>();
+
+const unreachableWater = new WeakMap<Bot, Map<string, number>>();
+
+const CLEAR = new Set([
+	"air",
+	"cave_air",
+	"short_grass",
+	"tall_grass",
+	"fern",
+	"large_fern",
+	"dead_bush",
+	"snow_layer",
+	"leaf_litter",
+	"vine",
+]);
+const clearAt = (bot: Bot, x: number, y: number, z: number): boolean =>
+	CLEAR.has(bot.blockAt({ x, y, z })?.name ?? "stone");
+const groundAt = (bot: Bot, x: number, y: number, z: number): boolean => {
+	const n = bot.blockAt({ x, y, z })?.name ?? "";
+	return n !== "" && !CLEAR.has(n) && !n.includes("water") && !n.includes("lava") && !n.includes("leaves");
+};
+
+/**
+ * A dry block to STAND on beside `water`: solid under the feet, 2 clear above,
+ * within 2 blocks horizontally and 0-2 above the water's level, close enough
+ * that the scoop's raytrace reaches (feet ≤ 3.8 from the water's centre).
+ * Nearest to the bot first so we don't cross the pond to get there.
+ */
+export const shoreStand = (bot: Bot, water: Vec3): Vec3 | null => {
+	const wc = vec3(water.x + 0.5, water.y + 0.5, water.z + 0.5);
+	let best: { p: Vec3; d: number } | null = null;
+	for (let dx = -2; dx <= 2; dx++) {
+		for (let dz = -2; dz <= 2; dz++) {
+			if (dx === 0 && dz === 0) continue;
+			for (let dy = 0; dy <= 2; dy++) {
+				const x = water.x + dx;
+				const y = water.y + dy;
+				const z = water.z + dz;
+				if (!groundAt(bot, x, y - 1, z) || !clearAt(bot, x, y, z) || !clearAt(bot, x, y + 1, z)) continue;
+				const feet = vec3(x + 0.5, y, z + 0.5);
+				if (distance(feet, wc) > 3.8) continue;
+				const d = distance(bot.entity.position, feet);
+				if (!best || d < best.d) best = { p: vec3(x, y, z), d };
+			}
+		}
+	}
+	return best?.p ?? null;
+};
 
 export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 	const bad = (p: Vec3): boolean =>
@@ -56,16 +113,23 @@ export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 		const src = list.filter((p) => !bad(p) && isSource(p));
 		const aboveName = (p: Vec3): string =>
 			bot.blockAt(offset(p, 0, 1, 0))?.name ?? "";
-		// Tier 1: open-sky surface pond near our level — the only truly safe scoop.
+		// Tier 1: open-sky surface pond — the only truly safe scoop. NOT tied to our own
+		// height: from a hilltop the valley pond 15 below is the obvious scoop, but the
+		// old `p.y >= botY - 5` threw it out and Fill Water timed out "surface water
+		// 4/4" with a pond in plain view (race33 691). nearSurface rules out cave water.
+		// … and at the TERRAIN surface of its own column: a cave lake in a ravine
+		// has plain `air` above too (race30 676/677 targeted water at y19 under a
+		// y70 surface and never got out of the cave).
+		const nearSurface = (p: Vec3, slack: number): boolean => p.y >= surfaceYAt(bot, p.x, p.z) - slack;
 		const surface = src.filter(
-			(p) => aboveName(p) === "air" && p.y >= botY - 5,
+			(p) => aboveName(p) === "air" && p.y >= botY - 24 && nearSurface(p, 3),
 		);
 		if (surface.length) return surface[0] ?? null;
 		// Tier 2: air/cave_air above but still near our level (a shallow pool we won't
-		// get trapped diving into). Excludes anything well below us.
+		// get trapped diving into). Excludes anything well below us or the terrain.
 		const shallow = src.filter((p) => {
 			const a = aboveName(p);
-			return (a === "air" || a === "cave_air") && p.y >= botY - 8;
+			return (a === "air" || a === "cave_air") && p.y >= botY - 12 && nearSurface(p, 8);
 		});
 		if (shallow.length) return shallow[0] ?? null;
 		// Only deep cave water in range — refuse it (drown-trap) and let the search escalate.
@@ -78,21 +142,45 @@ export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 
 	let waterPos: Vec3 | null = null;
 
+	// 0. A pond a previous (cut-short) call already found: go there first.
+	{
+		const prev = lastFound.get(bot);
+		if (prev && !bad(prev) && (bot.blockAt(prev)?.name ?? "") === "water") {
+			logEvent("bucket", "resume_found", `${prev.x},${prev.y},${prev.z}`);
+			waterPos = prev;
+		} else if (prev) lastFound.delete(bot);
+	}
+
 	// 1. If deep underground, surface FIRST. The only water within reach down here
 	//    is flowing cave water that won't scoop (bots looped + drowned cycling
 	//    through it) — ponds/rivers up top are scoopable source water.
-	const entry = getMineEntry(bot);
 	const yNow = bot.entity.position.y;
-	// Surface first when deep: below the recorded mine entry, OR — when that memory
-	// was wiped by a reconnect — simply well below sea level, where there's no
-	// scoopable source water. returnToSurface now climbs even with no entry.
-	if ((entry && yNow < entry.y - 6) || yNow < 52) {
+	// "Underground" = well below the terrain surface of OUR column, not below the
+	// mine entry: a bot standing in a valley (y66) under a hilltop entry (y78)
+	// walked 100 blocks back up to the rim and lost the pond it had just found.
+	const surfHere = surfaceYAt(bot, Math.floor(bot.entity.position.x), Math.floor(bot.entity.position.z));
+	if (!waterPos && (yNow < surfHere - 5 || yNow < 45)) {
 		logEvent(
 			"bucket",
 			"return_surface",
 			`for water, from y=${Math.floor(yNow)}`,
 		);
 		await returnToSurface(bot);
+		// returnToSurface can fall short and return false; the old code then hunted
+		// water from wherever it stood — race30 676/677 explored at y21, found cave
+		// water at y19 and spent the rest of the race notching an aquifer bank.
+		// Insist on the real surface: carve stairs to the rim before any search.
+		for (let tries = 0; tries < 2 && bot.entity.position.y < rimYAt(bot) - 6; tries++) {
+			const rim = rimYAt(bot);
+			logEvent("bucket", "still_underground", `y=${Math.floor(bot.entity.position.y)} rim=${rim} — climbing`);
+			await digStaircaseUp(bot, rim, Date.now() + 100000);
+		}
+		// STILL down here after both climbs (the climber bailed: water beside it, a
+		// wet ceiling…): don't hunt from the cave — race36 702 searched at y13,
+		// "found" cave water at y47 and blacklisted it. Fail so the step retries.
+		if (bot.entity.position.y < rimYAt(bot) - 6) {
+			return { success: false, message: `Still underground at y=${Math.floor(bot.entity.position.y)} — climb again` };
+		}
 		waterPos = search(128, 100);
 		for (let i = 0; i < 4 && !waterPos; i++) {
 			logEvent("bucket", "exploring", `surface water ${i + 1}/4`);
@@ -118,6 +206,7 @@ export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 	// 4. Explore around the current level for more water.
 	if (!waterPos) {
 		for (let i = 0; i < 5; i++) {
+			throwIfPreempted();
 			logEvent("bucket", "exploring", `looking for water ${i + 1}/5`);
 			await exploreRandom(bot, 60);
 			waterPos = search(128, 30);
@@ -136,31 +225,62 @@ export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 	//     rough terrain, but even partial progress relocates us into new ground to scan.
 	if (!waterPos) {
 		const origin = bot.entity.position;
-		const dirs: ReadonlyArray<readonly [number, number]> = [
-			[1, 0],
-			[0, 1],
-			[-1, 0],
-			[0, -1],
-			[1, 1],
-			[-1, -1],
-			[1, -1],
-			[-1, 1],
-		];
+		// Downhill first: water sits at y<=63, so from a mountain top the legs that
+		// head into falling terrain are the ones that find it (race53 768: the
+		// hunt's fixed east-first order happened to be downhill and found a lake in
+		// 1:20 after 5 min of dry ridge exploring; a different spawn would have
+		// spent legs climbing). Sort the eight bearings by the terrain height 60
+		// blocks out, lowest first — a bearing that is already at lake level wins.
+		const dirs = (
+			[
+				[1, 0],
+				[0, 1],
+				[-1, 0],
+				[0, -1],
+				[1, 1],
+				[-1, -1],
+				[1, -1],
+				[-1, 1],
+			] as ReadonlyArray<readonly [number, number]>
+		)
+			.map((d) => ({ d, y: surfaceYAt(bot, Math.floor(origin.x + d[0] * 60), Math.floor(origin.z + d[1] * 60)) }))
+			.sort((p, q) => p.y - q.y)
+			.map((p) => p.d);
+		logEvent("bucket", "hunt_order", dirs.map((d) => `${d[0]},${d[1]}`).join(" "));
 		for (const [dx, dz] of dirs) {
 			if (waterPos) break;
-			for (let leg = 1; leg <= 2 && !waterPos; leg++) {
+			// Legs of 60: the pathfinder's searchRadius is 64, so a 140-block goal was
+			// "No path found" every time and the bot never left its cell (race26 660
+			// ran all 16 legs standing still). Three 60-block legs cover the same reach.
+			for (let leg = 1; leg <= 3 && !waterPos; leg++) {
+				// A call cut short by the step budget kept spinning here: every goTo
+				// threw (stale epoch), the catch below swallowed it, and all 24 legs
+				// "ran" in 2s (race36 700 at 12:10:28). Unwind instead.
+				throwIfPreempted();
 				const here = bot.entity.position;
-				const target = vec3(
-					Math.floor(here.x + dx * 140),
-					Math.floor(here.y),
-					Math.floor(here.z + dz * 140),
-				);
+				const tx = Math.floor(here.x + dx * 60);
+				const tz = Math.floor(here.z + dz * 60);
+				// Aim at the terrain surface out there, not at our own height: from a
+				// mountain top a same-y goal 60 blocks out hangs in the air and the
+				// pathfinder gives up, so the bot stood still through 3 legs × 36s
+				// (race41 720 at y113).
+				const target = vec3(tx, surfaceYAt(bot, tx, tz), tz);
 				logEvent(
 					"bucket",
 					"long_hunt",
-					`dir ${dx},${dz} leg ${leg} → ${target.x},${target.z}`,
+					`dir ${dx},${dz} leg ${leg} → ${target.x},${target.y},${target.z}`,
 				);
+				const before = vec3(here.x, here.y, here.z);
 				await goTo(bot, target, { range: 8, timeout: 30000 }).catch(() => {});
+				if (distance(bot.entity.position, before) < 3) {
+					// Pathfinder found nothing and the nudge hit a wall: jump-walk the
+					// bearing for 4s so a ledge or 1-high lip can't pin us.
+					logEvent("bucket", "long_hunt_stuck", `leg moved <3 — jump-walk dir ${dx},${dz}`);
+					// Under a tree canopy the pathfinder and the sprint both hit leaves
+					// (race43 728: leaves at head height on every side, 2 legs lost).
+					await nudgeThrough(bot, dx, dz, 4000);
+					if (bot.entity.isInWater) return { success: false, message: "in water — yielding to escape_water" };
+				}
 				await bot.waitForChunksToLoad();
 				waterPos = search(160, 300);
 			}
@@ -199,18 +319,85 @@ export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 		"found_water",
 		`at ${waterPos.x},${waterPos.y},${waterPos.z}`,
 	);
+	lastFound.set(bot, waterPos);
 
 	const bucket = windowItems(bot.inventory).find((i) => i.name === "bucket");
 	if (!bucket) {
 		return { success: false, message: "No empty bucket in inventory" };
 	}
 
-	// Navigate to stand directly above/next to water
-	// Need to be within 1-2 blocks for reliable raytrace
-	const aboveWater = vec3(waterPos.x + 0.5, waterPos.y + 1, waterPos.z + 0.5);
-	const dist = distance(bot.entity.position, aboveWater);
-	if (dist > 2) {
-		await goTo(bot, aboveWater, { range: 1, timeout: 15000 });
+	// Walk to a DRY shore stand beside the water, never onto the water itself.
+	// The old target was the block directly above the water: from a bank 2-3
+	// higher than the pond that is a step off the ledge into the pond →
+	// escape_water preempts → resume_found picks the same pond → repeat (race38
+	// 708 looped Fill Water ⇄ Get Out Of Water 5× in 2 min with a bucket in hand).
+	let stand = shoreStand(bot, waterPos);
+	// The picked block is mid-pond (no dry stand within 2): retarget to the nearest
+	// water block of the same pool that HAS a shore stand. race40 716 walked onto
+	// the water 6× in 45s ("shore_stand none — approaching above the water") before
+	// the blacklist happened to hand it a shoreline block.
+	if (!stand) {
+		let best: { p: Vec3; s: Vec3; d: number } | null = null;
+		for (let dx = -7; dx <= 7; dx++) {
+			for (let dz = -7; dz <= 7; dz++) {
+				for (let dy = -1; dy <= 1; dy++) {
+					if (dx === 0 && dz === 0 && dy === 0) continue;
+					const p = vec3(waterPos.x + dx, waterPos.y + dy, waterPos.z + dz);
+					if (!(bot.blockAt(p)?.name ?? "").includes("water")) continue;
+					if (failedWater.get(bot)?.has(waterKey(p))) continue;
+					const sp = shoreStand(bot, p);
+					if (!sp) continue;
+					const d = distance(bot.entity.position, vec3(sp.x + 0.5, sp.y, sp.z + 0.5));
+					if (!best || d < best.d) best = { p, s: sp, d };
+				}
+			}
+		}
+		if (best) {
+			logEvent(
+				"bucket",
+				"shore_retarget",
+				`${waterKey(waterPos)} → ${waterKey(best.p)} stand ${best.s.x},${best.s.y},${best.s.z}`,
+			);
+			waterPos = best.p;
+			lastFound.set(bot, waterPos);
+			stand = best.s;
+		}
+	}
+	if (stand) {
+		logEvent("bucket", "shore_stand", `${stand.x},${stand.y},${stand.z} for water ${waterPos.x},${waterPos.y},${waterPos.z}`);
+		const standC = vec3(stand.x + 0.5, stand.y, stand.z + 0.5);
+		if (distance(bot.entity.position, standC) > 0.8) {
+			await goTo(bot, standC, { range: 0.7, timeout: 15000 }).catch(() => {});
+		}
+	} else {
+		logEvent("bucket", "shore_stand", "none — approaching above the water");
+		const aboveWater = vec3(waterPos.x + 0.5, waterPos.y + 1, waterPos.z + 0.5);
+		if (distance(bot.entity.position, aboveWater) > 2) {
+			await goTo(bot, aboveWater, { range: 1, timeout: 15000 });
+		}
+	}
+
+	// Never got near the water (no path / cliff / 42 blocks away): don't blame the
+	// water block. race38 710 blacklisted a perfectly good pond it never reached and
+	// burnt 35s of moveCloser attempts on it. Two unreachable tries → then blacklist.
+	{
+		const wc = vec3(waterPos.x + 0.5, waterPos.y + 0.5, waterPos.z + 0.5);
+		const far = distance(bot.entity.position, wc);
+		if (far > 6) {
+			const tries = unreachableWater.get(bot) ?? new Map<string, number>();
+			unreachableWater.set(bot, tries);
+			const n = (tries.get(waterKey(waterPos)) ?? 0) + 1;
+			tries.set(waterKey(waterPos), n);
+			logEvent("bucket", "water_unreachable", `${waterKey(waterPos)} dist=${far.toFixed(1)} try=${n}`);
+			if (n >= 2) {
+				const set = failedWater.get(bot) ?? new Set<string>();
+				set.add(waterKey(waterPos));
+				failedWater.set(bot, set);
+				lastFound.delete(bot);
+				logEvent("bucket", "scoop_blacklist", `${waterKey(waterPos)} (unreachable)`);
+			}
+			return { success: false, message: `Couldn't reach water (${far.toFixed(0)} away)` };
+		}
 	}
 
 	try {
@@ -225,6 +412,7 @@ export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 			try {
 				await bot.clickWindow(bucketSlot, 0, 0);
 				await bot.clickWindow(36, 0, 0);
+				if (bot.inventory.selectedItem) await bot.clickWindow(bucketSlot, 0, 0); // displaced item back, not left on the cursor
 				bot.setQuickBarSlot(0);
 			} catch {}
 		}
@@ -235,7 +423,7 @@ export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 		// rather than in raytrace range).
 		const filled = await interactReliably(bot, {
 			target: waterPos,
-			reach: 2.5,
+			reach: 4, // from the shore stand: never step toward the water again
 			attempts: 5,
 			settleMs: 1000,
 			action: async () => {
@@ -253,6 +441,12 @@ export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 		});
 		if (filled) {
 			logEvent("bucket", "filled", "water_bucket");
+			// The scoop swaps the held bucket for a water bucket server-side; the
+			// client model briefly showed the OTHER empty bucket gone (race45 738:
+			// bucket 0 / water_bucket 1 for 70s), so the iron-kit sums dropped below
+			// 7 and Mine Coal / Mine Iron re-fired with the full kit in the pack.
+			// Pull the server's truth before the next step tick.
+			await bot.resyncInventory().catch(() => false);
 			return { success: true, message: "Filled water bucket" };
 		}
 		// This block won't scoop (flowing/awkward) — blacklist it so the retry

@@ -56,8 +56,21 @@ export const steps: readonly Step[] = [
 		// portal) needs wood — stop forcing pointless re-gathering, which deadlocks
 		// in tree-poor terrain.
 		isComplete: (s) =>
+			// Iron kit done (2 buckets in hand): nothing left on the critical path needs
+			// wood, so never climb 80 levels out of the mine for logs again (race41 723:
+			// 2 buckets + 2 ingots, spent 4+ min on Gather Wood from y28).
+			// …but only while a stone pickaxe can still be re-crafted (race46 743: the
+			// pick wore out, 0 planks, no table → 'Need crafting table' every 3s forever).
+			(s.inventory.buckets + s.inventory.waterBuckets >= 2 &&
+				(s.equipment.hasCraftingTable || s.inventory.planks >= 4)) ||
 			s.inventory.logs >= 5 ||
 			s.inventory.planks >= 20 ||
+			// With a table already placed, 12 planks covers the whole early tool chain
+			// (sticks 2 + wooden pick 3 + spare table 4) — the same reserve Craft
+			// Planks targets. Demanding 20 sent a bot with 16 planks back to a savanna
+			// tree whose only logs left were canopy branches it couldn't reach (race
+			// 586: 3+ min blacklisting logs one at a time while holding a full kit).
+			(s.equipment.hasCraftingTable && s.inventory.planks >= 12) ||
 			getPickaxeTier(s.equipment.pickaxe) >= 3 ||
 			// Past the wood phase (iron in hand / a furnace built) → stop re-gathering,
 			// BUT only while we can still actually craft: a reachable crafting table, or
@@ -86,7 +99,15 @@ export const steps: readonly Step[] = [
 				// near trees were depleted, oscillated forever chasing far wood (`Gather Wood
 				// timed out 210s`) with 6-8 raw iron it never smelted (race123/299, race124/303
 				// — the deepest wall). Count coal, planks, OR logs as valid fuel.
-				(s.inventory.coal >= 1 ||
+				// … and fuel only matters while there is RAW iron to smelt: a bot with 8
+				// ingots and 6 planks (race34 692, after losing 25 planks to junk buttons)
+				// climbed 57 blocks for firewood it would never burn.
+				// … and a stray raw_iron with the ingot kit already in hand (race37 707:
+				// 8 ingots + 1 reclaimed raw_iron + 6 planks → an 85-block climb for
+				// firewood) doesn't count either.
+				(s.inventory.ironOre === 0 ||
+					s.inventory.ironIngots >= 8 ||
+					s.inventory.coal >= 1 ||
 					s.inventory.planks >= 8 ||
 					s.inventory.logs >= 2) &&
 				(s.equipment.hasCraftingTable ||
@@ -232,6 +253,10 @@ export const steps: readonly Step[] = [
 			s.inventory.coal >= 6 ||
 			s.inventory.ironIngots >= 7 ||
 			s.inventory.planks >= 16 ||
+			// Bucket kit already crafted → nothing left to smelt, coal is dead weight.
+			// Race 606 had 2 buckets + 2 ingots (< 7) and spent 6 min relocate-looping
+			// on Mine Coal instead of going to fill water.
+			s.inventory.buckets + s.inventory.waterBuckets >= 2 ||
 			// READY TO SMELT → stop mining coal and go smelt with wood. Without this, a bot
 			// whose plank count dips below 16 (after crafting a table/tools) re-triggers
 			// Mine Coal, which relocate-LOOPS on sparse ore ("Relocated toward X,Y" forever)
@@ -239,7 +264,12 @@ export const steps: readonly Step[] = [
 			// having furnace+iron+21 planks. If it can smelt now, it should.
 			(s.equipment.hasFurnace &&
 				s.inventory.ironOre >= 3 &&
-				s.inventory.planks >= 6),
+				s.inventory.planks >= 6) ||
+			// Furnace + enough WOOD fuel to smelt the 8-ingot kit (~6 planks; logs
+			// smelt too) → coal is optional. Race26 661 and race27 666/667 spent
+			// their whole runs relocate-looping for coal at y50 while holding a
+			// furnace and a stack of planks, never reaching iron.
+			(s.equipment.hasFurnace && s.inventory.planks + s.inventory.logs * 4 >= 10),
 		execute: async (bot, _state) => {
 			const { mineBlock } = await import("./tasks/mining/main.ts");
 			return mineBlock(bot, "coal_ore", 10);
@@ -251,7 +281,7 @@ export const steps: readonly Step[] = [
 		name: "Mine Iron Ore",
 		priority: 11,
 		canExecute: (s) => getPickaxeTier(s.equipment.pickaxe) >= 2,
-		// 8 is enough for the cast kit: 2 buckets (6) + flint&steel (1). No iron
+		// 7 is enough for the cast kit: 2 buckets (6) + flint&steel (1). No iron
 		// pickaxe needed (obsidian is cast, not mined), so we don't need 11.
 		// Count iron already INVESTED in the kit (each bucket = 3 iron, flint&steel = 1):
 		// otherwise, after crafting buckets the loose iron drops below 8 and the bot
@@ -262,10 +292,20 @@ export const steps: readonly Step[] = [
 				s.inventory.ironIngots +
 				(s.inventory.buckets + s.inventory.waterBuckets) * 3 +
 				(s.inventory.flintAndSteel >= 1 ? 1 : 0) >=
-			8,
+			7,
 		execute: async (bot, _state) => {
 			const { mineBlock } = await import("./tasks/mining/main.ts");
-			return mineBlock(bot, "iron_ore", 8);
+			// Only the iron still MISSING from the kit — the band loop otherwise mines
+			// until 8 loose raw_iron (race28 669 went back to y24 after buckets + flint
+			// and steel were already crafted).
+			const kit =
+				(_state.inventory.buckets + _state.inventory.waterBuckets) * 3 +
+				(_state.inventory.flintAndSteel >= 1 ? 1 : 0);
+			// 7 = 2 buckets (6) + flint&steel (1). race39 712 sat 20 min in a flooded
+			// band hunting an 8th ore it never needed.
+			const need = 7 - kit - _state.inventory.ironIngots;
+			if (need <= 0) return { success: true, message: "Iron kit already complete" };
+			return mineBlock(bot, "iron_ore", Math.max(1, need));
 		},
 	},
 

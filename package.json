@@ -1,34 +1,38 @@
 {
-	"name": "eye-of-steve",
+	"name": "steve",
 	"private": true,
 	"version": "0.0.1",
 	"type": "module",
 	"scripts": {
 		"dev": "vite dev",
 		"sync-viewer": "node scripts/build-viewer.ts",
-		"build": "vite build",
-		"preview": "vite preview",
+		"build": "wrangler types && vite build",
+		"preview": "wrangler dev .svelte-kit/cloudflare/_worker.js --port 4173",
 		"prepare": "svelte-kit sync || echo ''",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"test:unit": "vitest",
 		"test": "npm run test:unit -- --run && npm run test:e2e",
 		"test:e2e": "playwright install && playwright test",
-		"db:push": "drizzle-kit push",
+		"gen": "wrangler types",
 		"db:generate": "drizzle-kit generate",
+		"db:push": "drizzle-kit push",
 		"db:migrate": "drizzle-kit migrate",
 		"db:studio": "drizzle-kit studio",
-		"db:start": "docker compose up"
+		"db:apply:local": "wrangler d1 migrations apply steve --local",
+		"db:apply:remote": "wrangler d1 migrations apply steve --remote",
+		"sync-assets": "node --env-file=.env --import ./typecraft-resolve.mjs scripts/build-assets.ts",
+		"sync-textures": "mkdir -p static/textures/item static/textures/block && cp src/lib/typecraft/data/assets/textures/item/*.png static/textures/item/ && cp src/lib/typecraft/data/assets/textures/block/*.png static/textures/block/ && cp src/lib/typecraft/data/assets/textures/entity/player/wide/steve.png static/textures/steve.png"
 	},
 	"devDependencies": {
-		"@bridgerb/port-from-name": "^1.0.1",
 		"@playwright/test": "^1.60.0",
-		"@sveltejs/adapter-node": "^5.5.4",
+		"@sveltejs/adapter-cloudflare": "^7.2.8",
 		"@sveltejs/kit": "^2.63.0",
 		"@sveltejs/vite-plugin-svelte": "^7.1.2",
-		"@types/node": "^22",
+		"@types/node": "^24",
 		"@types/ws": "^8.18.1",
 		"@vitest/browser-playwright": "^4.1.8",
+		"buffer": "^6.0.3",
 		"drizzle-kit": "^0.31.10",
 		"drizzle-orm": "^0.45.2",
 		"esbuild": "^0.27.7",
@@ -38,13 +42,13 @@
 		"typescript": "^6.0.3",
 		"vite": "^8.0.16",
 		"vitest": "^4.1.8",
-		"vitest-browser-svelte": "^2.1.1"
+		"vitest-browser-svelte": "^2.1.1",
+		"wrangler": "^4.97.0"
 	},
 	"dependencies": {
 		"@babylonjs/core": "^9.0.0",
 		"@modelcontextprotocol/sdk": "^1.27.1",
 		"echarts": "^6.1.0",
-		"postgres": "^3.4.9",
 		"ws": "^8.19.0",
 		"zod": "^4.3.6"
 	}

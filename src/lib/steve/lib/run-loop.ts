@@ -16,7 +16,7 @@
  */
 
 import type { Bot } from "typecraft";
-import { exploreRandom, rememberResource } from "./bot-utils.ts";
+import { beginTaskEpoch, exploreRandom, rememberResource, taskScope } from "./bot-utils.ts";
 import { logEvent } from "./logger.ts";
 import { type Channel, CLOSED } from "./channel.ts";
 import { getPhase, isDragonDead } from "../state.ts";
@@ -40,10 +40,16 @@ export type RunState = Readonly<{
 	currentStepId: string | null;
 	completed: ReadonlySet<string>;
 	consecutiveFailures: number;
+	// escape_water preempt timestamps (last 90s) + the pending storm relocate.
+	preemptAt: number[];
+	stormRelocate: boolean;
 	// Ticks to wait before starting the next step after a failure. Stops a step
 	// that fails fast (e.g. "Cannot find place for furnace") from re-running at the
 	// 20Hz tick rate — a hot-spin that burns CPU and visually flickers the viewer.
 	failureBackoffTicks: number;
+	// Consecutive ticks the RUNNING step's own isComplete() has been true (see the
+	// self-cancel in the tick reducer).
+	completeTicks: number;
 }>;
 
 export const initialRunState: RunState = {
@@ -52,8 +58,19 @@ export const initialRunState: RunState = {
 	currentStepId: null,
 	completed: new Set(),
 	consecutiveFailures: 0,
+	preemptAt: [],
+	stormRelocate: false,
 	failureBackoffTicks: 0,
+	completeTicks: 0,
 };
+
+// Steps that may be CANCELLED once their own isComplete() holds: pure gather/mine
+// loops with no crafting-grid state to strand. gather_wood's gate flips true as
+// soon as the reserve is met (e.g. 2 logs + iron in hand), but the task kept
+// walking to the 5th log for the rest of its 210s budget and blacklisted/hopped
+// away from the tree line meanwhile (race32 686: 90s lost with 8 ingots in hand).
+const SELF_CANCEL_IDS = new Set(["gather_wood", "mine_stone"]);
+const SELF_CANCEL_TICKS = 40; // ~2s at 20Hz — outlasts craft-grid inventory flicker
 
 type SteveStatus = {
 	step: number;
@@ -98,12 +115,22 @@ const DEADLOCK_IDS = [
 // blocks off, and the walk alone eats the 120s budget → the step times out having
 // gathered nothing, looping forever (live race stalls: bots 074/084). 210s lets the
 // far-tree walk + chop finish so wood actually accumulates.
+// mine_iron / mine_coal descend to the ore band and branch-mine; 120s timed out
+// every attempt mid-branch (race 604-607: "Mine Iron Ore timed out (120s)" ×2-3
+// per bot, each restart re-descending). A displaced step is now actually
+// cancelled (taskScope), so a longer budget is safe.
 const stepTimeoutMs = (stepId: string): number =>
 	stepId === "build_nether_portal"
-		? 480000
-		: stepId === "gather_wood"
-			? 210000
-			: 120000;
+		? 900000 // the 294-cell site chamber alone is ~6 min of stone-pick digging (race54)
+		: stepId === "mine_iron" || stepId === "mine_coal"
+			? 300000
+			: stepId === "gather_wood"
+				? 210000
+				: stepId === "get_water_buckets"
+					? 360000 // a dry-hills hunt needs >120s; a mountain mine adds a 50-level
+					// staircase climb first (race49 753/754: timed out at 240s mid-climb, then
+					// lost the climb to a Mine Cobblestone detour before re-entering)
+					: 120000;
 
 const completedFrom = (state: GameState): Set<string> =>
 	new Set(steps.filter((s) => s.isComplete(state)).map((s) => s.id));
@@ -195,12 +222,23 @@ export const reduce = (
 			if (ev.result.success) {
 				const completed = new Set(rs.completed);
 				if (stepId) completed.add(stepId);
+				// Storm relocate: out of the water now → wander away from this spot (the
+				// explore's goTo runs ~10s; hold dispatch that long so the restarted step
+				// doesn't fight it) instead of restarting the step at the same flooded cell.
+				const relocate = stepId === "escape_water" && rs.stormRelocate;
+				const extra: Command[] = relocate
+					? [
+							{ type: "event", category: "nav", event: "preempt_storm_relocate", detail: "escaped — exploring away before the next step" },
+							{ type: "abortExplore" },
+						]
+					: [];
 				return {
-					state: { ...rs, status: "idle", consecutiveFailures: 0, failureBackoffTicks: 0, completed },
+					state: { ...rs, status: "idle", consecutiveFailures: 0, failureBackoffTicks: relocate ? 200 : 0, completed, stormRelocate: relocate ? false : rs.stormRelocate },
 					commands: [
 						{ type: "closeWindow" },
 						{ type: "console", msg: `✓ ${ev.result.message}` },
 						{ type: "event", category: "step", event: "success", detail: ev.result.message },
+						...extra,
 					],
 				};
 			}
@@ -284,18 +322,52 @@ export const reduce = (
 				// epoch so the running step's eventual result is ignored as stale, and start
 				// the new one. The displaced long task self-bails on its own water check, so
 				// the two don't fight for control.
+				// ONLY the survival override (escape_water, priority 0) may preempt. Any other
+				// "higher-priority step became incomplete" is a transient artefact of the
+				// running step itself — e.g. moving a log into the 2×2 craft grid drops the
+				// inventory log count, which flips gather_wood.isComplete() to false and,
+				// if allowed to preempt here, cancels the craft mid-place and re-gathers
+				// forever (the wood-lock). Regressions are handled when the running step
+				// finishes: completed is re-derived from isComplete() every tick, so the
+				// highest-priority incomplete step is picked up on the next dispatch.
 				const current = steps.find((s) => s.id === rs.currentStepId);
-				if (nextStep && current && nextStep.id !== current.id && nextStep.priority < current.priority) {
+				if (nextStep && current && nextStep.id !== current.id && nextStep.id === "escape_water") {
+					// PREEMPT STORM: the same spot keeps re-flooding the restarted step
+					// (race59 792: Build Nether Portal → escape_water every ~10s at a
+					// flooded tunnel mouth; 793: 17 rounds at a pit in the iron band). Four
+					// preempts inside 90s → after this escape, relocate before restarting.
+					const now = Date.now();
+					const recent = [...rs.preemptAt.filter((t) => now - t < 90000), now];
+					const storm = recent.length >= 4;
 					cmds.push(
 						{ type: "publishStatus", status: buildStatus(completed, nextStep.id, phase, progress) },
 						{ type: "console", msg: `⚠ preempt ${current.name} → ${nextStep.name}` },
 						{ type: "event", category: "step", event: "preempt", detail: `${current.name} → ${nextStep.name}` },
+					);
+					if (storm) cmds.push({ type: "event", category: "nav", event: "preempt_storm", detail: `${recent.length} escape_water preempts of ${current.name} in 90s — relocating after the escape` });
+					cmds.push(
 						{ type: "event", category: "step", event: "start", detail: nextStep.name },
 						{ type: "runStep", stepId: nextStep.id, state, epoch: rs.epoch + 1, timeoutMs: stepTimeoutMs(nextStep.id) },
 					);
-					return { state: { ...rs, epoch: rs.epoch + 1, status: "running", currentStepId: nextStep.id, completed }, commands: cmds };
+					return {
+						state: { ...rs, epoch: rs.epoch + 1, status: "running", currentStepId: nextStep.id, completed, completeTicks: 0, preemptAt: storm ? [] : recent, stormRelocate: rs.stormRelocate || storm },
+						commands: cmds,
+					};
 				}
-				return { state: { ...rs, completed }, commands: cmds }; // keep running
+				// SELF-CANCEL: the running step's own goal is already met (held for a
+				// couple of seconds, so a transient inventory dip can't fake it). Bump the
+				// epoch (its eventual result is stale; throwIfPreempted unwinds it at the
+				// next primitive) and go idle so the next tick dispatches the real next step.
+				const doneNow = !!current && SELF_CANCEL_IDS.has(current.id) && completed.has(current.id);
+				const completeTicks = doneNow ? rs.completeTicks + 1 : 0;
+				if (doneNow && completeTicks >= SELF_CANCEL_TICKS) {
+					cmds.push(
+						{ type: "console", msg: `✓ ${current.name} already satisfied — moving on` },
+						{ type: "event", category: "step", event: "done_early", detail: current.name },
+					);
+					return { state: { ...rs, epoch: rs.epoch + 1, status: "idle", currentStepId: null, completed, completeTicks: 0 }, commands: cmds };
+				}
+				return { state: { ...rs, completed, completeTicks }, commands: cmds }; // keep running
 			}
 
 			// Failure backoff (idle only): after a step failed, wait a few ticks before
@@ -320,9 +392,12 @@ export const reduce = (
 				cmds.push(
 					{ type: "console", msg: `Starting: ${nextStep.name}` },
 					{ type: "event", category: "step", event: "start", detail: nextStep.name },
-					{ type: "runStep", stepId: nextStep.id, state, epoch: rs.epoch, timeoutMs: stepTimeoutMs(nextStep.id) },
+					// Fresh epoch for EVERY dispatch, so a previous step that timed out (its
+					// promise lost the race but the task itself kept running) sees the live
+					// epoch move on and aborts at its next primitive (see taskScope).
+					{ type: "runStep", stepId: nextStep.id, state, epoch: rs.epoch + 1, timeoutMs: stepTimeoutMs(nextStep.id) },
 				);
-				return { state: { ...rs, status: "running", currentStepId, completed }, commands: cmds };
+				return { state: { ...rs, epoch: rs.epoch + 1, status: "running", currentStepId, completed }, commands: cmds };
 			}
 			return { state: { ...rs, status: "idle", currentStepId, completed }, commands: cmds };
 		}
@@ -349,7 +424,11 @@ const runCommand = (bot: Bot, ch: Channel<Event>, c: Command): void => {
 					c.timeoutMs,
 				),
 			);
-			Promise.race([step.execute(bot, c.state), timeout])
+			// Run under taskScope with this epoch and mark it live: a step displaced by a
+			// preempt/timeout/death is unwound by throwIfPreempted() inside the shared
+			// primitives instead of running on beside its replacement.
+			beginTaskEpoch(bot, c.epoch);
+			Promise.race([taskScope.run({ bot, epoch: c.epoch }, () => step.execute(bot, c.state)), timeout])
 				.then((result) => ch.put({ type: "stepDone", epoch: c.epoch, result }))
 				.catch((err) =>
 					ch.put({ type: "stepError", epoch: c.epoch, message: err instanceof Error ? err.message : String(err) }),

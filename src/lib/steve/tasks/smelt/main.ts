@@ -206,6 +206,7 @@ export const smeltItems = async (
 		// covers 8 iron (~80s) and, if the furnace is slower, we still exit and COLLECT the
 		// partial output, then the step re-enters to finish the rest next tick.
 		const waitDeadline = Date.now() + 90_000;
+		let topups = 0;
 		while (Date.now() < waitDeadline) {
 			await sleep(2500);
 			const out = furnaceWindow.slots[2]?.count ?? 0;
@@ -215,13 +216,24 @@ export const smeltItems = async (
 				await sleep(9000); // last item may still be cooking — let it finish
 				break;
 			}
+			// Fuel ran out with input left (a short plank stack burns ~1.5 items per
+			// plank): top it up, else the furnace sits idle and the bot walks off with
+			// raw iron inside (race34 693: 7 raw_iron stranded, +3 ingots; 695: 4, +4).
+			if (!furnaceWindow.slots[1] && topups < 4) {
+				const ok = (await moveToSlot(isCoal, 1)) || (await moveToSlot(isFuelName, 1));
+				if (ok) {
+					topups++;
+					logEvent("smelt", "fuel_topup", `${furnaceWindow.slots[1]?.name} x${furnaceWindow.slots[1]?.count}`);
+				}
+			}
 		}
 
-		// Take the finished output stack into inventory.
-		let took = 0;
-		if (furnaceWindow.slots[2]) {
-			took = furnaceWindow.slots[2].count;
-			await bot.clickWindow(2, 0, 0);
+		// Take a furnace slot's whole stack into inventory; true if it landed.
+		const takeSlot = async (slotIdx: number): Promise<number> => {
+			const cur = furnaceWindow.slots[slotIdx];
+			if (!cur) return 0;
+			const n = cur.count;
+			await bot.clickWindow(slotIdx, 0, 0);
 			await sleep(300);
 			const empty = furnaceWindow.slots.findIndex(
 				(s, i) => i >= furnaceWindow.inventoryStart && !s,
@@ -229,11 +241,27 @@ export const smeltItems = async (
 			if (empty >= 0) {
 				await bot.clickWindow(empty, 0, 0);
 				await sleep(300);
-			} else if (furnaceWindow.selectedItem) {
-				await bot.clickWindow(2, 0, 0); // no inventory space — put it back
-				took = 0;
+				return n;
 			}
-		}
+			if (furnaceWindow.selectedItem) await bot.clickWindow(slotIdx, 0, 0); // no space — put it back
+			return 0;
+		};
+
+		// Take the finished output stack into inventory.
+		let took = await takeSlot(2);
+		// The fuel load above moves the WHOLE plank stack (a click carries the stack),
+		// and only ~6 planks burn for 8 iron — the rest sat in the furnace when the bot
+		// walked off: race32 686 left 26 acacia planks (+1 late ingot) in its furnace at
+		// y20, then spent minutes climbing 50 blocks for "wood" to make a table. Reclaim
+		// the leftover fuel (and any ingot that finished during the pickup).
+		const fuelBack = await takeSlot(1);
+		if (fuelBack > 0) logEvent("smelt", "fuel_reclaimed", `${fuelBack}`);
+		await sleep(800);
+		took += await takeSlot(2);
+		// Input still queued (out of fuel / out of time): take the raw ore back so
+		// the next Smelt round (or a re-mine) isn't lost inside this furnace.
+		const inBack = await takeSlot(0);
+		if (inBack > 0) logEvent("smelt", "input_reclaimed", `${inBack}`);
 
 		// Never close while carrying an item — it would be dropped on the ground.
 		if (furnaceWindow.selectedItem) {

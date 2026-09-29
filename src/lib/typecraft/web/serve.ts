@@ -18,7 +18,7 @@ import {
 } from "node:http";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type WebSocket, WebSocketServer } from "ws";
+import { WebSocket, WebSocketServer } from "ws";
 import type { Bot } from "../bot/types.ts";
 import { dumpChunkColumn } from "../chunk/index.ts";
 import type { Entity } from "../entity/types.ts";
@@ -1065,6 +1065,61 @@ canvas { display: block; width: 100vw; height: 100vh; }
 	};
 
 	return { server, wss, close };
+};
+
+/**
+ * Forward a bot's viewer stream to the Cloudflare relay Worker over an outbound
+ * WebSocket (bot -> /ingest/<id> -> Durable Object -> browsers). The big `assets`
+ * message is skipped — the browser fetches it statically. Reconnects on drop.
+ */
+export const forwardBotToRelay = (
+	bot: Bot,
+	opts: { url: string; id: string; viewDistance?: number },
+): { close: () => void } => {
+	const streamer = createBotStreamer({ viewDistance: opts.viewDistance ?? 4 });
+	streamer.bind(bot);
+	const wsUrl =
+		opts.url.replace(/^http/, "ws").replace(/\/$/, "") +
+		"/ingest/" +
+		encodeURIComponent(opts.id);
+
+	let ws: WebSocket | null = null;
+	let detach: (() => void) | null = null;
+	let closed = false;
+
+	const connect = () => {
+		if (closed) return;
+		ws = new WebSocket(wsUrl);
+		ws.on("open", () => {
+			detach = streamer.attach((json) => {
+				if (json.startsWith('{"type":"assets"')) return; // served statically
+				if (ws && ws.readyState === ws.OPEN) ws.send(json);
+			});
+		});
+		const retry = () => {
+			detach?.();
+			detach = null;
+			if (!closed) setTimeout(connect, 2000);
+		};
+		ws.on("close", retry);
+		ws.on("error", () => {
+			try {
+				ws?.close();
+			} catch {}
+		});
+	};
+	connect();
+
+	return {
+		close: () => {
+			closed = true;
+			detach?.();
+			try {
+				ws?.close();
+			} catch {}
+			streamer.close();
+		},
+	};
 };
 
 export const closeWebViewer = (viewer: WebViewer): void => {

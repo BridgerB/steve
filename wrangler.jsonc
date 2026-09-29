@@ -1,0 +1,27 @@
+{
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	"name": "steve",
+	"compatibility_date": "2026-09-27",
+	"compatibility_flags": ["nodejs_als"],
+	"main": ".svelte-kit/cloudflare/_worker.js",
+	"assets": {
+		"binding": "ASSETS",
+		"directory": ".svelte-kit/cloudflare"
+	},
+	"observability": {
+		"enabled": true
+	},
+	"vars": {
+		"RELAY_URL": "wss://steve-relay.bridgerb.workers.dev"
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "steve",
+			"database_id": "f24ac5ed-0eb2-4df4-b4c1-3e34fd644971",
+			"migrations_dir": "drizzle"
+		}
+	],
+	"workers_dev": true,
+	"preview_urls": true
+}
