@@ -68,6 +68,11 @@ for (let i = 1; i <= RUNS; i++) {
 		rid = `${raceId}-r${retry}`;
 		({ out } = await runOne(rid));
 	}
+	// Every run forceloads its spread cell + arena and never released them: 692
+	// chunks were pinned on server A by 22:48, its 10G heap was full, RCON replies
+	// lagged a command behind and 7 of b13's 10 spreads were misread (harness). The
+	// runner owns server A's forceloads — clear them after every run.
+	await rcon.command("forceload remove all").catch(() => "");
 	mkdirSync("data/gym/logs", { recursive: true });
 	writeFileSync(`data/gym/logs/${raceId}.log`, out);
 	const seconds = (Date.now() - t0) / 1000;
