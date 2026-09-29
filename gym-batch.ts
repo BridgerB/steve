@@ -43,7 +43,7 @@ const runOne = (raceId: string): Promise<{ code: number | null; out: string }> =
 		const p = spawn(
 			process.execPath,
 			["--env-file=.env", "--import", "./typecraft-resolve.mjs", "gym-cli.ts"],
-			{ env: { ...process.env, STEP: SLUG, BOT: "Gym_cast", GYM_RUN_ID: raceId }, stdio: ["ignore", "pipe", "pipe"] },
+			{ env: { ...process.env, STEP: SLUG, BOT: process.env.BOT ?? "Gym_cast", GYM_RUN_ID: raceId }, stdio: ["ignore", "pipe", "pipe"] },
 		);
 		let out = "";
 		p.stdout.on("data", (d) => (out += d.toString()));
