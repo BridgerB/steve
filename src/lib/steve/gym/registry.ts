@@ -113,6 +113,18 @@ export const GYM_STEPS: GymStep[] = [
 			await rcon(
 				`forceload add ${bx - 8} ${bz - 10} ${lx + 8} ${lz + 10}`,
 			).catch(() => {});
+			// GYM_TERRAIN=natural: keep the real terrain (no stone floor, no cleared air) so
+			// the chamber clear, reach, pick wear and anchor code run against what a race
+			// meets. Only the lava lake is scaffolded, sunk to the landing's surface height.
+			if (process.env.GYM_TERRAIN === "natural") {
+				await rcon(
+					`fill ${lx - 4} ${by - 2} ${lz - 4} ${lx + 4} ${by + 3} ${lz + 4} air`,
+				).catch(() => {});
+				await rcon(
+					`fill ${lx - 4} ${by - 2} ${lz - 4} ${lx + 4} ${by - 1} ${lz + 4} lava`,
+				).catch(() => {});
+				return;
+			}
 			// Flat clean arena: stone floor at by-1, cleared air above, spanning bot->pool.
 			await rcon(
 				`fill ${bx - 4} ${by - 3} ${bz - 6} ${lx + 5} ${by - 1} ${lz + 6} stone`,
