@@ -47,13 +47,25 @@ export const runGymStep = async (
 	// near (cx,cz) — no fall damage, and it loads the chunks itself. forceload keeps
 	// them resident so the task can act immediately.
 	if (!opts.noTeleport) {
-		await rcon(`forceload add ${cx} ${cz}`).catch(() => {});
-		await sleep(400);
-		const sp = await rcon(`spreadplayers ${cx} ${cz} 0 24 false ${name}`).catch(
-			(e) => `ERR ${e}`,
-		);
-		log(`[gym:${step.slug}] spreadplayers ${cx},${cz} → ${sp}`);
-		await sleep(1800);
+		// spreadplayers fails outright over water/steep terrain ("too many entities
+		// for space") and leaves the bot where it was (e2-1: in the previous run's
+		// portal), or lands it in a cave (e2-3: y=-45, scaffold in rock). Retry a new
+		// random cell up to 3 times until it reports a spread onto a surface y >= 55.
+		for (let t = 0; t < 3; t++) {
+			const tx = t === 0 ? cx : Math.floor(Math.random() * 10000);
+			const tz = t === 0 ? cz : Math.floor(Math.random() * 10000);
+			await rcon(`forceload add ${tx} ${tz}`).catch(() => {});
+			await sleep(400);
+			const sp = await rcon(`spreadplayers ${tx} ${tz} 0 24 false ${name}`).catch(
+				(e) => `ERR ${e}`,
+			);
+			log(`[gym:${step.slug}] spreadplayers ${tx},${tz} → ${sp}`);
+			await sleep(1800);
+			const ly = bot.entity?.position?.y ?? 0;
+			if (/Spread 1 /.test(sp) && ly >= 55) break;
+			log(`[gym:${step.slug}] bad landing (y=${Math.floor(ly)}) — re-spreading`);
+			await rcon(`forceload remove ${tx} ${tz}`).catch(() => {});
+		}
 	}
 	try {
 		await (bot as unknown as { waitForChunksToLoad?: () => Promise<void> }).waitForChunksToLoad?.();
