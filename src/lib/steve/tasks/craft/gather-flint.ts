@@ -303,6 +303,13 @@ export const gatherFlint = async (
 			seed = (await roam(bot, doneSeeds)) ?? undefined;
 			if (!seed) continue;
 		}
+		// gym f2+f4: seeds >12 blocks below the bot were reached 0 of 14 times (<=2
+		// below: 11 of 24). Each cost 10-25s of a 92s budget. Skip them outright.
+		if (bot.entity.position.y - seed.y > 12) {
+			doneSeeds.add(key(seed));
+			logEvent("flint", "seed_too_deep", `${key(seed)} ${Math.round(bot.entity.position.y - seed.y)} below`, seed);
+			continue;
+		}
 		lastSeed.set(bot, key(seed));
 		logEvent("flint", "seed", `${key(seed)} dist=${distance(bot.entity.position, seed).toFixed(1)}`, seed);
 		if (!(await approach(bot, seed)) || bot.entity.isInWater) {
