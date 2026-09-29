@@ -8,7 +8,7 @@ import { createBot } from "typecraft";
 import { GYM_BY_SLUG } from "./src/lib/steve/gym/registry.ts";
 import { runGymStep } from "./src/lib/steve/gym/run.ts";
 import { registerBlockMemory } from "./src/lib/steve/lib/bot-utils.ts";
-import { initLogger, startTickLogger } from "./src/lib/steve/lib/logger.ts";
+import { initLogger, startTickLogger, stopLogger } from "./src/lib/steve/lib/logger.ts";
 import { connect } from "./src/lib/steve/lib/rcon.ts";
 
 const SLUG = process.env.STEP ?? process.argv[2] ?? "gather-wood";
@@ -42,10 +42,12 @@ bot.once("spawn", async () => {
 		log: (l) => console.log(l),
 	});
 	console.log(`GYMRESULT ${JSON.stringify(res)}`);
+	stopLogger(); // flush the last events (portal_lit was missing from D1 in gym b1-5)
 	process.exit(0);
 });
 
 setTimeout(() => {
 	console.log("TIMEOUT — never finished");
+	stopLogger();
 	process.exit(1);
 }, step.timeoutMs + 90000);
