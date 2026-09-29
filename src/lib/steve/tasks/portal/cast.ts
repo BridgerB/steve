@@ -802,6 +802,24 @@ export const castObsidianAt = async (
 		//    leaves it on through cup-building + pouring (no drift off the pillar).
 		//    Retry + verify — in the cluttered frame the bot can drift, and a
 		//    mispositioned pillar misplaces the whole cup.
+		let cupState = "?";
+		let afterLava = "?";
+		// LAVA ALREADY IN THE CUP (a previous pass poured it, then the water aim
+		// failed): NEVER go back through the descend/pillar/cup stages — descending
+		// digs the +Z wall column the bot stands on, which IS the cup wall, and the
+		// lava pours out onto the bot (race59 794 died 6s after its first pour).
+		// Skip straight to sealing the bowl and pouring the water.
+		const lavaAlready = isLava(getBlock(bot, pos)?.name);
+		if (lavaAlready) {
+			logEvent("cast", "lava_already", `${pos.x},${pos.y},${pos.z} feet=${feetY(bot)} — skipping to the water pour`, bot.entity.position);
+			if (feetY(bot) < pos.y + 1) {
+				logEvent("cast", "lava_unreachable", `${pos.x},${pos.y},${pos.z} feet=${feetY(bot)} below the pour height — leaving this block`);
+				bot.setControlState("sneak", false);
+				return false;
+			}
+			afterLava = "lava";
+			cupState = "SSSSS";
+		} else {
 		bot.setControlState("sneak", false);
 		const off = () =>
 			Math.abs(bot.entity.position.x - (pos.x + 0.5)) +
@@ -906,7 +924,7 @@ export const castObsidianAt = async (
 		];
 		const checkCup = () =>
 			walls.map((s) => (isSolid(getBlock(bot, s)?.name) ? "S" : "_")).join("");
-		let cupState = checkCup();
+		cupState = checkCup();
 		if (cupState !== "SSSSS") {
 			// Usually only the +Z wall (the one the bot stands on) slipped a cell.
 			// Place any missing wall explicitly and re-center onto it, rather than
@@ -950,7 +968,8 @@ export const castObsidianAt = async (
 			continue;
 		}
 		await sleep(400);
-		const afterLava = getBlock(bot, pos)?.name ?? "?";
+		afterLava = getBlock(bot, pos)?.name ?? "?";
+		} // end !lavaAlready
 
 		// 5. Seal the water bowl: pillar one more onto the +Z bowl wall (feet =
 		//    pos.y+2). Now every bowl wall (pos.y+1) is a solid block, so the water
@@ -1000,6 +1019,14 @@ export const castObsidianAt = async (
 		//    a still source, converts the lava below → obsidian, and never spreads.
 		//    Keep sneaking so we don't slip off the narrow back wall, and log the
 		//    exact pour position to verify we're centred at feet pos.y+2.
+		// The water ray passes through the cell above the bowl (pos.y+2): uncleared
+		// chamber rock there deflects it onto our own feet cell (race59 794:
+		// aim_fail want 66,2965 got 67,2966 with 153 chamber cells skipped).
+		{
+			const aboveBowl = offset(pos, 0, 2, 0);
+			if (!isAir(getBlock(bot, aboveBowl)?.name) && !isLava(getBlock(bot, aboveBowl)?.name)) await digAt(bot, aboveBowl);
+			await walkToXZ(bot, pos.x + 0.5, standZ + 0.5, { targetDist: 0.2, maxTime: 1500 });
+		}
 		bot.setControlState("sneak", true);
 		const wp = bot.entity.position;
 		logEvent(
