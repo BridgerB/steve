@@ -732,7 +732,15 @@ const fillBucket = async (
 		return ok;
 	};
 	const scoop = async (src: Vec3): Promise<boolean> => {
-		if (!(await equip(bot, "bucket"))) return false;
+		// Hypothesis (gym n1-1, stuck at 2/10 with a lava_bucket in the pack): a scoop's
+		// inventory update arrived after the per-use check, the sweep moved on, and every
+		// later stance failed silently at equip("bucket") — no empty bucket left — until
+		// fill_fail. A filled bucket already in hand is success, whenever it arrived.
+		if (count(bot, `${fluid}_bucket`) > 0) return true;
+		if (!(await equip(bot, "bucket"))) {
+			logEvent("cast", "scoop_no_bucket", `${fluid} src ${src.x},${src.y},${src.z} bucket=${count(bot, "bucket")} ${fluid}_bucket=${count(bot, `${fluid}_bucket`)}`);
+			return count(bot, `${fluid}_bucket`) > 0;
+		}
 		// Hypothesis (gym b1-1): floor water beside the pool came from a bucket use in
 		// this sweep with the WRONG bucket in hand. Refuse to sweep unless the held
 		// item is the empty bucket, and log every use with what it held and did.
