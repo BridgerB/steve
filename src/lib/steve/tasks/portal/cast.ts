@@ -688,10 +688,21 @@ const fillBucket = async (
 	};
 	const scoop = async (src: Vec3): Promise<boolean> => {
 		if (!(await equip(bot, "bucket"))) return false;
+		// Hypothesis (gym b1-1): floor water beside the pool came from a bucket use in
+		// this sweep with the WRONG bucket in hand. Refuse to sweep unless the held
+		// item is the empty bucket, and log every use with what it held and did.
+		if (bot.heldItem?.name !== "bucket") {
+			logEvent("cast", "scoop_wrong_item", `held=${bot.heldItem?.name ?? "nothing"} at ${src.x},${src.y},${src.z}`);
+			return false;
+		}
 		// Aim the source TOP FACE first (the reliable down-look), then centre, then low.
 		for (const dy of [0.95, 0.5, 0.15]) {
+			const held = bot.heldItem?.name ?? "nothing";
+			const cell = useTargetCell(bot, vec3(src.x + 0.5, src.y + dy, src.z + 0.5));
 			await reliableUse(bot, vec3(src.x + 0.5, src.y + dy, src.z + 0.5));
-			if (count(bot, `${fluid}_bucket`) > 0) return true;
+			const got = count(bot, `${fluid}_bucket`) > 0;
+			logEvent("cast", "scoop_use", `${fluid} src ${src.x},${src.y},${src.z} dy=${dy} held=${held} cell=${cell ? `${cell.x},${cell.y},${cell.z}` : "none"} filled=${got} water_bucket=${count(bot, "water_bucket")}`, bot.entity.position);
+			if (got) return true;
 		}
 		return false;
 	};
@@ -736,6 +747,10 @@ const fillBucket = async (
 				if (!isSolid(getBlock(bot, foot)?.name)) continue;
 			}
 			if (!(await reach(feet))) continue;
+			{
+				const bp = bot.entity.position;
+				logEvent("cast", "fill_stance", `${fluid} src ${src.x},${src.y},${src.z} feet ${feet.x},${feet.y},${feet.z} bot ${bp.x.toFixed(2)},${bp.y.toFixed(2)},${bp.z.toFixed(2)} dsrc=${Math.hypot(bp.x - (src.x + 0.5), bp.z - (src.z + 0.5)).toFixed(2)}`, bp);
+			}
 			if (await scoop(src)) {
 				logEvent("cast", "filled", `${fluid}_bucket above`);
 				return true;
@@ -1060,9 +1075,13 @@ export const castObsidianAt = async (
 		await equip(bot, "bucket");
 		for (let k = 0; k < 4; k++) {
 			if (!(getBlock(bot, above)?.name ?? "").includes("water")) break;
+			const held = bot.heldItem?.name ?? "nothing";
+			const cell = useTargetCell(bot, vec3(above.x + 0.5, above.y + 0.5, above.z + 0.5));
 			await reliableUse(bot, vec3(above.x + 0.5, above.y + 0.5, above.z + 0.5));
+			logEvent("cast", "water_pickup", `k=${k} held=${held} cell=${cell ? `${cell.x},${cell.y},${cell.z}` : "none"} bowl=${getBlock(bot, above)?.name} water_bucket=${count(bot, "water_bucket")} bucket=${count(bot, "bucket")}`, bot.entity.position);
 		}
 		if ((getBlock(bot, above)?.name ?? "").includes("water")) {
+			logEvent("cast", "water_left", `bowl ${above.x},${above.y},${above.z} still ${getBlock(bot, above)?.name} — capping`);
 			await equip(bot, buildBlockName(bot));
 			const obsRef = getBlock(bot, pos);
 			if (obsRef?.name === "obsidian") {
