@@ -1726,10 +1726,13 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 	const p0 = bot.entity.position;
 	const dx = Math.sign(p0.x - (lava.x + 0.5)) || 1;
 	const dz = Math.sign(p0.z - (lava.z + 0.5)) || 1;
-	const standSpot =
-		Math.abs(p0.x - lava.x) >= Math.abs(p0.z - lava.z)
-			? vec3(lava.x + dx * 5, lava.y, lava.z)
-			: vec3(lava.x, lava.y, lava.z + dz * 5);
+	// Always stand off along X. The frame spans +x from the anchor with its backing
+	// wall at bz-1 and the bot working from bz+1, so a pool placed along Z ended up
+	// BEHIND the backing wall (gym b4-7: 10 refill walks from z881 blocked by the
+	// frame, cast stuck at 8/10). Along X the pool sits beside the frame's side
+	// column, reachable from the working side.
+	void dz;
+	const standSpot = vec3(lava.x + dx * 5, lava.y, lava.z);
 	await goTo(bot, standSpot, { range: 1, timeout: 20000 }).catch(() => {});
 	// Never anchor a site in water: 713's retry stood in a pond, the anchor was logged
 	// there, and the escape/portal steps ping-ponged at the bank.

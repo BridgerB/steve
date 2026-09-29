@@ -56,17 +56,25 @@ for (let i = 1; i <= RUNS; i++) {
 	const raceId = `gym-${SLUG}-${runId}`;
 	const startedAt = new Date().toISOString();
 	const t0 = Date.now();
-	const { out } = await runOne(raceId);
+	// A dropped connection (server 'Timed out' after a client stall during the
+	// spread teleport) says nothing about the step: rerun the slot, up to twice.
+	let rid = raceId;
+	let { out } = await runOne(raceId);
+	for (let retry = 1; retry <= 2 && /DISCONNECTED /.test(out); retry++) {
+		console.log(`${runId}  disconnect (${/DISCONNECTED (.*)/.exec(out)?.[1]}) — rerunning slot (${retry})`);
+		rid = `${raceId}-r${retry}`;
+		({ out } = await runOne(rid));
+	}
 	mkdirSync("data/gym/logs", { recursive: true });
 	writeFileSync(`data/gym/logs/${raceId}.log`, out);
 	const seconds = (Date.now() - t0) / 1000;
 	const m = /GYMRESULT (\{.*\})/.exec(out);
 	const res = m ? (JSON.parse(m[1]!) as { pass: boolean; durationMs: number; message: string }) : null;
-	const hb = q(`SELECT detail FROM events WHERE race_id='${esc(raceId)}' AND category='hb' AND detail LIKE '%phase=%' ORDER BY id DESC LIMIT 1`)[0];
+	const hb = q(`SELECT detail FROM events WHERE race_id='${esc(rid)}' AND category='hb' AND detail LIKE '%phase=%' ORDER BY id DESC LIMIT 1`)[0];
 	const phase = hb ? (/phase=(.*?) last=/.exec(String(hb.detail))?.[1] ?? "") : "";
-	const lastCast = q(`SELECT event, detail FROM events WHERE race_id='${esc(raceId)}' AND category='cast' AND event NOT IN ('pillar_step','pool','descend','shuffle') ORDER BY id DESC LIMIT 1`)[0];
-	const obsidian = Number(q(`SELECT COUNT(*) n FROM events WHERE race_id='${esc(raceId)}' AND category='cast' AND event='obsidian'`)[0]?.n ?? 0);
-	const death = q(`SELECT detail FROM events WHERE race_id='${esc(raceId)}' AND category='death' AND event='message' LIMIT 1`)[0];
+	const lastCast = q(`SELECT event, detail FROM events WHERE race_id='${esc(rid)}' AND category='cast' AND event NOT IN ('pillar_step','pool','descend','shuffle') ORDER BY id DESC LIMIT 1`)[0];
+	const obsidian = Number(q(`SELECT COUNT(*) n FROM events WHERE race_id='${esc(rid)}' AND category='cast' AND event='obsidian'`)[0]?.n ?? 0);
+	const death = q(`SELECT detail FROM events WHERE race_id='${esc(rid)}' AND category='death' AND event='message' LIMIT 1`)[0];
 	const deathCause = death ? (/\[(death\.[a-z._]+)\]/.exec(String(death.detail))?.[1] ?? "death") : "";
 	const message = res?.message ?? (/DISCONNECTED (.*)/.exec(out)?.[1] ? `disconnected: ${/DISCONNECTED (.*)/.exec(out)?.[1]}` : out.includes("TIMEOUT") ? "cli timeout" : "no result");
 	const disc = /DISCONNECTED (.*)/.exec(out)?.[1];
