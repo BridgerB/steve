@@ -301,7 +301,22 @@ export const gatherFlint = async (
 		}
 		lastSeed.set(bot, key(seed));
 		logEvent("flint", "seed", `${key(seed)} dist=${distance(bot.entity.position, seed).toFixed(1)}`, seed);
-		if (!(await approach(bot, seed)) || bot.entity.isInWater) {
+		let reached = await approach(bot, seed);
+		// gym f2 (race kit, 2/10): 24 of 32 seeds were remembered gravel 5-18 blocks
+		// BELOW the bot; the walk ends right above it and the seed is dropped. The race
+		// bot carries a pickaxe here — staircase down to the seed's level, then retry.
+		const below = Math.floor(bot.entity.position.y) - seed.y;
+		const pick = ["stone_pickaxe", "iron_pickaxe", "diamond_pickaxe"].some((n) => findItem(bot, n));
+		if (!reached && !bot.entity.isInWater && pick && below >= 3 && below <= 20 && Date.now() + 30_000 < deadlineMs) {
+			logEvent("flint", "seed_dig_down", `${key(seed)} ${below} below`, bot.entity.position);
+			try {
+				const { descendStaircase } = await import("../mining/main.ts");
+				const r = await descendStaircase(bot, seed.y + 1, Date.now() + 25_000);
+				logEvent("flint", "seed_dig_down_done", `y=${r.y} stopped=${r.stopped ?? "-"}`, bot.entity.position);
+			} catch {}
+			if (!bot.entity.isInWater) reached = await approach(bot, seed);
+		}
+		if (!reached || bot.entity.isInWater) {
 			doneSeeds.add(key(seed));
 			logEvent("flint", "seed_unreachable", key(seed), seed);
 			if (bot.entity.isInWater) return false; // escape_water takes over
