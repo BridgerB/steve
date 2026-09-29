@@ -96,8 +96,12 @@ const mineGravel = async (bot: Bot, pos: Vec3): Promise<boolean> => {
 /** Bounded walk toward a block; true if we ended within hand reach (~4). */
 const approach = async (bot: Bot, pos: Vec3): Promise<boolean> => {
 	if (distance(bot.entity.position, pos) <= 3.2) return true;
+	// gym f2/f3: most seeds are remembered gravel 5-18 blocks BELOW the bot; a 9s
+	// walk ends right above them. The pathfinder can dig (digCost 6) — give a
+	// buried target a longer budget so it actually tunnels down to it.
+	const buried = bot.entity.position.y - pos.y >= 3;
 	try {
-		await goTo(bot, pos, { range: 2.2, timeout: 9000 });
+		await goTo(bot, pos, { range: 2.2, timeout: buried ? 25000 : 9000 });
 	} catch {}
 	if (distance(bot.entity.position, pos) > 3.4) {
 		try {
