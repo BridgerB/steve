@@ -461,11 +461,29 @@ export const gatherWood = async (
 			// Breadcrumb: race58 788 missed 6 drops from 2 blocks away without ever
 			// moving — was the item entity even tracked, and did the walk move us?
 			const itemType = bot.registry?.entitiesByName.get("item")?.id;
-			const items = Object.values(bot.entities).filter((e) => itemType != null && e.entityType === itemType && distance(e.position, botPos()) <= 8).length;
+			const itemEnts = Object.values(bot.entities).filter((e) => itemType != null && e.entityType === itemType && distance(e.position, botPos()) <= 8);
+			const items = itemEnts.length;
 			const b0 = botPos();
 			const walked = await walkToXZ(bot, pos.x + 0.5, pos.z + 0.5, { targetDist: 0.6, maxTime: 2500 });
 			const b1 = botPos();
-			logEvent("wood", "pickup_walk", `items=${items} walked=${walked} moved=${distance(b0, b1).toFixed(1)} sneak=${bot.controlState.sneak} to ${pos.x},${pos.y},${pos.z} from y${Math.floor(b0.y)}`, b1);
+			const near = itemEnts.map((e) => e.position).sort((a, b) => distance(a, b1) - distance(b, b1))[0];
+			logEvent("wood", "pickup_walk", `items=${items} walked=${walked} moved=${distance(b0, b1).toFixed(1)} sneak=${bot.controlState.sneak} to ${pos.x},${pos.y},${pos.z} from y${Math.floor(b0.y)}${near ? ` item ${near.x.toFixed(1)},${near.y.toFixed(1)},${near.z.toFixed(1)} dy=${(near.y - b1.y).toFixed(1)}` : ""}`, b1);
+			// The drop is sitting ON THE CANOPY above us (race60: every miss had the
+			// item 1-3 blocks above the feet, walked=false — the walk was never the
+			// problem). The pickup box only reaches ~0.5 above the head, so break the
+			// leaves/log under the item and let it fall to the ground.
+			for (const e of itemEnts) {
+				const ip = e.position;
+				if (ip.y - botPos().y < 1.5 || Math.hypot(ip.x - botPos().x, ip.z - botPos().z) > 4) continue;
+				const under = getBlock(bot, vec3(Math.floor(ip.x), Math.floor(ip.y) - 1, Math.floor(ip.z)));
+				if (!under || !/leaves|_log|_wood/.test(under.name)) continue;
+				logEvent("wood", "pickup_drop_canopy", `item ${ip.x.toFixed(1)},${ip.y.toFixed(1)},${ip.z.toFixed(1)} on ${under.name}`, ip);
+				try {
+					await bot.lookAt(offset(under.position, 0.5, 0.5, 0.5));
+					await Promise.race([handled(bot.dig(under, true)), sleep(4000)]);
+				} catch {}
+				await sleep(700);
+			}
 			await bot.collectDrops(8, 2500, async (p) => {
 				await walkToXZ(bot, p.x, p.z, { targetDist: 0.5, maxTime: 2000 });
 			});

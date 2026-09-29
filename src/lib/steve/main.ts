@@ -625,13 +625,20 @@ const runRace = async (count: number, timeoutMs: number) => {
 					// Lava under the column: race37 705 dropped from y200 straight into a
 					// lava pool ("tried to swim in lava", death 1). Treat as a bad landing.
 					let inLava = false;
+					let inWater = false;
 					try {
 						const probe = await rcon(`execute as ${name} at @s if block ~ ~ ~ minecraft:lava`);
 						const probe2 = await rcon(`execute as ${name} at @s if block ~ ~-1 ~ minecraft:lava`);
 						inLava = probe.includes("passed") || probe2.includes("passed");
+						// A lake under the column: race60 796 dropped into deep water at its
+						// spawn, drowned for 2 min (no buoyancy, nothing to pillar from) and
+						// died before the race had begun. Treat water like lava: re-place.
+						const w1 = await rcon(`execute as ${name} at @s if block ~ ~ ~ minecraft:water`);
+						const w2 = await rcon(`execute as ${name} at @s if block ~ ~-1 ~ minecraft:water`);
+						inWater = w1.includes("passed") || w2.includes("passed");
 					} catch {}
-					if (landedY >= 55 && landedY < 200 && !inLava) break;
-					console.log(`  ${name} landed at y=${landedY} (${sx},${sz})${inLava ? " IN LAVA" : " — underground"}, re-placing`);
+					if (landedY >= 55 && landedY < 200 && !inLava && !inWater) break;
+					console.log(`  ${name} landed at y=${landedY} (${sx},${sz})${inLava ? " IN LAVA" : inWater ? " IN WATER" : " — underground"}, re-placing`);
 					sx = x + (t + 1) * 9;
 					sz = z + (t % 2 === 0 ? 7 : -7);
 				}
