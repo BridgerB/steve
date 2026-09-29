@@ -326,6 +326,18 @@ export const gatherFlint = async (
 			continue;
 		}
 		const hp = await harvestPocket(bot, seed, deadlineMs);
+		// gym f6: pockets mined 8/4/1 gravel and ended with 0 gravel in the pack — the
+		// per-block pickup (range 5, 2s) left the drops, and a flint drop among them
+		// is lost the same way. One wider sweep over the pocket before moving on.
+		if (hp.mined > 0 && !findItem(bot, "flint") && !bot.entity.isInWater) {
+			let swept = 0;
+			try {
+				swept = await bot.collectDrops(8, 6000, async (p) => {
+					await goTo(bot, p, { range: 1.3, timeout: 3000 });
+				});
+			} catch {}
+			logEvent("flint", "pocket_sweep", `collected=${swept} flint=${findItem(bot, "flint") ? "yes" : "no"}`, bot.entity.position);
+		}
 		doneSeeds.add(key(seed));
 		lastSeed.delete(bot);
 		const gravelN = (findItem(bot, "gravel") as { count?: number } | null)?.count ?? 0;
