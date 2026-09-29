@@ -60,7 +60,18 @@ export const runGymStep = async (
 				(e) => `ERR ${e}`,
 			);
 			log(`[gym:${step.slug}] spreadplayers ${tx},${tz} → ${sp}`);
-			await sleep(1800);
+			// The client position lags the server teleport: e4-3 read y=67 (the old
+			// spot) right after a spread that actually landed at y=-12. Wait until the
+			// position has moved to the new cell before judging the landing.
+			const p0 = bot.entity?.position;
+			for (let w = 0; w < 30; w++) {
+				await sleep(200);
+				const p = bot.entity?.position;
+				if (p && (Math.abs(p.x - tx) < 40 && Math.abs(p.z - tz) < 40)) break;
+				if (!/Spread 1 /.test(sp)) break;
+				void p0;
+			}
+			await sleep(1200);
 			const ly = bot.entity?.position?.y ?? 0;
 			if (/Spread 1 /.test(sp) && ly >= 55) break;
 			log(`[gym:${step.slug}] bad landing (y=${Math.floor(ly)}) — re-spreading`);
