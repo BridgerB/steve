@@ -980,6 +980,20 @@ export const digStaircaseUp = async (
 				if (moved) break;
 			}
 			if (moved) continue;
+			// No plain neighbour (a table in a 1-wide tunnel — race59 793: pillar_sneak
+			// ×6 → pillar_stuck twice, Fill Water timed out at y25). Break the station
+			// under our feet instead: it drops, we land one lower on rock and pillar on.
+			logEvent("nav", "pillar_dig_station", `${floorRef.name} at y=${fy - 1}`, bot.entity.position);
+			bot.setControlState("sneak", false);
+			bot.setControlState("jump", false);
+			await bot.lookAt(vec3(fx + 0.5, fy - 0.5, fz + 0.5), true);
+			await Promise.race([handled(bot.dig(floorRef as never, true) as Promise<void>), sleep(5000)]);
+			await sleep(600);
+			if (++stuck > 5) {
+				logEvent("nav", "pillar_stuck", `station under feet would not break at y=${fy - 1}`, bot.entity.position);
+				break;
+			}
+			continue;
 		}
 		// Centre in the cell and sneak for EVERY pillar step, like cast.ts pillarUp
 		// (the climber that works): from a cell edge the block lands in the wrong
@@ -996,7 +1010,7 @@ export const digStaircaseUp = async (
 			if (Math.floor(bot.entity.position.y) > fy) {
 				try {
 					await Promise.race([
-						bot.placeBlock(floorRef as never, vec3(0, 1, 0)) as Promise<void>,
+						handled(bot.placeBlock(floorRef as never, vec3(0, 1, 0)) as Promise<void>),
 						sleep(1200).then(() => {
 							throw new Error("place timeout");
 						}),
@@ -1075,7 +1089,7 @@ export const pillarInWater = async (bot: Bot, levels: number): Promise<number> =
 				await bot.lookAt(vec3(fx + 0.5, fy - 0.5, fz + 0.5), true);
 				try {
 					await Promise.race([
-						bot.placeBlock(ref as never, vec3(-dx, 0, -dz)) as Promise<void>,
+						handled(bot.placeBlock(ref as never, vec3(-dx, 0, -dz)) as Promise<void>),
 						sleep(1200).then(() => {
 							throw new Error("place timeout");
 						}),
@@ -1100,7 +1114,7 @@ export const pillarInWater = async (bot: Bot, levels: number): Promise<number> =
 				if (Math.floor(bot.entity.position.y) > fy) {
 					try {
 						await Promise.race([
-							bot.placeBlock(floorRef as never, vec3(0, 1, 0)) as Promise<void>,
+							handled(bot.placeBlock(floorRef as never, vec3(0, 1, 0)) as Promise<void>),
 							sleep(1000).then(() => {
 								throw new Error("place timeout");
 							}),
@@ -3645,4 +3659,11 @@ export const searchForEntities = async (
 	bot.setControlState("forward", true);
 	await sleep(duration);
 	bot.setControlState("forward", false);
+};
+
+/** Mark a promise handled so a late rejection (after a Promise.race timeout won) can't
+ *  crash the process (race59 793 died: unhandled "Place block timeout" from placing.ts). */
+const handled = <T>(p: Promise<T>): Promise<T> => {
+	p.catch(() => {});
+	return p;
 };

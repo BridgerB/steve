@@ -798,6 +798,11 @@ ${Array.from(
 // is imported (e.g. by the SvelteKit server to reuse startBot), the dispatch must
 // not run, or it would fork a whole race on import.
 if (process.env.STEVE_CLI === "1") {
+	// A stray rejection (a Promise.race loser rejecting after the timeout won) must
+	// not take the whole bot down — race59 793 exited code=1 mid-race on one.
+	process.on("unhandledRejection", (e) => {
+		console.error("[unhandledRejection]", e instanceof Error ? e.stack ?? e.message : String(e));
+	});
 	const isBotMode = process.env.STEVE_BOT_MODE === "1";
 
 	if (isBotMode) {

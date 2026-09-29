@@ -47,7 +47,7 @@ const safeDig = async (
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	try {
 		await Promise.race([
-			bot.dig(block),
+			handled(bot.dig(block)),
 			new Promise<never>((_, reject) => {
 				timer = setTimeout(() => reject(new Error("dig timeout")), timeout);
 			}),
@@ -1949,4 +1949,11 @@ const staircaseMine = async (
 	} catch {}
 
 	return null;
+};
+
+/** Mark a promise handled so a late rejection (after a Promise.race timeout won) can't
+ *  crash the process (race59 793 died: unhandled "Place block timeout" from placing.ts). */
+const handled = <T>(p: Promise<T>): Promise<T> => {
+	p.catch(() => {});
+	return p;
 };

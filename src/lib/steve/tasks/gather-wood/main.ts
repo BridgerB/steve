@@ -428,7 +428,7 @@ export const gatherWood = async (
 
 		try {
 			await Promise.race([
-				bot.dig(block, true),
+				handled(bot.dig(block, true)),
 				new Promise<void>((_, reject) =>
 					setTimeout(() => reject(new Error("dig timeout")), 5000),
 				),
@@ -771,4 +771,11 @@ export const gatherWood = async (
 		success: logs >= targetCount || progressed,
 		message: `Gathered ${logs}/${targetCount} logs`,
 	};
+};
+
+/** Mark a promise handled so a late rejection (after a Promise.race timeout won) can't
+ *  crash the process (race59 793 died: unhandled "Place block timeout" from placing.ts). */
+const handled = <T>(p: Promise<T>): Promise<T> => {
+	p.catch(() => {});
+	return p;
 };

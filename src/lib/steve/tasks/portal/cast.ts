@@ -188,7 +188,7 @@ const digAt = async (bot: Bot, pos: Vec3): Promise<void> => {
 		// (seen wedging the lava strip-miner for minutes on a single block). Time it out
 		// so the caller loop keeps moving/covering ground instead of freezing.
 		await Promise.race([
-			bot.dig(b as Block),
+			handled(bot.dig(b as Block)),
 			sleep(6000).then(() => {
 				bot.stopDigging?.();
 			}),
@@ -1979,4 +1979,11 @@ export const buildPortalByCasting = async (bot: Bot): Promise<StepResult> => {
 		message: `Nether portal cast & lit at ${portalPos.x},${portalPos.y},${portalPos.z}`,
 		portalPos,
 	} as StepResult & { portalPos: { x: number; y: number; z: number } };
+};
+
+/** Mark a promise handled so a late rejection (after a Promise.race timeout won) can't
+ *  crash the process (race59 793 died: unhandled "Place block timeout" from placing.ts). */
+const handled = <T>(p: Promise<T>): Promise<T> => {
+	p.catch(() => {});
+	return p;
 };
