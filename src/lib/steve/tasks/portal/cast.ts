@@ -837,6 +837,20 @@ const fillBucket = async (
 /** The cast site prepareCastSite cleared (per bot): the frame must be built
  *  exactly there, or the 294-cell chamber was dug around the wrong volume. */
 const siteAnchor = new WeakMap<Bot, Vec3>();
+// Set when the bot dies during a cast (gym n1-2: died 80s into the cast, respawned at
+// world spawn and castObsidianAt kept "reassessing" from 13,000 blocks away for 23
+// minutes). Every cast loop checks it and ends the step instead. One listener per bot.
+const diedInCast = new WeakMap<Bot, boolean>();
+const deathWatched = new WeakSet<Bot>();
+const armDeathWatch = (bot: Bot): void => {
+	diedInCast.set(bot, false);
+	if (deathWatched.has(bot)) return;
+	deathWatched.add(bot);
+	bot.on("death", () => {
+		if (diedInCast.get(bot) === false) logEvent("cast", "died_mid_cast", "aborting the cast");
+		diedInCast.set(bot, true);
+	});
+};
 
 export const castObsidianAt = async (
 	bot: Bot,
@@ -851,6 +865,7 @@ export const castObsidianAt = async (
 	const above = offset(pos, 0, 1, 0);
 
 	for (let attempt = 0; attempt < 3; attempt++) {
+		if (diedInCast.get(bot)) return false;
 		// 1. Top up both buckets FIRST — fillBucket walks to the source (several
 		//    blocks away), so do it before we position at the cup. DESCEND to the
 		//    ground first: after the previous block the bot is on a high cast pillar
@@ -1999,9 +2014,11 @@ export const buildPortalByCasting = async (bot: Bot): Promise<StepResult> => {
 
 	logEvent("cast", "portal_start", `frame at ${bx},${by},${bz}`);
 	setPhase("portal_start");
+	armDeathWatch(bot);
 	await buildBacking(bot, bx, by, bz);
 	let cast = 0;
 	const castOne = async (pos: Vec3): Promise<StepResult | null> => {
+		if (diedInCast.get(bot)) return { success: false, message: `Died mid-cast at ${cast}/10 — aborting` };
 		if (await castObsidianAt(bot, pos, by)) {
 			cast++;
 			return null;
