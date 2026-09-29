@@ -84,7 +84,7 @@ for (let i = 1; i <= RUNS; i++) {
 	// b4-5: the step's pass check found a LEFTOVER portal (stale world after a silent
 	// disconnect) with 0 obsidian cast. A cast pass needs the cast to have happened.
 	const castOk = SLUG !== "build-nether-portal" || obsidian >= 10;
-	const outcome = res?.pass && castOk ? "pass" : disc ? "disconnect" : deathCause ? "death" : /timeout/i.test(message) ? "timeout" : "fail";
+	const outcome = res?.pass && castOk ? "pass" : /^HARNESS/.test(message) ? "harness" : disc ? "disconnect" : deathCause ? "death" : /timeout/i.test(message) ? "timeout" : "fail";
 	const lastEv = lastCast ? `${lastCast.event} ${String(lastCast.detail ?? "").slice(0, 60)}` : "";
 	db.prepare(`INSERT OR REPLACE INTO runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
 		runId, BATCH, SLUG, commit, startedAt, seconds, phase, lastEv, obsidian, outcome, deathCause, message.slice(0, 300), MOBS, "",

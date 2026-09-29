@@ -51,6 +51,7 @@ export const runGymStep = async (
 		// for space") and leaves the bot where it was (e2-1: in the previous run's
 		// portal), or lands it in a cave (e2-3: y=-45, scaffold in rock). Retry a new
 		// random cell up to 3 times until it reports a spread onto a surface y >= 55.
+		let landed = false;
 		for (let t = 0; t < 3; t++) {
 			const tx = t === 0 ? cx : Math.floor(Math.random() * 10000);
 			const tz = t === 0 ? cz : Math.floor(Math.random() * 10000);
@@ -76,9 +77,20 @@ export const runGymStep = async (
 			// b9-3: spread onto an ocean surface (y=62) — the arena scaffold then sat in
 			// water and the cast refused the wet anchor. Treat a water landing as bad too.
 			const wet = !!(bot as { entity?: { isInWater?: boolean } }).entity?.isInWater;
-			if (/Spread 1 /.test(sp) && ly >= 55 && !wet) break;
+			if (/Spread 1 /.test(sp) && ly >= 55 && !wet) {
+				landed = true;
+				break;
+			}
 			log(`[gym:${step.slug}] bad landing (y=${Math.floor(ly)}) — re-spreading`);
 			await rcon(`forceload remove ${tx} ${tz}`).catch(() => {});
+		}
+		// b12-5: all 3 spreads failed (RCON replies garbled under server lag), the run
+		// went ahead at a y=130 landing with no arena, and scored a cast failure. No
+		// landing = no test: report it as a harness result, not a step result.
+		if (!landed) {
+			const message = "HARNESS no good landing after 3 spreads";
+			log(`[gym:${step.slug}] FAIL 0s — ${message}`);
+			return { pass: false, durationMs: 0, x: cx, z: cz, message };
 		}
 	}
 	try {
