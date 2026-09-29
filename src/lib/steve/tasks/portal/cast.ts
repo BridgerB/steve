@@ -673,18 +673,33 @@ const fillBucket = async (
 	];
 	const reach = async (feet: Vec3): Promise<boolean> => {
 		const c = vec3(feet.x + 0.5, feet.y, feet.z + 0.5);
-		if (
-			Math.hypot(
-				bot.entity.position.x - c.x,
-				bot.entity.position.y - c.y,
-				bot.entity.position.z - c.z,
-			) > 1.4
-		)
-			await goTo(bot, c, { range: 0, timeout: 12000 }).catch(() => {});
+		const d0 = Math.hypot(bot.entity.position.x - c.x, bot.entity.position.y - c.y, bot.entity.position.z - c.z);
+		if (d0 > 1.4) await goTo(bot, c, { range: 0, timeout: 12000 }).catch(() => {});
+		// Hypothesis (gym b1-7, b1-10, b2-6 — all death.attack.lava during a refill
+		// with no fill_stance logged): goTo fails or falls short and the straight
+		// walk below then heads across the pool. Only walk straight when the stance
+		// is close AND no lava lies on the line at foot level.
+		const p = bot.entity.position;
+		const gap = Math.hypot(p.x - c.x, p.z - c.z);
+		let lavaOnLine = false;
+		const steps = Math.max(1, Math.ceil(gap));
+		for (let i = 1; i <= steps; i++) {
+			const t = i / steps;
+			const lx = Math.floor(p.x + (c.x - p.x) * t);
+			const lz = Math.floor(p.z + (c.z - p.z) * t);
+			if ([feet.y - 1, feet.y].some((ly) => isLava(getBlock(bot, vec3(lx, ly, lz))?.name))) {
+				lavaOnLine = true;
+				break;
+			}
+		}
+		if (gap > 3 || lavaOnLine) {
+			logEvent("cast", "fill_reach", `refused feet ${feet.x},${feet.y},${feet.z} gap=${gap.toFixed(1)} lavaOnLine=${lavaOnLine} d0=${d0.toFixed(1)}`, p);
+			return false;
+		}
 		await walkToXZ(bot, c.x, c.z, { targetDist: 0.4, maxTime: 2500 });
-		return (
-			Math.hypot(bot.entity.position.x - c.x, bot.entity.position.z - c.z) <= 1.8
-		);
+		const ok = Math.hypot(bot.entity.position.x - c.x, bot.entity.position.z - c.z) <= 1.8;
+		logEvent("cast", "fill_reach", `feet ${feet.x},${feet.y},${feet.z} gap=${gap.toFixed(1)} ok=${ok}`, bot.entity.position);
+		return ok;
 	};
 	const scoop = async (src: Vec3): Promise<boolean> => {
 		if (!(await equip(bot, "bucket"))) return false;
