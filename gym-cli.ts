@@ -8,7 +8,7 @@ import { createBot } from "typecraft";
 import { GYM_BY_SLUG } from "./src/lib/steve/gym/registry.ts";
 import { runGymStep } from "./src/lib/steve/gym/run.ts";
 import { registerBlockMemory } from "./src/lib/steve/lib/bot-utils.ts";
-import { initLogger, startTickLogger, stopLogger } from "./src/lib/steve/lib/logger.ts";
+import { attachDiagnostics, initLogger, stopLogger } from "./src/lib/steve/lib/logger.ts";
 import { connect } from "./src/lib/steve/lib/rcon.ts";
 
 const SLUG = process.env.STEP ?? process.argv[2] ?? "gather-wood";
@@ -37,7 +37,9 @@ console.log(`RACEID ${RUN_ID}`);
 
 bot.once("spawn", async () => {
 	await bot.waitForChunksToLoad();
-	startTickLogger(bot);
+	// Same damage/death/threat logging as a race bot (b1-7 died at the lava fill
+	// with no event, respawned at world spawn and cast its frame there).
+	attachDiagnostics(bot);
 	const res = await runGymStep(bot, step, (c) => rcon.command(c), {
 		log: (l) => console.log(l),
 	});

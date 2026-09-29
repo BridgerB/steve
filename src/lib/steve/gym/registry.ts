@@ -155,6 +155,10 @@ export const GYM_STEPS: GymStep[] = [
 			const { x, y, z } = at;
 			const px = x;
 			const pz = z + 4;
+			// run.ts forceloads only the spread-centre chunk; a frame 4 blocks out often
+			// sits in the next chunk and the fills silently fail (gym e1: 3/10 "No portal
+			// found nearby"). Keep the whole scaffold resident.
+			await rcon(`forceload add ${x - 8} ${z - 8} ${px + 8} ${pz + 8}`).catch(() => {});
 			// Stone floor along the whole approach + frame, then clear a corridor+frame
 			// air volume, build the 4x5 obsidian frame, and IGNITE with fire — the game
 			// forms a valid portal from fire-in-a-frame (fill-placing nether_portal blocks

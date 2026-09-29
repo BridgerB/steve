@@ -11,7 +11,7 @@
  * batch summary is printed at the end. Read the summary, not the console.
  */
 import { spawn, execSync } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { connect } from "./src/lib/steve/lib/rcon.ts";
 
@@ -57,6 +57,8 @@ for (let i = 1; i <= RUNS; i++) {
 	const startedAt = new Date().toISOString();
 	const t0 = Date.now();
 	const { out } = await runOne(raceId);
+	mkdirSync("data/gym/logs", { recursive: true });
+	writeFileSync(`data/gym/logs/${raceId}.log`, out);
 	const seconds = (Date.now() - t0) / 1000;
 	const m = /GYMRESULT (\{.*\})/.exec(out);
 	const res = m ? (JSON.parse(m[1]!) as { pass: boolean; durationMs: number; message: string }) : null;
