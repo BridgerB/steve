@@ -692,7 +692,11 @@ const fillBucket = async (
 				break;
 			}
 		}
-		if (gap > 3 || lavaOnLine) {
+		// b3-2: goTo(range 0) to a rim cell timed out 10 times in a row without moving
+		// (d0 == gap every time) even 4 blocks away on flat stone, so the straight walk
+		// is the ONLY way onto the rim. Keep the lava-on-line refusal, drop the gap cap
+		// (7 = the far side of a 9-wide pool from where descend leaves us).
+		if (gap > 7 || lavaOnLine) {
 			logEvent("cast", "fill_reach", `refused feet ${feet.x},${feet.y},${feet.z} gap=${gap.toFixed(1)} lavaOnLine=${lavaOnLine} d0=${d0.toFixed(1)}`, p);
 			return false;
 		}
