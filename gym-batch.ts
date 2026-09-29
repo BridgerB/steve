@@ -68,8 +68,9 @@ for (let i = 1; i <= RUNS; i++) {
 	const obsidian = Number(q(`SELECT COUNT(*) n FROM events WHERE race_id='${esc(raceId)}' AND category='cast' AND event='obsidian'`)[0]?.n ?? 0);
 	const death = q(`SELECT detail FROM events WHERE race_id='${esc(raceId)}' AND category='death' AND event='message' LIMIT 1`)[0];
 	const deathCause = death ? (/\[(death\.[a-z._]+)\]/.exec(String(death.detail))?.[1] ?? "death") : "";
-	const message = res?.message ?? (out.includes("TIMEOUT") ? "cli timeout" : "no result");
-	const outcome = res?.pass ? "pass" : deathCause ? "death" : /timeout/i.test(message) ? "timeout" : "fail";
+	const message = res?.message ?? (/DISCONNECTED (.*)/.exec(out)?.[1] ? `disconnected: ${/DISCONNECTED (.*)/.exec(out)?.[1]}` : out.includes("TIMEOUT") ? "cli timeout" : "no result");
+	const disc = /DISCONNECTED (.*)/.exec(out)?.[1];
+	const outcome = res?.pass ? "pass" : disc ? "disconnect" : deathCause ? "death" : /timeout/i.test(message) ? "timeout" : "fail";
 	const lastEv = lastCast ? `${lastCast.event} ${String(lastCast.detail ?? "").slice(0, 60)}` : "";
 	db.prepare(`INSERT OR REPLACE INTO runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
 		runId, BATCH, SLUG, commit, startedAt, seconds, phase, lastEv, obsidian, outcome, deathCause, message.slice(0, 300), MOBS, "",

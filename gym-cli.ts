@@ -8,7 +8,7 @@ import { createBot } from "typecraft";
 import { GYM_BY_SLUG } from "./src/lib/steve/gym/registry.ts";
 import { runGymStep } from "./src/lib/steve/gym/run.ts";
 import { registerBlockMemory } from "./src/lib/steve/lib/bot-utils.ts";
-import { attachDiagnostics, initLogger, stopLogger } from "./src/lib/steve/lib/logger.ts";
+import { attachDiagnostics, initLogger, logEvent, stopLogger } from "./src/lib/steve/lib/logger.ts";
 import { connect } from "./src/lib/steve/lib/rcon.ts";
 
 const SLUG = process.env.STEP ?? process.argv[2] ?? "gather-wood";
@@ -27,6 +27,18 @@ const bot = createBot({
 	version: process.env.MC_VERSION ?? "1.21.11",
 	auth: "offline",
 });
+// A dropped connection must end the run: b4-5 was "lost connection: Timed out"
+// 30s after login, the process kept running against a stale world model for 20
+// minutes (site_anchor, chamber, heartbeats) and only the 33-min CLI timeout
+// ended it.
+const disconnected = (why: string): void => {
+	console.log(`DISCONNECTED ${why}`);
+	logEvent("lifecycle", "end", why);
+	stopLogger();
+	process.exit(2);
+};
+bot.on("end", (reason: string) => disconnected(`end ${reason ?? ""}`));
+bot.on("kicked", (reason: string) => disconnected(`kicked ${String(reason).slice(0, 120)}`));
 bot.on("error", (e) => {
 	if (!e.message.includes("waypoint")) console.log("ERR", e.message);
 });
