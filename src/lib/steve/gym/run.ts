@@ -73,7 +73,10 @@ export const runGymStep = async (
 			}
 			await sleep(1200);
 			const ly = bot.entity?.position?.y ?? 0;
-			if (/Spread 1 /.test(sp) && ly >= 55) break;
+			// b9-3: spread onto an ocean surface (y=62) — the arena scaffold then sat in
+			// water and the cast refused the wet anchor. Treat a water landing as bad too.
+			const wet = !!(bot as { entity?: { isInWater?: boolean } }).entity?.isInWater;
+			if (/Spread 1 /.test(sp) && ly >= 55 && !wet) break;
 			log(`[gym:${step.slug}] bad landing (y=${Math.floor(ly)}) — re-spreading`);
 			await rcon(`forceload remove ${tx} ${tz}`).catch(() => {});
 		}
