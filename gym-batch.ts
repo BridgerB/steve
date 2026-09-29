@@ -35,7 +35,10 @@ const q = (sql: string): Record<string, unknown>[] => d1.query(sql) as Record<st
 const esc = (s: string) => s.replace(/'/g, "''");
 
 const rcon = await connect();
-await rcon.command(`gamerule do_mob_spawning ${MOBS === "on" ? "true" : "false"}`);
+// 26.x name is spawn_mobs; do_mob_spawning is rejected ("Incorrect argument"), so every
+// batch before this fix ran with mobs ON regardless of MOBS.
+const mobReply = await rcon.command(`gamerule spawn_mobs ${MOBS === "on" ? "true" : "false"}`);
+if (/Incorrect/i.test(mobReply)) console.log(`WARN gamerule: ${mobReply}`);
 console.log(`batch ${BATCH} slug=${SLUG} runs=${RUNS} commit=${commit} mobs=${MOBS}`);
 
 const runOne = (raceId: string): Promise<{ code: number | null; out: string }> =>
