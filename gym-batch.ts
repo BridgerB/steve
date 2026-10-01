@@ -11,7 +11,7 @@
  * batch summary is printed at the end. Read the summary, not the console.
  */
 import { spawn, execSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { connect } from "./src/lib/steve/lib/rcon.ts";
 
@@ -22,11 +22,43 @@ const MOBS = (process.env.MOBS ?? "off").toLowerCase();
 const commit = execSync("git rev-parse --short HEAD").toString().trim();
 
 mkdirSync("data/gym", { recursive: true });
+
+// ONE batch at a time (b12: two concurrent batches took server ticks from 17 ms to
+// 104 ms and polluted the cast). The runner holds data/gym/batch.lock for its life.
+const LOCK = "data/gym/batch.lock";
+if (existsSync(LOCK)) {
+	const pid = parseInt(readFileSync(LOCK, "utf8"), 10);
+	let alive = false;
+	try {
+		process.kill(pid, 0);
+		alive = true;
+	} catch {}
+	if (alive) {
+		console.log(`LOCKED by pid ${pid} — another batch is running; not starting`);
+		process.exit(3);
+	}
+}
+writeFileSync(LOCK, String(process.pid));
+const releaseLock = () => {
+	try {
+		if (readFileSync(LOCK, "utf8") === String(process.pid)) unlinkSync(LOCK);
+	} catch {}
+};
+process.on("exit", releaseLock);
+process.on("SIGINT", () => process.exit(130));
+process.on("SIGTERM", () => process.exit(143));
 const db = new DatabaseSync("data/gym/batches.db");
 db.exec(`CREATE TABLE IF NOT EXISTS runs (
 	run_id TEXT PRIMARY KEY, batch TEXT, slug TEXT, commit_hash TEXT, started_at TEXT,
 	seconds REAL, deepest_phase TEXT, last_cast_event TEXT, obsidian INTEGER,
 	outcome TEXT, death_cause TEXT, message TEXT, mobs TEXT, note TEXT)`);
+// Harness health per run, so harness damage shows in the table before it eats a
+// batch (b13: 692 leaked forceloads, full heap, 7 of 10 runs lost).
+for (const col of ["forceloads INTEGER", "mem_avail_mb INTEGER", "tick_ms REAL", "tick_p99_ms REAL"]) {
+	try {
+		db.exec(`ALTER TABLE runs ADD COLUMN ${col}`);
+	} catch {}
+}
 
 delete process.env.STEVE_INGEST_URL; // read the local D1 only
 const { connectDb } = await import("./src/lib/steve/lib/db.ts");
@@ -40,6 +72,28 @@ const rcon = await connect();
 const mobReply = await rcon.command(`gamerule spawn_mobs ${MOBS === "on" ? "true" : "false"}`);
 if (/Incorrect/i.test(mobReply)) console.log(`WARN gamerule: ${mobReply}`);
 console.log(`batch ${BATCH} slug=${SLUG} runs=${RUNS} commit=${commit} mobs=${MOBS}`);
+
+const memAvailMb = (): number | null => {
+	try {
+		const m = /MemAvailable:\s+(\d+) kB/.exec(readFileSync("/proc/meminfo", "utf8"));
+		return m ? Math.round(parseInt(m[1]!, 10) / 1024) : null;
+	} catch {
+		return null;
+	}
+};
+/** Server health before a run; null when RCON does not answer. */
+const health = async (): Promise<{ forceloads: number; tickMs: number | null; p99: number | null } | null> => {
+	try {
+		const fl = await rcon.command("forceload query");
+		const forceloads = /No force loaded/.test(fl) ? 0 : parseInt(/(\d+) force loaded/.exec(fl)?.[1] ?? "-1", 10);
+		const tq = await rcon.command("tick query");
+		const tickMs = parseFloat(/Average time per tick: ([\d.]+)ms/.exec(tq)?.[1] ?? "NaN");
+		const p99 = parseFloat(/P99: ([\d.]+)ms/.exec(tq)?.[1] ?? "NaN");
+		return { forceloads, tickMs: Number.isNaN(tickMs) ? null : tickMs, p99: Number.isNaN(p99) ? null : p99 };
+	} catch {
+		return null;
+	}
+};
 
 const runOne = (raceId: string): Promise<{ code: number | null; out: string }> =>
 	new Promise((resolve) => {
@@ -57,6 +111,22 @@ const runOne = (raceId: string): Promise<{ code: number | null; out: string }> =
 for (let i = 1; i <= RUNS; i++) {
 	const runId = `${BATCH}-${i}`;
 	const raceId = `gym-${SLUG}-${runId}`;
+	// Pre-run check: RCON must answer. A dead link makes every run a harness loss
+	// that teaches nothing (b14: 6 runs). Pause up to 30 min, then record harness.
+	let h = await health();
+	for (let w = 0; !h && w < 30; w++) {
+		console.log(`${runId}  RCON not answering — pausing 60s (${w + 1}/30)`);
+		await new Promise((r) => setTimeout(r, 60_000));
+		h = await health();
+	}
+	if (!h) {
+		db.prepare(`INSERT OR REPLACE INTO runs (run_id,batch,slug,commit_hash,started_at,seconds,outcome,message,mobs,note) VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
+			runId, BATCH, SLUG, commit, new Date().toISOString(), 0, "harness", "HARNESS rcon down 30 min", MOBS, "",
+		);
+		console.log(`${runId}  harness  RCON down 30 min`);
+		continue;
+	}
+	const memMb = memAvailMb();
 	const startedAt = new Date().toISOString();
 	const t0 = Date.now();
 	// A dropped connection (server 'Timed out' after a client stall during the
@@ -91,8 +161,9 @@ for (let i = 1; i <= RUNS; i++) {
 	const castOk = SLUG !== "build-nether-portal" || obsidian >= 10;
 	const outcome = res?.pass && castOk ? "pass" : /^HARNESS/.test(message) ? "harness" : disc ? "disconnect" : deathCause ? "death" : /timeout/i.test(message) ? "timeout" : "fail";
 	const lastEv = lastCast ? `${lastCast.event} ${String(lastCast.detail ?? "").slice(0, 60)}` : "";
-	db.prepare(`INSERT OR REPLACE INTO runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+	db.prepare(`INSERT OR REPLACE INTO runs (run_id,batch,slug,commit_hash,started_at,seconds,deepest_phase,last_cast_event,obsidian,outcome,death_cause,message,mobs,note,forceloads,mem_avail_mb,tick_ms,tick_p99_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
 		runId, BATCH, SLUG, commit, startedAt, seconds, phase, lastEv, obsidian, outcome, deathCause, message.slice(0, 300), MOBS, "",
+		h.forceloads, memMb, h.tickMs, h.p99,
 	);
 	console.log(`${runId}  ${outcome.padEnd(7)} ${seconds.toFixed(0).padStart(4)}s  obsidian=${obsidian}  phase='${phase}'  last='${lastEv}'  ${message.slice(0, 80)}`);
 }
