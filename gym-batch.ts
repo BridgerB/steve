@@ -18,7 +18,9 @@ import { connect } from "./src/lib/steve/lib/rcon.ts";
 const SLUG = process.env.STEP ?? "build-nether-portal";
 const RUNS = parseInt(process.env.RUNS ?? "10", 10);
 const BATCH = process.env.BATCH ?? `b${Date.now().toString(36)}`;
-const MOBS = (process.env.MOBS ?? "off").toLowerCase();
+// Mobs stay ON for every batch: it is the race's condition, and a RUNS=0 smoke test
+// with the old default ("off") silently turned spawn_mobs off on the race server.
+const MOBS = "on";
 const commit = execSync("git rev-parse --short HEAD").toString().trim();
 
 mkdirSync("data/gym", { recursive: true });
