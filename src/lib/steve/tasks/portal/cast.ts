@@ -1965,6 +1965,27 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 		range: 0,
 		timeout: 10000,
 	}).catch(() => {});
+	// Cap the work area's floor. Natural gym: all three lava deaths (n1r-2, n1r-3,
+	// n2b-1) were the 'descend' after the backing-column pillar landing on a pool cell
+	// one block +x / -z of the anchor at floor level — the pool reaches under the frame
+	// even when the chosen source is 4+ blocks away. Place cobble into every lava cell
+	// at floor and foot level under the frame + backing wall + working row before
+	// casting, so the bot never steps or drops where lava can be.
+	{
+		let capped = 0;
+		let failed = 0;
+		for (let x = bx - 1; x <= bx + 4; x++) {
+			for (let z = bz - 2; z <= bz + 1; z++) {
+				for (const y of [by - 1, by]) {
+					const c = vec3(x, y, z);
+					if (!isLava(getBlock(bot, c)?.name)) continue;
+					if (await placeCobble(bot, c)) capped++;
+					else failed++;
+				}
+			}
+		}
+		if (capped || failed) logEvent("cast", "floor_capped", `${capped} lava cells capped, ${failed} failed, around ${bx},${by},${bz}`);
+	}
 	const lavaOk = count(bot, "lava_bucket") >= 1;
 	logEvent("cast", lavaOk ? "site_ready" : "site_no_lava", `${bx},${by},${bz}`);
 	return {
