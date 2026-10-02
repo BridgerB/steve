@@ -1571,6 +1571,7 @@ const stripMineForLava = async (
 };
 
 export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
+	setPhase("find_lava");
 	const deadline = Date.now() + 20 * 60_000;
 	// SPOT exposed lava WIDE — surface/cave lava is air-adjacent, so findFluidSource sees it
 	// across loaded chunks. A big radius lets the bot spot surface lava from far, then WALK to
@@ -1806,6 +1807,7 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 	// frame, cast stuck at 8/10). Along X the pool sits beside the frame's side
 	// column, reachable from the working side.
 	void dz;
+	setPhase("anchor");
 	const standSpot = vec3(lava.x + dx * 5, lava.y, lava.z);
 	await goTo(bot, standSpot, { range: 1, timeout: 20000 }).catch(() => {});
 	// Never anchor a site in water: 713's retry stood in a pond, the anchor was logged

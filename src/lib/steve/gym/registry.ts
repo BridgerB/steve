@@ -26,6 +26,7 @@ import { smeltItems } from "../tasks/smelt/main.ts";
 import { buildPortalByCasting, prepareCastSite } from "../tasks/portal/cast.ts";
 import { enterPortal } from "../tasks/portal/enter.ts";
 import { countInventoryItems } from "../lib/test-utils.ts";
+import { setPhase } from "../lib/logger.ts";
 import type { StepResult } from "../types.ts";
 
 export interface GymStep {
@@ -154,6 +155,39 @@ export const GYM_STEPS: GymStep[] = [
 				exposed: false,
 			} as never),
 		timeoutMs: 1920000,
+	},
+	{
+		// THE natural-terrain gym (hours 48+ main instrument). Random landing, the race
+		// kit, NO scaffold: the harness places and clears nothing. The bot runs the
+		// race's own portal step (find lava → anchor → prep → cast → light) under the
+		// race's 900 s step budget, then the race's enter step. Pass = in the Nether.
+		slug: "portal-natural",
+		label: "Portal on natural terrain (find lava → cast → enter)",
+		order: 20,
+		prereq: [
+			"stone_pickaxe 2",
+			"bucket 1",
+			"water_bucket 1",
+			"flint_and_steel 1",
+			"cobblestone 64",
+			"oak_planks 16",
+		],
+		run: async (b) => {
+			const cast = (async (): Promise<StepResult> => {
+				const prep = await prepareCastSite(b);
+				if (!prep.success) return prep;
+				return buildPortalByCasting(b);
+			})();
+			const budget = new Promise<StepResult>((r) =>
+				setTimeout(() => r({ success: false, message: "Build Nether Portal timed out (900s)" }), 900_000),
+			);
+			const res = await Promise.race([cast, budget]);
+			if (!res.success) return res;
+			setPhase("enter");
+			return enterPortal(b);
+		},
+		pass: (b) => String(b.game?.dimension ?? "").includes("nether"),
+		timeoutMs: 1_000_000,
 	},
 	{
 		slug: "enter-nether",
