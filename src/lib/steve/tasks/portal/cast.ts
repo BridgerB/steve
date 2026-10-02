@@ -782,6 +782,34 @@ const fillBucket = async (
 		// (d0 == gap every time) even 4 blocks away on flat stone, so the straight walk
 		// is the ONLY way onto the rim. Keep the lava-on-line refusal, drop the gap cap
 		// (7 = the far side of a 9-wide pool from where descend leaves us).
+		// Natural gym n10: 39 refill walks, most refused 'lavaOnLine' (pool inlets between
+		// the bot and every rim stance), each costing 15-20 s until the 900 s ran out.
+		// Placement-first: cap the lava cells on the walk line (floor and foot level)
+		// with build blocks when they are in reach, then walk over them. Placing into
+		// lava is safe; only digging next to it floods.
+		if (lavaOnLine && gap <= 7) {
+			let capped = 0;
+			const eyeP = offset(bot.entity.position, 0, 1.62, 0);
+			for (let i = 1; i <= steps; i++) {
+				const t = i / steps;
+				const lx = Math.floor(p.x + (c.x - p.x) * t);
+				const lz = Math.floor(p.z + (c.z - p.z) * t);
+				for (const ly of [feet.y - 1, feet.y]) {
+					const cell = vec3(lx, ly, lz);
+					if (!isLava(getBlock(bot, cell)?.name)) continue;
+					if (distance(eyeP, offset(cell, 0.5, 0.5, 0.5)) > 4.5) continue;
+					if (await placeCobble(bot, cell)) capped++;
+				}
+			}
+			lavaOnLine = false;
+			for (let i = 1; i <= steps && !lavaOnLine; i++) {
+				const t = i / steps;
+				const lx = Math.floor(p.x + (c.x - p.x) * t);
+				const lz = Math.floor(p.z + (c.z - p.z) * t);
+				if ([feet.y - 1, feet.y].some((ly) => isLava(getBlock(bot, vec3(lx, ly, lz))?.name))) lavaOnLine = true;
+			}
+			logEvent("cast", "fill_bridge", `capped ${capped} lava cells on the walk to ${feet.x},${feet.y},${feet.z} — line ${lavaOnLine ? "still lava" : "clear"}`, bot.entity.position);
+		}
 		if (gap > 7 || lavaOnLine) {
 			logEvent("cast", "fill_reach", `refused feet ${feet.x},${feet.y},${feet.z} gap=${gap.toFixed(1)} lavaOnLine=${lavaOnLine} d0=${d0.toFixed(1)}`, p);
 			return false;
