@@ -819,25 +819,47 @@ const fillBucket = async (
 				const tx = q0.x + ((gx - q0.x) / rem) * len;
 				const tz = q0.z + ((gz - q0.z) / rem) * len;
 				const n = Math.max(1, Math.ceil(len));
-				const legCells = (): { fill: Vec3[]; dig: Vec3[]; wall: boolean } => {
+				// n13: 34 of 35 bridged walks came back BLOCKED — near the pool rim every
+				// solid block touches lava, so a single foot-level block (a plain step up)
+				// counted as an undiggable wall. A foot block with open head room is a STEP
+				// (walk it with jump held); a 2-high obstacle becomes a step by digging only
+				// its head block when that one is safe; a wall is only 2-high and undiggable.
+				const legCells = (): { fill: Vec3[]; dig: Vec3[]; wall: boolean; step: boolean } => {
 					const fill: Vec3[] = [];
 					const dig: Vec3[] = [];
 					let wall = false;
+					let step = false;
 					for (let i = 1; i <= n; i++) {
 						const lx = Math.floor(q0.x + ((tx - q0.x) * i) / n);
 						const lz = Math.floor(q0.z + ((tz - q0.z) * i) / n);
 						const fl = getBlock(bot, vec3(lx, feet.y - 1, lz))?.name;
 						if (isLava(fl) || !isSolid(fl)) fill.push(vec3(lx, feet.y - 1, lz));
 						if (isLava(getBlock(bot, vec3(lx, feet.y, lz))?.name)) fill.push(vec3(lx, feet.y, lz));
-						for (const ly of [feet.y, feet.y + 1]) {
-							const cell = vec3(lx, ly, lz);
-							const nm = getBlock(bot, cell)?.name;
-							if (!isSolid(nm) || isLava(nm)) continue;
-							if (inFrameBox(lx, ly, lz) || nm === "obsidian" || touchesLava(bot, cell)) wall = true;
-							else dig.push(cell);
+						const feetC = vec3(lx, feet.y, lz);
+						const headC = vec3(lx, feet.y + 1, lz);
+						const topC = vec3(lx, feet.y + 2, lz);
+						const fs = isSolid(getBlock(bot, feetC)?.name);
+						const hs = isSolid(getBlock(bot, headC)?.name);
+						const safe = (c: Vec3) => !inFrameBox(c.x, c.y, c.z) && getBlock(bot, c)?.name !== "obsidian" && !touchesLava(bot, c);
+						if (fs && !hs) {
+							// step up: need the cell above the head clear too
+							if (isSolid(getBlock(bot, topC)?.name)) {
+								if (safe(topC)) dig.push(topC);
+								else wall = true;
+							}
+							step = true;
+						} else if (fs && hs) {
+							if (safe(feetC) && safe(headC)) dig.push(feetC, headC);
+							else if (safe(headC)) {
+								dig.push(headC);
+								step = true;
+							} else wall = true;
+						} else if (!fs && hs) {
+							if (safe(headC)) dig.push(headC);
+							else wall = true;
 						}
 					}
-					return { fill, dig, wall };
+					return { fill, dig, wall, step };
 				};
 				const eyeP = offset(q0, 0, 1.62, 0);
 				for (const cell of legCells().fill) {
@@ -854,7 +876,9 @@ const fillBucket = async (
 					blocked = true;
 					return;
 				}
+				if (after.step) bot.setControlState("jump", true);
 				await walkToXZ(bot, tx, tz, { targetDist: 0.4, maxTime: 2000 });
+				bot.setControlState("jump", false);
 				legs++;
 				if (distance(bot.entity.position, q0) < 0.5) {
 					blocked = true;
