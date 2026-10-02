@@ -687,6 +687,33 @@ const fillBucket = async (
 		`[SCOOP] ${fluid} bot=${Math.floor(here.x)},${Math.floor(here.y)},${Math.floor(here.z)} raw=${raw.length} src0=${src0.length} srcs=${srcs.length} nearest=${srcs[0] ? `${srcs[0].x},${srcs[0].y},${srcs[0].z}@${Math.round(Math.sqrt(d2(srcs[0])))} rim=${hasRim(srcs[0])}` : "none"}`,
 	);
 
+	// Scoop from WHERE THE BOT STANDS first. Natural gym (n5, n6): the stance sweep
+	// below walks to a rim cell before every scoop, and on uneven natural ground that
+	// walk fails (fill_reach ok=false / lavaOnLine refusals) or ends at a height where
+	// the scoop ray hits the cell above the source (filled=false) — the first fill
+	// after site prep was the most common deepest phase. If any source within reach
+	// is hit squarely by the use-ray from here, scoop it without moving.
+	{
+		const eyeP = offset(bot.entity.position, 0, 1.62, 0);
+		const near = pool
+			.map((p) => vec3(p.x, p.y, p.z))
+			.filter((p) => distance(eyeP, offset(p, 0.5, 0.5, 0.5)) <= 4.5)
+			.sort((a, b) => d2(a) - d2(b))
+			.slice(0, 16);
+		for (const p of near) {
+			for (const look of [vec3(p.x + 0.5, p.y + 0.95, p.z + 0.5), vec3(p.x + 0.5, p.y + 0.5, p.z + 0.5)]) {
+				const hit = useTargetCell(bot, look);
+				if (!hit || hit.x !== p.x || hit.y !== p.y || hit.z !== p.z) continue;
+				if (!(await equip(bot, "bucket"))) break;
+				await reliableUse(bot, look, p);
+				if (count(bot, `${fluid}_bucket`) > 0) {
+					logEvent("cast", "scoop_here", `${fluid} src ${p.x},${p.y},${p.z} from where the bot stands`, bot.entity.position);
+					return true;
+				}
+			}
+			if (count(bot, `${fluid}_bucket`) > 0) return true;
+		}
+	}
 	const NB8: [number, number][] = [
 		[1, 0],
 		[-1, 0],
