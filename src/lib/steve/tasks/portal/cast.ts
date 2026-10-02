@@ -1817,6 +1817,28 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 		return { success: false, message: "Cast anchor is in water — retry from dry land" };
 	}
 
+	// The anchor must sit 4-12 blocks (horizontally) from the lava it was chosen for.
+	// Natural gym n1r-2 / n1r-3: the 5-block stand-off goTo fell short, the anchor was
+	// taken 2-3 blocks from the pool, and the bot fell into the lava beside the frame
+	// (95 s and 6 s after portal_start). b12-5: a death mid-tunnel respawned the bot at
+	// world spawn and it anchored there, 7500 blocks from its lava. Too close → walk to
+	// the stand-off again, then try the opposite side; still out of range → fail the
+	// dispatch (the race retries) instead of anchoring a doomed site.
+	const lavaH = (): number =>
+		Math.hypot(bot.entity.position.x - (lava.x + 0.5), bot.entity.position.z - (lava.z + 0.5));
+	if (lavaH() < 4) {
+		await walkToXZ(bot, standSpot.x + 0.5, standSpot.z + 0.5, { targetDist: 0.5, maxTime: 4000 }).catch(() => {});
+	}
+	if (lavaH() < 4) {
+		const other = vec3(lava.x - dx * 5, lava.y, lava.z);
+		logEvent("cast", "site_close", `${lavaH().toFixed(1)} from lava — trying the other side ${other.x},${other.z}`);
+		await goTo(bot, other, { range: 1, timeout: 20000 }).catch(() => {});
+	}
+	const gapH = lavaH();
+	if (gapH < 4 || gapH > 12 || bot.entity.isInWater) {
+		logEvent("cast", "site_out_of_range", `bot ${gapH.toFixed(1)} from lava ${lava.x},${lava.y},${lava.z} — not anchoring`);
+		return { success: false, message: `Cast site ${gapH.toFixed(0)} from its lava (need 4-12) — retry` };
+	}
 	const bx = Math.floor(bot.entity.position.x);
 	const by = Math.floor(bot.entity.position.y);
 	const bz = Math.floor(bot.entity.position.z);
