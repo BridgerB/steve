@@ -1829,10 +1829,17 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 	if (lavaH() < 3.5) {
 		await walkToXZ(bot, standSpot.x + 0.5, standSpot.z + 0.5, { targetDist: 0.5, maxTime: 4000 }).catch(() => {});
 	}
+	// Rewrite R3: too close and the walk could not get away (the bot is usually in its
+	// own dig-down tunnel: n2-1, n3-2 refused the anchor 27 and 29 times). TUNNEL
+	// straight away from the lava, X first then Z, until 3.5+ off. Never walk to "the
+	// other side": the pathfinder routed that walk across the pool (n4b-1 death).
 	if (lavaH() < 3.5) {
-		const other = vec3(lava.x - dx * 5, lava.y, lava.z);
-		logEvent("cast", "site_close", `${lavaH().toFixed(1)} from lava — trying the other side ${other.x},${other.z}`);
-		await goTo(bot, other, { range: 1, timeout: 20000 }).catch(() => {});
+		const ax = Math.sign(bot.entity.position.x - (lava.x + 0.5)) || dx;
+		const az = Math.sign(bot.entity.position.z - (lava.z + 0.5)) || 1;
+		const { tunnelToward } = await import("../mining/main.ts");
+		const movedX = await tunnelToward(bot, ax, 0, 6).catch(() => 0);
+		const movedZ = lavaH() < 3.5 ? await tunnelToward(bot, 0, az, 6).catch(() => 0) : 0;
+		logEvent("cast", "site_close", `tunnelled x${movedX} z${movedZ} away from the lava — now ${lavaH().toFixed(1)}`);
 	}
 	const gapH = lavaH();
 	if (gapH < 3.5 || gapH > 12 || bot.entity.isInWater) {
