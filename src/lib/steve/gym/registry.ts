@@ -172,17 +172,37 @@ export const GYM_STEPS: GymStep[] = [
 			"cobblestone 64",
 			"oak_planks 16",
 		],
+		// The race re-dispatches a failed step and runs escape_water (priority 0) first
+		// whenever the bot is in water; many portal-step returns ("in water — yielding",
+		// "lava not exposed (1/3) — retunnel") are designed as "retry next dispatch".
+		// n1 ran a SINGLE dispatch and scored those as losses. Mirror the race: re-dispatch
+		// until success or the 900 s total budget is spent, escaping water in between.
 		run: async (b) => {
-			const cast = (async (): Promise<StepResult> => {
-				const prep = await prepareCastSite(b);
-				if (!prep.success) return prep;
-				return buildPortalByCasting(b);
-			})();
-			const budget = new Promise<StepResult>((r) =>
-				setTimeout(() => r({ success: false, message: "Build Nether Portal timed out (900s)" }), 900_000),
-			);
-			const res = await Promise.race([cast, budget]);
-			if (!res.success) return res;
+			const deadline = Date.now() + 900_000;
+			let res: StepResult = { success: false, message: "Build Nether Portal never dispatched" };
+			let dispatches = 0;
+			while (Date.now() < deadline) {
+				if (b.entity?.isInWater) {
+					const { escapeWater } = await import("../lib/bot-utils.ts");
+					await escapeWater(b).catch(() => false);
+					await new Promise((r) => setTimeout(r, 1000));
+					continue;
+				}
+				dispatches++;
+				const cast = (async (): Promise<StepResult> => {
+					const prep = await prepareCastSite(b);
+					if (!prep.success) return prep;
+					return buildPortalByCasting(b);
+				})();
+				const left = deadline - Date.now();
+				const budget = new Promise<StepResult>((r) =>
+					setTimeout(() => r({ success: false, message: "Build Nether Portal timed out (900s)" }), left),
+				);
+				res = await Promise.race([cast, budget]);
+				if (res.success) break;
+				await new Promise((r) => setTimeout(r, 1000));
+			}
+			if (!res.success) return { ...res, message: `${res.message} [${dispatches} dispatches]` };
 			setPhase("enter");
 			return enterPortal(b);
 		},
