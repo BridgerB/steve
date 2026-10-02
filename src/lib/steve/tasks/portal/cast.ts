@@ -1880,8 +1880,14 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 	// cells, not on the bot, and gets re-dug on the second pass. The pick is
 	// checked every cell (294 cells outlast a stone pick's 131 uses).
 	{
+		// Rewrite R1 (template site, natural gym gate 2026-10-02): dig ONLY the cells the
+		// template needs empty — the frame plane (z=0) and the standing row in front of
+		// it (z=+1). The old chamber dug z=-1..+5 (294 cells, 4-7 min on natural ground,
+		// n1r-4/n1r-5 ran out of time in it) and then rebuilt z=-1 as the backing wall.
+		// The backing row is now left solid where nature made it solid (buildBacking
+		// only fills the gaps), and the rows beyond z=+1 are never touched.
 		const cols: [number, number][] = [];
-		for (let z = -1; z <= 5; z++) {
+		for (let z = 0; z <= 1; z++) {
 			const xs = (z + 1) % 2 === 0 ? [-1, 0, 1, 2, 3, 4] : [4, 3, 2, 1, 0, -1];
 			for (const x of xs) cols.push([x, z]);
 		}
@@ -1941,7 +1947,7 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 		await goTo(bot, vec3(bx, by, bz), { range: 1, timeout: 45000 }).catch(() => {});
 	let floorSkipped = 0;
 	for (let x = -1; x <= 4; x++) {
-		for (let z = -1; z <= 5; z++) {
+		for (let z = -1; z <= 2; z++) {
 			const f = vec3(bx + x, by - 1, bz + z);
 			if (!isSolid(getBlock(bot, f)?.name) && !lavaTouching(f)) {
 				// Only cells in reach: placing from afar just burns place timeouts.
