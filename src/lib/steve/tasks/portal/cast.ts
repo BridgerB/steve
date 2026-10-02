@@ -732,7 +732,7 @@ const fillBucket = async (
 		// every scoop aimed at its own column (filled=false ×3 per stance) until
 		// fill_fail. A stance is reached only at stance height; if we're up on the
 		// mold, step off it onto a dry, lava-free cell at stance height first.
-		const high = bot.entity.position.y - feet.y > 0.6;
+		const high = bot.entity.position.y - feet.y > 1.5;
 		if (high) {
 			const q = bot.entity.position;
 			const fx = Math.floor(q.x);
@@ -747,7 +747,7 @@ const fillBucket = async (
 				if (![feet.y, feet.y + 1, Math.floor(q.y), Math.floor(q.y) + 1].every((yy) => clear(getBlock(bot, vec3(x, yy, z))?.name))) continue;
 				await walkToXZ(bot, x + 0.5, z + 0.5, { targetDist: 0.3, maxTime: 1500 });
 				stepped = `${x},${feet.y},${z}`;
-				if (bot.entity.position.y - feet.y <= 0.6) break;
+				if (bot.entity.position.y - feet.y <= 1.5) break;
 			}
 			logEvent("cast", "fill_high", `on the mold at y=${q.y.toFixed(1)} (stance y=${feet.y}) — stepped off to ${stepped} now y=${bot.entity.position.y.toFixed(1)}`, bot.entity.position);
 			return false;
