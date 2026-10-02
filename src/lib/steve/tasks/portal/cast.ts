@@ -235,8 +235,41 @@ const descendToY = async (bot: Bot, targetFeetY: number): Promise<void> => {
 };
 
 /** The cheap building block we have most of (dirt preferred, then cobblestone). */
-const buildBlockName = (bot: Bot): string =>
-	count(bot, "dirt") > 0 ? "dirt" : "cobblestone";
+// Every block the cast may pillar and mould with. Natural digging yields more than dirt
+// and cobble (cobbled_deepslate, andesite, granite, diorite, tuff); n8-2 stopped at
+// "Need ~30 dirt/cobble (have 11)" and looped 398 dispatches.
+const BUILD_BLOCKS = ["dirt", "cobblestone", "cobbled_deepslate", "andesite", "granite", "diorite", "tuff"];
+const buildBlockName = (bot: Bot): string => BUILD_BLOCKS.find((n) => count(bot, n) > 0) ?? "cobblestone";
+const buildStockOf = (bot: Bot): number => BUILD_BLOCKS.reduce((a, n) => a + count(bot, n), 0);
+/** Dig nearby solid ground (outside the frame box, never next to lava) until the
+ *  pack holds WANT build blocks or nothing diggable is in reach. */
+const topUpBuildBlocks = async (bot: Bot, want: number, frame: Vec3 | null): Promise<number> => {
+	const DIGGABLE = new Set(["dirt", "grass_block", "coarse_dirt", "stone", "cobblestone", "deepslate", "cobbled_deepslate", "andesite", "granite", "diorite", "tuff"]);
+	const inFrame = (p: Vec3) =>
+		!!frame && p.x >= frame.x - 1 && p.x <= frame.x + 4 && p.z >= frame.z - 2 && p.z <= frame.z + 2 && p.y >= frame.y - 1 && p.y <= frame.y + 6;
+	let dug = 0;
+	for (let round = 0; round < 3 && buildStockOf(bot) < want; round++) {
+		const feet = bot.entity.position;
+		const cells = bot
+			.findBlocks({ matching: (n: string) => DIGGABLE.has(n), maxDistance: 5, count: 80, exposed: false } as never)
+			.map((p: { x: number; y: number; z: number }) => vec3(p.x, p.y, p.z))
+			.filter((p: Vec3) => !inFrame(p) && !touchesLava(bot, p) && !(p.x === Math.floor(feet.x) && p.z === Math.floor(feet.z) && p.y < feet.y))
+			.filter((p: Vec3) => distance(offset(bot.entity.position, 0, 1.62, 0), offset(p, 0.5, 0.5, 0.5)) <= 4.5)
+			.slice(0, want - buildStockOf(bot) + 4);
+		if (!cells.length) break;
+		for (const c of cells) {
+			if (buildStockOf(bot) >= want) break;
+			await digAt(bot, c);
+			dug++;
+		}
+		try {
+			await bot.collectDrops(6, 4000, async (p) => {
+				await goTo(bot, p, { range: 1, timeout: 2500 });
+			});
+		} catch {}
+	}
+	return dug;
+};
 
 /**
  * Walk in a straight line toward (tx, tz) at ground level, digging any
@@ -2078,7 +2111,11 @@ export const buildPortalByCasting = async (bot: Bot): Promise<StepResult> => {
 		return { success: true, message: "Obsidian frame already present" };
 	}
 
-	const buildStock = count(bot, "dirt") + count(bot, "cobblestone");
+	if (buildStockOf(bot) < 30) {
+		const dug = await topUpBuildBlocks(bot, 34, siteAnchor.get(bot) ?? null);
+		logEvent("cast", "block_topup", `dug ${dug} → ${buildStockOf(bot)} build blocks`, bot.entity.position);
+	}
+	const buildStock = buildStockOf(bot);
 	if (buildStock < 30) {
 		return {
 			success: false,
