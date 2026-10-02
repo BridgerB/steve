@@ -68,7 +68,7 @@ const d1 = connectDb();
 const q = (sql: string): Record<string, unknown>[] => d1.query(sql) as Record<string, unknown>[];
 const esc = (s: string) => s.replace(/'/g, "''");
 
-const rcon = await connect();
+const rcon = await connect({ timeout: 30_000 });
 // 26.x name is spawn_mobs; do_mob_spawning is rejected ("Incorrect argument"), so every
 // batch before this fix ran with mobs ON regardless of MOBS.
 const mobReply = await rcon.command(`gamerule spawn_mobs ${MOBS === "on" ? "true" : "false"}`);

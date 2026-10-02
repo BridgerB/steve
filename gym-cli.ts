@@ -19,7 +19,8 @@ if (!step) {
 }
 const BOT = (process.env.BOT ?? `Gym_${SLUG}`).replace(/[^A-Za-z0-9_]/g, "").slice(0, 16);
 
-const rcon = await connect();
+// spreadplayers onto ungenerated terrain can take well over the 5 s default.
+const rcon = await connect({ timeout: 30_000 });
 const bot = createBot({
 	host: process.env.MC_HOST ?? "localhost",
 	port: parseInt(process.env.MC_PORT ?? "25565", 10),

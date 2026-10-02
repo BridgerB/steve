@@ -68,6 +68,11 @@ export const createRcon = (options: RconOptions = {}): Promise<RconClient> => {
 		});
 
 		let requestId = 10;
+		// Replies are matched to requests by packet id. A reply that arrives after its
+		// command timed out used to be handed to the NEXT command (gym b13-b15: slow
+		// spreadplayers over ungenerated terrain → "" for the spread, then the spread's
+		// reply read as the forceload's) — now it is dropped.
+		let pendingId = -1;
 		let pendingResolve: ((body: string) => void) | null = null;
 		let dataBuf = Buffer.alloc(0);
 
@@ -87,9 +92,10 @@ export const createRcon = (options: RconOptions = {}): Promise<RconClient> => {
 					} else {
 						reject(new Error("RCON authentication failed"));
 					}
-				} else if (pendingResolve) {
+				} else if (pendingResolve && packet.id === pendingId) {
 					pendingResolve(packet.body);
 					pendingResolve = null;
+					pendingId = -1;
 				}
 			}
 		});
@@ -116,6 +122,7 @@ export const createRcon = (options: RconOptions = {}): Promise<RconClient> => {
 					() =>
 						new Promise<string>((res) => {
 							const id = ++requestId;
+							pendingId = id;
 							pendingResolve = res;
 							socket.write(encodePacket(id, PACKET_TYPE.COMMAND, cmd));
 							setTimeout(() => {
