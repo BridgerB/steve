@@ -394,6 +394,8 @@ const runRace = async (count: number, timeoutMs: number) => {
 	const rconClient = await rconConnect({
 		port: RCON_PORT,
 		password: RCON_PASS,
+		// spreadplayers / tp over ungenerated terrain outlast the 5 s default.
+		timeout: 30_000,
 	});
 	const rcon = (cmd: string) => rconClient.command(cmd);
 	process.on("exit", () => {
@@ -415,6 +417,21 @@ const runRace = async (count: number, timeoutMs: number) => {
 	const GOAL = "enter_nether";
 	initLogger(RACE_ID);
 	registerRace(RACE_ID, "race", count, timeoutMs / 1000, GOAL);
+	// Server tick health once a minute into D1 (category "server", event "tick"), so the
+	// funnel report can carry median / P99 tick time: world generation under several
+	// bots is the load that broke the cast's timing in the gym (b12: 104 ms avg).
+	const tickTimer = setInterval(async () => {
+		try {
+			const tq = await rcon("tick query");
+			const num = (re: RegExp) => re.exec(tq)?.[1] ?? "?";
+			logEvent(
+				"server",
+				"tick",
+				`avg=${num(/Average time per tick: ([\d.]+)ms/)} p50=${num(/P50: ([\d.]+)ms/)} p95=${num(/P95: ([\d.]+)ms/)} p99=${num(/P99: ([\d.]+)ms/)}`,
+			);
+		} catch {}
+	}, 60_000);
+	tickTimer.unref();
 
 	const MILESTONES = [
 		{ name: "wood", query: "item_name LIKE '%_log'" },
