@@ -1794,6 +1794,15 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 				logEvent("cast", "filled", "lava_bucket on-expose");
 		}
 	}
+	// The quick on-expose scoop misses often, and after the stand-off + site clear the
+	// pool is behind the frame and natural rock: the most common natural-gym loss is the
+	// first fill AFTER site prep failing (site_no_lava / fill_fail: n4-1, n5-2, n5-3,
+	// n5-5). Run the full stance-based fill now, while the bot is still beside the pool.
+	if (count(bot, "lava_bucket") < 1 && count(bot, "bucket") >= 1 && !bot.entity.isInWater) {
+		setPhase("lava_fill_early");
+		const ok = await fillBucket(bot, "lava");
+		logEvent("cast", ok ? "filled" : "fill_early_fail", ok ? "lava_bucket before the stand-off" : "no early lava fill");
+	}
 
 	// 2. Stand a safe ~5 blocks back from the lava on the dominant axis so the
 	//    cleared chamber sits between us and the pool (well within fill range).
