@@ -787,34 +787,60 @@ const fillBucket = async (
 		// Placement-first: cap the lava cells on the walk line (floor and foot level)
 		// with build blocks when they are in reach, then walk over them. Placing into
 		// lava is safe; only digging next to it floods.
-		if (lavaOnLine && gap <= 7) {
-			let capped = 0;
-			const eyeP = offset(bot.entity.position, 0, 1.62, 0);
-			for (let i = 1; i <= steps; i++) {
-				const t = i / steps;
-				const lx = Math.floor(p.x + (c.x - p.x) * t);
-				const lz = Math.floor(p.z + (c.z - p.z) * t);
-				for (const ly of [feet.y - 1, feet.y]) {
-					const cell = vec3(lx, ly, lz);
-					if (!isLava(getBlock(bot, cell)?.name)) continue;
-					if (distance(eyeP, offset(cell, 0.5, 0.5, 0.5)) > 4.5) continue;
-					if (await placeCobble(bot, cell)) capped++;
-				}
-			}
-			lavaOnLine = false;
-			for (let i = 1; i <= steps && !lavaOnLine; i++) {
-				const t = i / steps;
-				const lx = Math.floor(p.x + (c.x - p.x) * t);
-				const lz = Math.floor(p.z + (c.z - p.z) * t);
-				if ([feet.y - 1, feet.y].some((ly) => isLava(getBlock(bot, vec3(lx, ly, lz))?.name))) lavaOnLine = true;
-			}
-			logEvent("cast", "fill_bridge", `capped ${capped} lava cells on the walk to ${feet.x},${feet.y},${feet.z} — line ${lavaOnLine ? "still lava" : "clear"}`, bot.entity.position);
-		}
-		if (gap > 7 || lavaOnLine) {
-			logEvent("cast", "fill_reach", `refused feet ${feet.x},${feet.y},${feet.z} gap=${gap.toFixed(1)} lavaOnLine=${lavaOnLine} d0=${d0.toFixed(1)}`, p);
+		// Progressive, placement-first walk (natural n10/n11: refills between blocks were
+		// the time sink — 38 fill_reach in n11-1, the stances 7-9 blocks away, refused
+		// for gap > 7 or lava on the line, and the one-shot bridge capped 0 cells because
+		// they were out of reach). Walk toward the stance 3 blocks per leg; before each leg
+		// cap the lava on that leg (floor + foot level, within reach) with build blocks;
+		// walk only a leg that is lava-free. Up to 12 blocks.
+		if (gap > 12) {
+			logEvent("cast", "fill_reach", `refused feet ${feet.x},${feet.y},${feet.z} gap=${gap.toFixed(1)} (>12) d0=${d0.toFixed(1)}`, p);
 			return false;
 		}
-		await walkToXZ(bot, c.x, c.z, { targetDist: 0.4, maxTime: 2500 });
+		let capped = 0;
+		let legs = 0;
+		let blocked = false;
+		for (let leg = 0; leg < 6; leg++) {
+			const q0 = bot.entity.position;
+			const rem = Math.hypot(c.x - q0.x, c.z - q0.z);
+			if (rem <= 0.6) break;
+			const len = Math.min(3, rem);
+			const tx = q0.x + ((c.x - q0.x) / rem) * len;
+			const tz = q0.z + ((c.z - q0.z) / rem) * len;
+			const n = Math.max(1, Math.ceil(len));
+			const legLava = (): Vec3[] => {
+				const out: Vec3[] = [];
+				for (let i = 1; i <= n; i++) {
+					const lx = Math.floor(q0.x + ((tx - q0.x) * i) / n);
+					const lz = Math.floor(q0.z + ((tz - q0.z) * i) / n);
+					{
+						const fl = getBlock(bot, vec3(lx, feet.y - 1, lz))?.name;
+						// floor must be solid (lava OR an open drop needs a block); feet cell must not be lava
+						if (isLava(fl) || !isSolid(fl)) out.push(vec3(lx, feet.y - 1, lz));
+						if (isLava(getBlock(bot, vec3(lx, feet.y, lz))?.name)) out.push(vec3(lx, feet.y, lz));
+					}
+				}
+				return out;
+			};
+			const eyeP = offset(q0, 0, 1.62, 0);
+			for (const cell of legLava()) {
+				if (distance(eyeP, offset(cell, 0.5, 0.5, 0.5)) > 4.5) continue;
+				if (await placeCobble(bot, cell)) capped++;
+			}
+			if (legLava().length) {
+				blocked = true;
+				break;
+			}
+			await walkToXZ(bot, tx, tz, { targetDist: 0.4, maxTime: 2000 });
+			legs++;
+			if (distance(bot.entity.position, q0) < 0.5) break;
+		}
+		if (capped || blocked) logEvent("cast", "fill_bridge", `legs ${legs} capped ${capped} ${blocked ? "BLOCKED by lava out of reach" : "clear"} → ${feet.x},${feet.y},${feet.z}`, bot.entity.position);
+		if (blocked && Math.hypot(bot.entity.position.x - c.x, bot.entity.position.z - c.z) > 1.8) {
+			logEvent("cast", "fill_reach", `refused feet ${feet.x},${feet.y},${feet.z} gap=${gap.toFixed(1)} lavaOnLine=true d0=${d0.toFixed(1)}`, p);
+			return false;
+		}
+		void lavaOnLine;
 		// gym b12-2, b12-7 (both stuck 6/10): goTo to the stance climbed ONTO the mold,
 		// the bot stood 2 above the stance (y feet+2), the XZ-only check said ok, and
 		// every scoop aimed at its own column (filled=false ×3 per stance) until
