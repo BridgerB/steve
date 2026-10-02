@@ -96,8 +96,12 @@ const mineGravel = async (bot: Bot, pos: Vec3): Promise<boolean> => {
 /** Bounded walk toward a block; true if we ended within hand reach (~4). */
 const approach = async (bot: Bot, pos: Vec3): Promise<boolean> => {
 	if (distance(bot.entity.position, pos) <= 3.2) return true;
+	// gym f2/f3: most seeds are remembered gravel 5-18 blocks BELOW the bot; a 9s
+	// walk ends right above them. The pathfinder can dig (digCost 6) — give a
+	// buried target a longer budget so it actually tunnels down to it.
+	const buried = bot.entity.position.y - pos.y >= 3;
 	try {
-		await goTo(bot, pos, { range: 2.2, timeout: 9000 });
+		await goTo(bot, pos, { range: 2.2, timeout: buried ? 25000 : 9000 });
 	} catch {}
 	if (distance(bot.entity.position, pos) > 3.4) {
 		try {
@@ -112,7 +116,10 @@ const harvestPocket = async (
 	bot: Bot,
 	seed: Vec3,
 	deadlineMs: number,
-): Promise<void> => {
+): Promise<{ mined: number; missed: number; ms: number }> => {
+	const t0 = Date.now();
+	let mined = 0;
+	let missed = 0;
 	const seen = new Set<string>([key(seed)]);
 	const queue: Vec3[] = [seed];
 	while (queue.length && !findItem(bot, "flint") && Date.now() < deadlineMs) {
@@ -125,8 +132,11 @@ const harvestPocket = async (
 		const pos = queue.shift();
 		if (!pos) break;
 		if (getBlock(bot, pos)?.name !== "gravel") continue;
-		if (!(await approach(bot, pos))) continue;
-		await mineGravel(bot, pos);
+		if (!(await approach(bot, pos))) {
+			missed++;
+			continue;
+		}
+		if (await mineGravel(bot, pos)) mined++;
 		for (const [dx, dy, dz] of NEIGHBORS) {
 			const np = vec3(pos.x + dx, pos.y + dy, pos.z + dz);
 			if (seen.has(key(np))) continue;
@@ -134,6 +144,7 @@ const harvestPocket = async (
 			if (getBlock(bot, np)?.name === "gravel" && !wet(bot, np)) queue.push(np);
 		}
 	}
+	return { mined, missed, ms: Date.now() - t0 };
 };
 
 /**
@@ -299,6 +310,13 @@ export const gatherFlint = async (
 			seed = (await roam(bot, doneSeeds)) ?? undefined;
 			if (!seed) continue;
 		}
+		// gym f2+f4: seeds >12 blocks below the bot were reached 0 of 14 times (<=2
+		// below: 11 of 24). Each cost 10-25s of a 92s budget. Skip them outright.
+		if (bot.entity.position.y - seed.y > 12) {
+			doneSeeds.add(key(seed));
+			logEvent("flint", "seed_too_deep", `${key(seed)} ${Math.round(bot.entity.position.y - seed.y)} below`, seed);
+			continue;
+		}
 		lastSeed.set(bot, key(seed));
 		logEvent("flint", "seed", `${key(seed)} dist=${distance(bot.entity.position, seed).toFixed(1)}`, seed);
 		if (!(await approach(bot, seed)) || bot.entity.isInWater) {
@@ -307,10 +325,23 @@ export const gatherFlint = async (
 			if (bot.entity.isInWater) return false; // escape_water takes over
 			continue;
 		}
-		await harvestPocket(bot, seed, deadlineMs);
+		const hp = await harvestPocket(bot, seed, deadlineMs);
+		// gym f6: pockets mined 8/4/1 gravel and ended with 0 gravel in the pack — the
+		// per-block pickup (range 5, 2s) left the drops, and a flint drop among them
+		// is lost the same way. One wider sweep over the pocket before moving on.
+		if (hp.mined > 0 && !findItem(bot, "flint") && !bot.entity.isInWater) {
+			let swept = 0;
+			try {
+				swept = await bot.collectDrops(8, 6000, async (p) => {
+					await goTo(bot, p, { range: 1.3, timeout: 3000 });
+				});
+			} catch {}
+			logEvent("flint", "pocket_sweep", `collected=${swept} flint=${findItem(bot, "flint") ? "yes" : "no"}`, bot.entity.position);
+		}
 		doneSeeds.add(key(seed));
 		lastSeed.delete(bot);
-		logEvent("flint", "pocket_done", `${key(seed)} flint=${findItem(bot, "flint") ? "yes" : "no"}`, seed);
+		const gravelN = (findItem(bot, "gravel") as { count?: number } | null)?.count ?? 0;
+		logEvent("flint", "pocket_done", `${key(seed)} flint=${findItem(bot, "flint") ? "yes" : "no"} mined=${hp.mined} missed=${hp.missed} gravel=${gravelN} ${Math.round(hp.ms / 1000)}s`, seed);
 	}
 	return !!findItem(bot, "flint");
 };

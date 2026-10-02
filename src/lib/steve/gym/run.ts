@@ -47,13 +47,51 @@ export const runGymStep = async (
 	// near (cx,cz) — no fall damage, and it loads the chunks itself. forceload keeps
 	// them resident so the task can act immediately.
 	if (!opts.noTeleport) {
-		await rcon(`forceload add ${cx} ${cz}`).catch(() => {});
-		await sleep(400);
-		const sp = await rcon(`spreadplayers ${cx} ${cz} 0 24 false ${name}`).catch(
-			(e) => `ERR ${e}`,
-		);
-		log(`[gym:${step.slug}] spreadplayers ${cx},${cz} → ${sp}`);
-		await sleep(1800);
+		// spreadplayers fails outright over water/steep terrain ("too many entities
+		// for space") and leaves the bot where it was (e2-1: in the previous run's
+		// portal), or lands it in a cave (e2-3: y=-45, scaffold in rock). Retry a new
+		// random cell up to 3 times until it reports a spread onto a surface y >= 55.
+		let landed = false;
+		for (let t = 0; t < 3; t++) {
+			const tx = t === 0 ? cx : Math.floor(Math.random() * 10000);
+			const tz = t === 0 ? cz : Math.floor(Math.random() * 10000);
+			await rcon(`forceload add ${tx} ${tz}`).catch(() => {});
+			await sleep(400);
+			const sp = await rcon(`spreadplayers ${tx} ${tz} 0 24 false ${name}`).catch(
+				(e) => `ERR ${e}`,
+			);
+			log(`[gym:${step.slug}] spreadplayers ${tx},${tz} → ${sp}`);
+			// The client position lags the server teleport: e4-3 read y=67 (the old
+			// spot) right after a spread that actually landed at y=-12. Wait until the
+			// position has moved to the new cell before judging the landing.
+			const p0 = bot.entity?.position;
+			for (let w = 0; w < 30; w++) {
+				await sleep(200);
+				const p = bot.entity?.position;
+				if (p && (Math.abs(p.x - tx) < 40 && Math.abs(p.z - tz) < 40)) break;
+				if (!/Spread 1 /.test(sp)) break;
+				void p0;
+			}
+			await sleep(1200);
+			const ly = bot.entity?.position?.y ?? 0;
+			// b9-3: spread onto an ocean surface (y=62) — the arena scaffold then sat in
+			// water and the cast refused the wet anchor. Treat a water landing as bad too.
+			const wet = !!(bot as { entity?: { isInWater?: boolean } }).entity?.isInWater;
+			if (/Spread 1 /.test(sp) && ly >= 55 && !wet) {
+				landed = true;
+				break;
+			}
+			log(`[gym:${step.slug}] bad landing (y=${Math.floor(ly)}) — re-spreading`);
+			await rcon(`forceload remove ${tx} ${tz}`).catch(() => {});
+		}
+		// b12-5: all 3 spreads failed (RCON replies garbled under server lag), the run
+		// went ahead at a y=130 landing with no arena, and scored a cast failure. No
+		// landing = no test: report it as a harness result, not a step result.
+		if (!landed) {
+			const message = "HARNESS no good landing after 3 spreads";
+			log(`[gym:${step.slug}] FAIL 0s — ${message}`);
+			return { pass: false, durationMs: 0, x: cx, z: cz, message };
+		}
 	}
 	try {
 		await (bot as unknown as { waitForChunksToLoad?: () => Promise<void> }).waitForChunksToLoad?.();

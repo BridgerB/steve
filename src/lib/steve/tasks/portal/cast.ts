@@ -24,7 +24,7 @@ import {
 	surfaceYAt,
 	walkToXZ,
 } from "../../lib/bot-utils.ts";
-import { logEvent } from "../../lib/logger.ts";
+import { logEvent, setPhase } from "../../lib/logger.ts";
 import { ensurePickaxe } from "../mining/main.ts";
 import type { Block, StepResult } from "../../types.ts";
 
@@ -648,12 +648,38 @@ const fillBucket = async (
 			const n = getBlock(bot, vec3(p.x + dx, p.y, p.z + dz))?.name;
 			return isSolid(n) && !isLava(n);
 		});
+	// Hypothesis (gym b4-7, b5-4 — both stuck at 8/10 with 10+ refill walks that never
+	// arrived): after the right column is cast its cup walls seal the straight route
+	// to the pool's far side, and the nearest rim sources all sit across that wall.
+	// Rank sources the bot can walk straight at (no solid block at feet/head on the
+	// line) ahead of blocked ones, then rim, then distance.
+	const walkClear = (p: { x: number; y: number; z: number }): boolean => {
+		const bp = bot.entity.position;
+		const fy = Math.floor(bp.y);
+		const tx = p.x + 0.5;
+		const tz = p.z + 0.5;
+		const n = Math.max(1, Math.ceil(Math.hypot(tx - bp.x, tz - bp.z)));
+		for (let i = 1; i < n; i++) {
+			const cx = Math.floor(bp.x + ((tx - bp.x) * i) / n);
+			const cz = Math.floor(bp.z + ((tz - bp.z) * i) / n);
+			for (const y of [fy, fy + 1]) {
+				const nm = getBlock(bot, vec3(cx, y, cz))?.name;
+				if (isSolid(nm) && !isLava(nm)) return false;
+			}
+		}
+		return true;
+	};
 	const srcs = (surf.length ? surf : pool)
 		.slice()
 		.sort((a, b) => {
 			const ra = hasRim(a) ? 0 : 1;
 			const rb = hasRim(b) ? 0 : 1;
-			return ra !== rb ? ra - rb : d2(a) - d2(b);
+			if (ra !== rb) return ra - rb;
+			// b6 lesson: walk-clear FIRST put rimless interior sources on top (0/4).
+			// Only a tie-break within the rim group.
+			const ca = walkClear(a) ? 0 : 1;
+			const cb = walkClear(b) ? 0 : 1;
+			return ca !== cb ? ca - cb : d2(a) - d2(b);
 		})
 		.slice(0, 14)
 		.map((p) => vec3(p.x, p.y, p.z));
@@ -673,25 +699,88 @@ const fillBucket = async (
 	];
 	const reach = async (feet: Vec3): Promise<boolean> => {
 		const c = vec3(feet.x + 0.5, feet.y, feet.z + 0.5);
-		if (
-			Math.hypot(
-				bot.entity.position.x - c.x,
-				bot.entity.position.y - c.y,
-				bot.entity.position.z - c.z,
-			) > 1.4
-		)
-			await goTo(bot, c, { range: 0, timeout: 12000 }).catch(() => {});
+		const d0 = Math.hypot(bot.entity.position.x - c.x, bot.entity.position.y - c.y, bot.entity.position.z - c.z);
+		if (d0 > 1.4) await goTo(bot, c, { range: 0, timeout: 12000 }).catch(() => {});
+		// Hypothesis (gym b1-7, b1-10, b2-6 — all death.attack.lava during a refill
+		// with no fill_stance logged): goTo fails or falls short and the straight
+		// walk below then heads across the pool. Only walk straight when the stance
+		// is close AND no lava lies on the line at foot level.
+		const p = bot.entity.position;
+		const gap = Math.hypot(p.x - c.x, p.z - c.z);
+		let lavaOnLine = false;
+		const steps = Math.max(1, Math.ceil(gap));
+		for (let i = 1; i <= steps; i++) {
+			const t = i / steps;
+			const lx = Math.floor(p.x + (c.x - p.x) * t);
+			const lz = Math.floor(p.z + (c.z - p.z) * t);
+			if ([feet.y - 1, feet.y].some((ly) => isLava(getBlock(bot, vec3(lx, ly, lz))?.name))) {
+				lavaOnLine = true;
+				break;
+			}
+		}
+		// b3-2: goTo(range 0) to a rim cell timed out 10 times in a row without moving
+		// (d0 == gap every time) even 4 blocks away on flat stone, so the straight walk
+		// is the ONLY way onto the rim. Keep the lava-on-line refusal, drop the gap cap
+		// (7 = the far side of a 9-wide pool from where descend leaves us).
+		if (gap > 7 || lavaOnLine) {
+			logEvent("cast", "fill_reach", `refused feet ${feet.x},${feet.y},${feet.z} gap=${gap.toFixed(1)} lavaOnLine=${lavaOnLine} d0=${d0.toFixed(1)}`, p);
+			return false;
+		}
 		await walkToXZ(bot, c.x, c.z, { targetDist: 0.4, maxTime: 2500 });
-		return (
-			Math.hypot(bot.entity.position.x - c.x, bot.entity.position.z - c.z) <= 1.8
-		);
+		// gym b12-2, b12-7 (both stuck 6/10): goTo to the stance climbed ONTO the mold,
+		// the bot stood 2 above the stance (y feet+2), the XZ-only check said ok, and
+		// every scoop aimed at its own column (filled=false ×3 per stance) until
+		// fill_fail. A stance is reached only at stance height; if we're up on the
+		// mold, step off it onto a dry, lava-free cell at stance height first.
+		const high = bot.entity.position.y - feet.y > 0.6;
+		if (high) {
+			const q = bot.entity.position;
+			const fx = Math.floor(q.x);
+			const fz = Math.floor(q.z);
+			const clear = (n?: string) => n === "air" || n === "cave_air";
+			let stepped = "none";
+			for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]] as const) {
+				const x = fx + dx;
+				const z = fz + dz;
+				const floor = getBlock(bot, vec3(x, feet.y - 1, z))?.name;
+				if (!floor || clear(floor) || isLava(floor) || floor.includes("water")) continue;
+				if (![feet.y, feet.y + 1, Math.floor(q.y), Math.floor(q.y) + 1].every((yy) => clear(getBlock(bot, vec3(x, yy, z))?.name))) continue;
+				await walkToXZ(bot, x + 0.5, z + 0.5, { targetDist: 0.3, maxTime: 1500 });
+				stepped = `${x},${feet.y},${z}`;
+				if (bot.entity.position.y - feet.y <= 0.6) break;
+			}
+			logEvent("cast", "fill_high", `on the mold at y=${q.y.toFixed(1)} (stance y=${feet.y}) — stepped off to ${stepped} now y=${bot.entity.position.y.toFixed(1)}`, bot.entity.position);
+			return false;
+		}
+		const ok = Math.hypot(bot.entity.position.x - c.x, bot.entity.position.z - c.z) <= 1.8;
+		logEvent("cast", "fill_reach", `feet ${feet.x},${feet.y},${feet.z} gap=${gap.toFixed(1)} ok=${ok}`, bot.entity.position);
+		return ok;
 	};
 	const scoop = async (src: Vec3): Promise<boolean> => {
-		if (!(await equip(bot, "bucket"))) return false;
+		// Hypothesis (gym n1-1, stuck at 2/10 with a lava_bucket in the pack): a scoop's
+		// inventory update arrived after the per-use check, the sweep moved on, and every
+		// later stance failed silently at equip("bucket") — no empty bucket left — until
+		// fill_fail. A filled bucket already in hand is success, whenever it arrived.
+		if (count(bot, `${fluid}_bucket`) > 0) return true;
+		if (!(await equip(bot, "bucket"))) {
+			logEvent("cast", "scoop_no_bucket", `${fluid} src ${src.x},${src.y},${src.z} bucket=${count(bot, "bucket")} ${fluid}_bucket=${count(bot, `${fluid}_bucket`)}`);
+			return count(bot, `${fluid}_bucket`) > 0;
+		}
+		// Hypothesis (gym b1-1): floor water beside the pool came from a bucket use in
+		// this sweep with the WRONG bucket in hand. Refuse to sweep unless the held
+		// item is the empty bucket, and log every use with what it held and did.
+		if (bot.heldItem?.name !== "bucket") {
+			logEvent("cast", "scoop_wrong_item", `held=${bot.heldItem?.name ?? "nothing"} at ${src.x},${src.y},${src.z}`);
+			return false;
+		}
 		// Aim the source TOP FACE first (the reliable down-look), then centre, then low.
 		for (const dy of [0.95, 0.5, 0.15]) {
+			const held = bot.heldItem?.name ?? "nothing";
+			const cell = useTargetCell(bot, vec3(src.x + 0.5, src.y + dy, src.z + 0.5));
 			await reliableUse(bot, vec3(src.x + 0.5, src.y + dy, src.z + 0.5));
-			if (count(bot, `${fluid}_bucket`) > 0) return true;
+			const got = count(bot, `${fluid}_bucket`) > 0;
+			logEvent("cast", "scoop_use", `${fluid} src ${src.x},${src.y},${src.z} dy=${dy} held=${held} cell=${cell ? `${cell.x},${cell.y},${cell.z}` : "none"} filled=${got} water_bucket=${count(bot, "water_bucket")}`, bot.entity.position);
+			if (got) return true;
 		}
 		return false;
 	};
@@ -736,6 +825,10 @@ const fillBucket = async (
 				if (!isSolid(getBlock(bot, foot)?.name)) continue;
 			}
 			if (!(await reach(feet))) continue;
+			{
+				const bp = bot.entity.position;
+				logEvent("cast", "fill_stance", `${fluid} src ${src.x},${src.y},${src.z} feet ${feet.x},${feet.y},${feet.z} bot ${bp.x.toFixed(2)},${bp.y.toFixed(2)},${bp.z.toFixed(2)} dsrc=${Math.hypot(bp.x - (src.x + 0.5), bp.z - (src.z + 0.5)).toFixed(2)}`, bp);
+			}
 			if (await scoop(src)) {
 				logEvent("cast", "filled", `${fluid}_bucket above`);
 				return true;
@@ -769,6 +862,20 @@ const fillBucket = async (
 /** The cast site prepareCastSite cleared (per bot): the frame must be built
  *  exactly there, or the 294-cell chamber was dug around the wrong volume. */
 const siteAnchor = new WeakMap<Bot, Vec3>();
+// Set when the bot dies during a cast (gym n1-2: died 80s into the cast, respawned at
+// world spawn and castObsidianAt kept "reassessing" from 13,000 blocks away for 23
+// minutes). Every cast loop checks it and ends the step instead. One listener per bot.
+const diedInCast = new WeakMap<Bot, boolean>();
+const deathWatched = new WeakSet<Bot>();
+const armDeathWatch = (bot: Bot): void => {
+	diedInCast.set(bot, false);
+	if (deathWatched.has(bot)) return;
+	deathWatched.add(bot);
+	bot.on("death", () => {
+		if (diedInCast.get(bot) === false) logEvent("cast", "died_mid_cast", "aborting the cast");
+		diedInCast.set(bot, true);
+	});
+};
 
 export const castObsidianAt = async (
 	bot: Bot,
@@ -783,6 +890,7 @@ export const castObsidianAt = async (
 	const above = offset(pos, 0, 1, 0);
 
 	for (let attempt = 0; attempt < 3; attempt++) {
+		if (diedInCast.get(bot)) return false;
 		// 1. Top up both buckets FIRST — fillBucket walks to the source (several
 		//    blocks away), so do it before we position at the cup. DESCEND to the
 		//    ground first: after the previous block the bot is on a high cast pillar
@@ -802,6 +910,7 @@ export const castObsidianAt = async (
 		//    leaves it on through cup-building + pouring (no drift off the pillar).
 		//    Retry + verify — in the cluttered frame the bot can drift, and a
 		//    mispositioned pillar misplaces the whole cup.
+		setPhase(`mold ${pos.x},${pos.y},${pos.z}`);
 		let cupState = "?";
 		let afterLava = "?";
 		// LAVA ALREADY IN THE CUP (a previous pass poured it, then the water aim
@@ -955,6 +1064,7 @@ export const castObsidianAt = async (
 			maxTime: 2500,
 		});
 		const bp = bot.entity.position;
+		setPhase(`lava ${pos.x},${pos.y},${pos.z}`);
 		logEvent(
 			"cast",
 			"pre_pour",
@@ -1028,6 +1138,7 @@ export const castObsidianAt = async (
 			await walkToXZ(bot, pos.x + 0.5, standZ + 0.5, { targetDist: 0.2, maxTime: 1500 });
 		}
 		bot.setControlState("sneak", true);
+		setPhase(`water ${pos.x},${pos.y},${pos.z}`);
 		const wp = bot.entity.position;
 		logEvent(
 			"cast",
@@ -1042,6 +1153,7 @@ export const castObsidianAt = async (
 			continue;
 		}
 		await sleep(300);
+		setPhase(`verify ${pos.x},${pos.y},${pos.z}`);
 		logEvent(
 			"cast",
 			"post_water",
@@ -1056,9 +1168,13 @@ export const castObsidianAt = async (
 		await equip(bot, "bucket");
 		for (let k = 0; k < 4; k++) {
 			if (!(getBlock(bot, above)?.name ?? "").includes("water")) break;
+			const held = bot.heldItem?.name ?? "nothing";
+			const cell = useTargetCell(bot, vec3(above.x + 0.5, above.y + 0.5, above.z + 0.5));
 			await reliableUse(bot, vec3(above.x + 0.5, above.y + 0.5, above.z + 0.5));
+			logEvent("cast", "water_pickup", `k=${k} held=${held} cell=${cell ? `${cell.x},${cell.y},${cell.z}` : "none"} bowl=${getBlock(bot, above)?.name} water_bucket=${count(bot, "water_bucket")} bucket=${count(bot, "bucket")}`, bot.entity.position);
 		}
 		if ((getBlock(bot, above)?.name ?? "").includes("water")) {
+			logEvent("cast", "water_left", `bowl ${above.x},${above.y},${above.z} still ${getBlock(bot, above)?.name} — capping`);
 			await equip(bot, buildBlockName(bot));
 			const obsRef = getBlock(bot, pos);
 			if (obsRef?.name === "obsidian") {
@@ -1455,6 +1571,7 @@ const stripMineForLava = async (
 };
 
 export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
+	setPhase("find_lava");
 	const deadline = Date.now() + 20 * 60_000;
 	// SPOT exposed lava WIDE — surface/cave lava is air-adjacent, so findFluidSource sees it
 	// across loaded chunks. A big radius lets the bot spot surface lava from far, then WALK to
@@ -1684,10 +1801,14 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 	const p0 = bot.entity.position;
 	const dx = Math.sign(p0.x - (lava.x + 0.5)) || 1;
 	const dz = Math.sign(p0.z - (lava.z + 0.5)) || 1;
-	const standSpot =
-		Math.abs(p0.x - lava.x) >= Math.abs(p0.z - lava.z)
-			? vec3(lava.x + dx * 5, lava.y, lava.z)
-			: vec3(lava.x, lava.y, lava.z + dz * 5);
+	// Always stand off along X. The frame spans +x from the anchor with its backing
+	// wall at bz-1 and the bot working from bz+1, so a pool placed along Z ended up
+	// BEHIND the backing wall (gym b4-7: 10 refill walks from z881 blocked by the
+	// frame, cast stuck at 8/10). Along X the pool sits beside the frame's side
+	// column, reachable from the working side.
+	void dz;
+	setPhase("anchor");
+	const standSpot = vec3(lava.x + dx * 5, lava.y, lava.z);
 	await goTo(bot, standSpot, { range: 1, timeout: 20000 }).catch(() => {});
 	// Never anchor a site in water: 713's retry stood in a pond, the anchor was logged
 	// there, and the escape/portal steps ping-ponged at the bank.
@@ -1705,6 +1826,7 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 		`${bx},${by},${bz} lava=${lava.x},${lava.y},${lava.z}`,
 	);
 	siteAnchor.set(bot, vec3(bx, by, bz));
+	setPhase("chamber");
 
 	// 3. Clear a flat chamber (frame box + scaffold) and lay a solid floor.
 	//    Never dig lava or a block touching it — that would flood/kill the bot.
@@ -1812,6 +1934,7 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 	if (floorSkipped > 0) logEvent("cast", "floor_skipped", `${floorSkipped} floor cells out of reach`, bot.entity.position);
 
 	// 4. Top up a lava bucket from the pool (refilled again every cast).
+	setPhase("lava_fill");
 	if (count(bot, "lava_bucket") < 1 && count(bot, "bucket") >= 1)
 		await fillBucket(bot, "lava");
 
@@ -1917,9 +2040,12 @@ export const buildPortalByCasting = async (bot: Bot): Promise<StepResult> => {
 	}
 
 	logEvent("cast", "portal_start", `frame at ${bx},${by},${bz}`);
+	setPhase("portal_start");
+	armDeathWatch(bot);
 	await buildBacking(bot, bx, by, bz);
 	let cast = 0;
 	const castOne = async (pos: Vec3): Promise<StepResult | null> => {
+		if (diedInCast.get(bot)) return { success: false, message: `Died mid-cast at ${cast}/10 — aborting` };
 		if (await castObsidianAt(bot, pos, by)) {
 			cast++;
 			return null;
@@ -1977,6 +2103,7 @@ export const buildPortalByCasting = async (bot: Bot): Promise<StepResult> => {
 	// returned a stale count and falsely failed a complete frame).
 	const present = frame.filter((p) => getBlock(bot, p)?.name === "obsidian").length;
 	logEvent("cast", "frame_check", `${present}/10 obsidian present`);
+	setPhase("light");
 	if (present < 10)
 		return { success: false, message: `Only ${present}/10 obsidian present` };
 

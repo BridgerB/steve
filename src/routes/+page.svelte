@@ -37,11 +37,15 @@
 	// coal) don't count; ties → more done steps, then the earliest bot.
 	const OFF_PATH = new Set(['Craft Stone Sword', 'Mine Coal', 'Craft Iron Pickaxe', 'Gather Food'].map((n) => STEPS.indexOf(n as (typeof STEPS)[number])));
 	const reach = (b: { done: number[] }) => b.done.reduce((m, i) => (OFF_PATH.has(i) ? m : Math.max(m, i)), -1);
+	// The step a bot is CURRENTLY in counts as reached: during race59 the only bot
+	// casting a portal (Build Nether Portal in progress) lost the pick to a bot with
+	// more ticked steps, and the page showed the wrong bot for the whole cast.
+	const rank = (b: { done: number[]; current: number }) => Math.max(reach(b), typeof b.current === "number" ? b.current : -1);
 	const leader = $derived.by(() => {
 		let best = race.bots[0];
 		for (const b of race.bots) {
 			if (!best) { best = b; continue; }
-			const rb = reach(b), rBest = reach(best);
+			const rb = rank(b), rBest = rank(best);
 			if (rb > rBest || (rb === rBest && b.done.length > best.done.length)) best = b;
 		}
 		return best;

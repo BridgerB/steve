@@ -356,10 +356,12 @@ const runRace = async (count: number, timeoutMs: number) => {
 
 	const allProcs: ChildProcess[] = [];
 	let winner: number | null = null;
+	let shuttingDown = false;
 	let raceDb: SteveDb | null = null;
 
 	const viewerBots: Bot[] = [];
 	const killAll = async () => {
+		shuttingDown = true;
 		// Send SIGTERM first so bots disconnect gracefully
 		for (const p of allProcs) p.kill("SIGTERM");
 		for (const v of viewerBots) {
@@ -392,6 +394,8 @@ const runRace = async (count: number, timeoutMs: number) => {
 	const rconClient = await rconConnect({
 		port: RCON_PORT,
 		password: RCON_PASS,
+		// spreadplayers / tp over ungenerated terrain outlast the 5 s default.
+		timeout: 30_000,
 	});
 	const rcon = (cmd: string) => rconClient.command(cmd);
 	process.on("exit", () => {
@@ -413,6 +417,21 @@ const runRace = async (count: number, timeoutMs: number) => {
 	const GOAL = "enter_nether";
 	initLogger(RACE_ID);
 	registerRace(RACE_ID, "race", count, timeoutMs / 1000, GOAL);
+	// Server tick health once a minute into D1 (category "server", event "tick"), so the
+	// funnel report can carry median / P99 tick time: world generation under several
+	// bots is the load that broke the cast's timing in the gym (b12: 104 ms avg).
+	const tickTimer = setInterval(async () => {
+		try {
+			const tq = await rcon("tick query");
+			const num = (re: RegExp) => re.exec(tq)?.[1] ?? "?";
+			logEvent(
+				"server",
+				"tick",
+				`avg=${num(/Average time per tick: ([\d.]+)ms/)} p50=${num(/P50: ([\d.]+)ms/)} p95=${num(/P95: ([\d.]+)ms/)} p99=${num(/P99: ([\d.]+)ms/)}`,
+			);
+		} catch {}
+	}, 60_000);
+	tickTimer.unref();
 
 	const MILESTONES = [
 		{ name: "wood", query: "item_name LIKE '%_log'" },
@@ -551,45 +570,63 @@ const runRace = async (count: number, timeoutMs: number) => {
 	}
 
 	// Spawn all bot processes first, then teleport them
-	const botProcs: { proc: ChildProcess; username: string; exited: boolean }[] =
+	const botProcs: { proc: ChildProcess; username: string; exited: boolean; respawns: number }[] =
 		[];
+	const raceT0 = Date.now();
 	for (let i = 0; i < count; i++) {
 		const username = names[i]!;
 		await sleep(2000);
 		// Child = one bot. Must run the real entry (src/lib/steve/main.ts, not the old
 		// src/main.ts) WITH the typecraft loader so the bare `typecraft` import resolves,
 		// and with STEVE_CLI=1 so the CLI dispatch actually runs (STEVE_BOT_MODE branch).
-		const steveProc = spawn(
-			process.execPath,
-			[
-				"--import",
-				join(ROOT, "typecraft-resolve.mjs"),
-				join(ROOT, "src/lib/steve/main.ts"),
-			],
-			{
-			cwd: ROOT,
-			env: {
-				...process.env,
-				STEVE_CLI: "1",
-				MC_PORT: String(SERVER_PORT),
-				MC_USERNAME: username,
-				STEVE_RACE_ID: RACE_ID,
-				STEVE_BOT_MODE: "1",
-				STEVE_SPAWN_X: String(spawns[i]?.x ?? 0),
-				STEVE_SPAWN_Z: String(spawns[i]?.z ?? 0),
-				STEVE_TIMEOUT: String(timeoutMs / 1000),
-				STEVE_VIEWER_PORT: i < NUM_VIEWERS ? String(3001 + i) : "",
-			},
-			// stderr → data/bot-logs/<name>.log: a crashed child was invisible (race36
-			// 703 "lost connection" at 12:14 and its process just vanished).
-			stdio: ["ignore", "ignore", errFd(username)],
-		});
+		const spawnChild = (): ChildProcess =>
+			spawn(
+				process.execPath,
+				[
+					"--import",
+					join(ROOT, "typecraft-resolve.mjs"),
+					join(ROOT, "src/lib/steve/main.ts"),
+				],
+				{
+					cwd: ROOT,
+					env: {
+						...process.env,
+						STEVE_CLI: "1",
+						MC_PORT: String(SERVER_PORT),
+						MC_USERNAME: username,
+						STEVE_RACE_ID: RACE_ID,
+						STEVE_BOT_MODE: "1",
+						STEVE_SPAWN_X: String(spawns[i]?.x ?? 0),
+						STEVE_SPAWN_Z: String(spawns[i]?.z ?? 0),
+						STEVE_TIMEOUT: String(timeoutMs / 1000),
+						STEVE_VIEWER_PORT: i < NUM_VIEWERS ? String(3001 + i) : "",
+					},
+					// stderr → data/bot-logs/<name>.log: a crashed child was invisible (race36
+					// 703 "lost connection" at 12:14 and its process just vanished).
+					stdio: ["ignore", "ignore", errFd(username)],
+				},
+			);
+		const steveProc = spawnChild();
 		allProcs.push(steveProc);
-		const entry = { proc: steveProc, username, exited: false };
-		steveProc.on("exit", (code, signal) => {
+		const entry = { proc: steveProc, username, exited: false, respawns: 0 };
+		// A child that dies mid-race (race59: two unhandled rejections) is respawned
+		// up to 3 times while the race is live. The player rejoins where it logged
+		// out with its inventory, so no teleport is needed; the run loop re-derives
+		// its step from the inventory.
+		const onExit = (code: number | null, signal: NodeJS.Signals | null): void => {
 			entry.exited = true;
 			console.log(`  ${username} process exited code=${code} signal=${signal} — see data/bot-logs/${username}.log`);
-		});
+			const live = !shuttingDown && winner === null && Date.now() - raceT0 < timeoutMs - 60000;
+			if (!live || entry.respawns >= 3) return;
+			entry.respawns++;
+			const p = spawnChild();
+			allProcs.push(p);
+			entry.proc = p;
+			entry.exited = false;
+			p.on("exit", onExit);
+			console.log(`  ${username} respawned (#${entry.respawns})`);
+		};
+		steveProc.on("exit", onExit);
 		botProcs.push(entry);
 	}
 
@@ -663,10 +700,6 @@ const runRace = async (count: number, timeoutMs: number) => {
 	const runBot = async (idx: number): Promise<InstanceResult> => {
 		const username = names[idx]!;
 		const entry = botProcs[idx]!;
-		const steveProc = entry.proc;
-		steveProc.on("exit", () => {
-			entry.exited = true;
-		});
 
 		const start = Date.now();
 
@@ -689,7 +722,7 @@ const runRace = async (count: number, timeoutMs: number) => {
 		}
 
 		const elapsed = Math.round((Date.now() - start) / 1000);
-		if (!entry.exited) steveProc.kill("SIGKILL");
+		if (!entry.exited) entry.proc.kill("SIGKILL");
 		if (winner !== null && winner !== idx) {
 			return {
 				idx,

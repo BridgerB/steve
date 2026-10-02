@@ -369,6 +369,35 @@ export const fillWaterBucket = async (bot: Bot): Promise<StepResult> => {
 		if (distance(bot.entity.position, standC) > 0.8) {
 			await goTo(bot, standC, { range: 0.7, timeout: 15000 }).catch(() => {});
 		}
+		// gym w2/w3: 3 of 20 runs ended 'Couldn't reach water (12-15 away)' after ONE
+		// walk to ONE shore stand (a cliff/ledge the pathfinder could not route). The
+		// same pool usually has other shore cells: re-pick the stand nearest to where
+		// the failed walk ended, up to 2 more times, before giving up on the pool.
+		const triedStands = new Set<string>([waterKey(stand)]);
+		for (let retry = 1; retry <= 2; retry++) {
+			const wc0 = vec3(waterPos.x + 0.5, waterPos.y + 0.5, waterPos.z + 0.5);
+			if (distance(bot.entity.position, wc0) <= 6) break;
+			let alt: { p: Vec3; s: Vec3; d: number } | null = null;
+			for (let dx = -7; dx <= 7; dx++) {
+				for (let dz = -7; dz <= 7; dz++) {
+					for (let dy = -1; dy <= 1; dy++) {
+						const p = vec3(waterPos.x + dx, waterPos.y + dy, waterPos.z + dz);
+						if (!(bot.blockAt(p)?.name ?? "").includes("water")) continue;
+						if (!isSource(p)) continue;
+						const sp = shoreStand(bot, p);
+						if (!sp || triedStands.has(waterKey(sp))) continue;
+						const d = distance(bot.entity.position, vec3(sp.x + 0.5, sp.y, sp.z + 0.5));
+						if (!alt || d < alt.d) alt = { p, s: sp, d };
+					}
+				}
+			}
+			if (!alt) break;
+			triedStands.add(waterKey(alt.s));
+			logEvent("bucket", "shore_retry", `${retry}: stand ${alt.s.x},${alt.s.y},${alt.s.z} for water ${waterKey(alt.p)} d=${alt.d.toFixed(1)}`);
+			waterPos = alt.p;
+			lastFound.set(bot, waterPos);
+			await goTo(bot, vec3(alt.s.x + 0.5, alt.s.y, alt.s.z + 0.5), { range: 0.7, timeout: 15000 }).catch(() => {});
+		}
 	} else {
 		logEvent("bucket", "shore_stand", "none — approaching above the water");
 		const aboveWater = vec3(waterPos.x + 0.5, waterPos.y + 1, waterPos.z + 0.5);

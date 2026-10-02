@@ -26,6 +26,7 @@ import { smeltItems } from "../tasks/smelt/main.ts";
 import { buildPortalByCasting, prepareCastSite } from "../tasks/portal/cast.ts";
 import { enterPortal } from "../tasks/portal/enter.ts";
 import { countInventoryItems } from "../lib/test-utils.ts";
+import { setPhase } from "../lib/logger.ts";
 import type { StepResult } from "../types.ts";
 
 export interface GymStep {
@@ -69,9 +70,9 @@ export const GYM_STEPS: GymStep[] = [
 	{ slug: "smelt-iron", label: "Smelt Iron", order: 12, prereq: ["raw_iron 8", "coal 8", "furnace 1"], run: (b) => smeltItems(b, "raw_iron", 8), pass: (b) => has(b, "iron_ingot", 3), timeoutMs: 120000 },
 	{ slug: "craft-iron-pickaxe", label: "Craft Iron Pickaxe", order: 13, prereq: ["iron_ingot 3", "stick 2", "crafting_table 1"], run: (b) => craftIronPickaxe(b), pass: (b) => has(b, "iron_pickaxe", 1), timeoutMs: 40000 },
 	{ slug: "craft-buckets", label: "Craft Buckets", order: 14, prereq: ["iron_ingot 6", "crafting_table 1"], run: (b) => craftBucket(b), pass: (b) => has(b, "bucket", 1), timeoutMs: 40000 },
-	{ slug: "fill-water", label: "Fill Water Buckets", order: 15, prereq: ["bucket 2"], run: (b) => fillWaterBucket(b), pass: (b) => has(b, "water_bucket", 1), timeoutMs: 60000 },
+	{ slug: "fill-water", label: "Fill Water Buckets", order: 15, prereq: ["bucket 2"], run: (b) => fillWaterBucket(b), pass: (b) => has(b, "water_bucket", 1), timeoutMs: 360000 },
 	{ slug: "gather-food", label: "Gather Food", order: 16, prereq: ["stone_sword 1"], run: (b) => gatherFood(b, 3), pass: (b) => countInventoryItems(b, "beef") + countInventoryItems(b, "mutton") + countInventoryItems(b, "chicken") + countInventoryItems(b, "porkchop") >= 1, timeoutMs: 90000 },
-	{ slug: "flint-and-steel", label: "Get Flint and Steel", order: 17, prereq: ["iron_ingot 1", "crafting_table 1"], run: (b) => craftFlintAndSteel(b), pass: (b) => has(b, "flint_and_steel", 1), timeoutMs: 120000 },
+	{ slug: "flint-and-steel", label: "Get Flint and Steel", order: 17, prereq: ["iron_ingot 1", "crafting_table 1", "stone_pickaxe 1", "cobblestone 32"], run: (b) => craftFlintAndSteel(b), pass: (b) => has(b, "flint_and_steel", 1), timeoutMs: 120000 },
 	{
 		slug: "build-nether-portal",
 		label: "Build Nether Portal",
@@ -113,6 +114,18 @@ export const GYM_STEPS: GymStep[] = [
 			await rcon(
 				`forceload add ${bx - 8} ${bz - 10} ${lx + 8} ${lz + 10}`,
 			).catch(() => {});
+			// GYM_TERRAIN=natural: keep the real terrain (no stone floor, no cleared air) so
+			// the chamber clear, reach, pick wear and anchor code run against what a race
+			// meets. Only the lava lake is scaffolded, sunk to the landing's surface height.
+			if (process.env.GYM_TERRAIN === "natural") {
+				await rcon(
+					`fill ${lx - 4} ${by - 2} ${lz - 4} ${lx + 4} ${by + 3} ${lz + 4} air`,
+				).catch(() => {});
+				await rcon(
+					`fill ${lx - 4} ${by - 2} ${lz - 4} ${lx + 4} ${by - 1} ${lz + 4} lava`,
+				).catch(() => {});
+				return;
+			}
 			// Flat clean arena: stone floor at by-1, cleared air above, spanning bot->pool.
 			await rcon(
 				`fill ${bx - 4} ${by - 3} ${bz - 6} ${lx + 5} ${by - 1} ${lz + 6} stone`,
@@ -144,6 +157,39 @@ export const GYM_STEPS: GymStep[] = [
 		timeoutMs: 1920000,
 	},
 	{
+		// THE natural-terrain gym (hours 48+ main instrument). Random landing, the race
+		// kit, NO scaffold: the harness places and clears nothing. The bot runs the
+		// race's own portal step (find lava → anchor → prep → cast → light) under the
+		// race's 900 s step budget, then the race's enter step. Pass = in the Nether.
+		slug: "portal-natural",
+		label: "Portal on natural terrain (find lava → cast → enter)",
+		order: 20,
+		prereq: [
+			"stone_pickaxe 2",
+			"bucket 1",
+			"water_bucket 1",
+			"flint_and_steel 1",
+			"cobblestone 64",
+			"oak_planks 16",
+		],
+		run: async (b) => {
+			const cast = (async (): Promise<StepResult> => {
+				const prep = await prepareCastSite(b);
+				if (!prep.success) return prep;
+				return buildPortalByCasting(b);
+			})();
+			const budget = new Promise<StepResult>((r) =>
+				setTimeout(() => r({ success: false, message: "Build Nether Portal timed out (900s)" }), 900_000),
+			);
+			const res = await Promise.race([cast, budget]);
+			if (!res.success) return res;
+			setPhase("enter");
+			return enterPortal(b);
+		},
+		pass: (b) => String(b.game?.dimension ?? "").includes("nether"),
+		timeoutMs: 1_000_000,
+	},
+	{
 		slug: "enter-nether",
 		label: "Enter Nether",
 		order: 19,
@@ -155,6 +201,10 @@ export const GYM_STEPS: GymStep[] = [
 			const { x, y, z } = at;
 			const px = x;
 			const pz = z + 4;
+			// run.ts forceloads only the spread-centre chunk; a frame 4 blocks out often
+			// sits in the next chunk and the fills silently fail (gym e1: 3/10 "No portal
+			// found nearby"). Keep the whole scaffold resident.
+			await rcon(`forceload add ${x - 8} ${z - 8} ${px + 8} ${pz + 8}`).catch(() => {});
 			// Stone floor along the whole approach + frame, then clear a corridor+frame
 			// air volume, build the 4x5 obsidian frame, and IGNITE with fire — the game
 			// forms a valid portal from fire-in-a-frame (fill-placing nether_portal blocks
