@@ -1961,7 +1961,19 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 	// column, reachable from the working side.
 	void dz;
 	setPhase("anchor");
-	const standSpot = vec3(lava.x + dx * 5, lava.y, lava.z);
+	// Put the whole pool IN FRONT of the frame (the working side, +z). The frame plane is
+	// z = anchor z with its backing wall at z-1; natural gym n12-1 anchored level with
+	// the chosen source, the 49-source pool extended BEHIND the backing wall (stances
+	// z 3518-3523 vs frame z 3527), and every refill walk had to cross the wall —
+	// 24 fill_reach, 1 obsidian. Take the anchor z from the pool's NEAR edge: 3 blocks
+	// in front of its lowest-z lava cell (within 6 of the source, same level ±1).
+	let minZ = lava.z;
+	for (const q of bot.findBlocks({ matching: (n: string) => n === "lava", maxDistance: 8, count: 120, exposed: false } as never) as { x: number; y: number; z: number }[]) {
+		if (Math.abs(q.y - lava.y) > 1 || Math.hypot(q.x - lava.x, q.z - lava.z) > 6) continue;
+		if (q.z < minZ) minZ = q.z;
+	}
+	const standSpot = vec3(lava.x + dx * 5, lava.y, minZ - 3);
+	if (minZ !== lava.z) logEvent("cast", "site_front", `pool near edge z=${minZ} (source z=${lava.z}) → stand-off z=${minZ - 3}`);
 	await goTo(bot, standSpot, { range: 1, timeout: 20000 }).catch(() => {});
 	// Never anchor a site in water: 713's retry stood in a pond, the anchor was logged
 	// there, and the escape/portal steps ping-ponged at the bank.
