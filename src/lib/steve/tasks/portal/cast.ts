@@ -797,47 +797,87 @@ const fillBucket = async (
 			logEvent("cast", "fill_reach", `refused feet ${feet.x},${feet.y},${feet.z} gap=${gap.toFixed(1)} (>12) d0=${d0.toFixed(1)}`, p);
 			return false;
 		}
+		// n12-1: the legs stopped after one leg against SOLID rock (24 refill walks, 1
+		// obsidian) because the pool lay behind the frame's backing wall. Now: (1) when the
+		// bot and the stance are on opposite sides of the frame plane, detour round the
+		// nearer frame end; (2) dig solid rock on a leg (feet + head) unless it is part of
+		// the frame box or touches lava — the template only forbids digging the frame,
+		// the backing, the molds and anything next to lava.
+		const anc = siteAnchor.get(bot);
+		const inFrameBox = (x: number, y: number, z: number): boolean =>
+			!!anc && x >= anc.x - 1 && x <= anc.x + 4 && z >= anc.z - 1 && z <= anc.z + 1 && y >= anc.y - 1 && y <= anc.y + 6;
 		let capped = 0;
+		let dug = 0;
 		let legs = 0;
 		let blocked = false;
-		for (let leg = 0; leg < 6; leg++) {
-			const q0 = bot.entity.position;
-			const rem = Math.hypot(c.x - q0.x, c.z - q0.z);
-			if (rem <= 0.6) break;
-			const len = Math.min(3, rem);
-			const tx = q0.x + ((c.x - q0.x) / rem) * len;
-			const tz = q0.z + ((c.z - q0.z) / rem) * len;
-			const n = Math.max(1, Math.ceil(len));
-			const legLava = (): Vec3[] => {
-				const out: Vec3[] = [];
-				for (let i = 1; i <= n; i++) {
-					const lx = Math.floor(q0.x + ((tx - q0.x) * i) / n);
-					const lz = Math.floor(q0.z + ((tz - q0.z) * i) / n);
-					{
+		const walkLegs = async (gx: number, gz: number): Promise<void> => {
+			for (let leg = 0; leg < 6; leg++) {
+				const q0 = bot.entity.position;
+				const rem = Math.hypot(gx - q0.x, gz - q0.z);
+				if (rem <= 0.6) return;
+				const len = Math.min(3, rem);
+				const tx = q0.x + ((gx - q0.x) / rem) * len;
+				const tz = q0.z + ((gz - q0.z) / rem) * len;
+				const n = Math.max(1, Math.ceil(len));
+				const legCells = (): { fill: Vec3[]; dig: Vec3[]; wall: boolean } => {
+					const fill: Vec3[] = [];
+					const dig: Vec3[] = [];
+					let wall = false;
+					for (let i = 1; i <= n; i++) {
+						const lx = Math.floor(q0.x + ((tx - q0.x) * i) / n);
+						const lz = Math.floor(q0.z + ((tz - q0.z) * i) / n);
 						const fl = getBlock(bot, vec3(lx, feet.y - 1, lz))?.name;
-						// floor must be solid (lava OR an open drop needs a block); feet cell must not be lava
-						if (isLava(fl) || !isSolid(fl)) out.push(vec3(lx, feet.y - 1, lz));
-						if (isLava(getBlock(bot, vec3(lx, feet.y, lz))?.name)) out.push(vec3(lx, feet.y, lz));
+						if (isLava(fl) || !isSolid(fl)) fill.push(vec3(lx, feet.y - 1, lz));
+						if (isLava(getBlock(bot, vec3(lx, feet.y, lz))?.name)) fill.push(vec3(lx, feet.y, lz));
+						for (const ly of [feet.y, feet.y + 1]) {
+							const cell = vec3(lx, ly, lz);
+							const nm = getBlock(bot, cell)?.name;
+							if (!isSolid(nm) || isLava(nm)) continue;
+							if (inFrameBox(lx, ly, lz) || nm === "obsidian" || touchesLava(bot, cell)) wall = true;
+							else dig.push(cell);
+						}
 					}
+					return { fill, dig, wall };
+				};
+				const eyeP = offset(q0, 0, 1.62, 0);
+				for (const cell of legCells().fill) {
+					if (distance(eyeP, offset(cell, 0.5, 0.5, 0.5)) > 4.5) continue;
+					if (await placeCobble(bot, cell)) capped++;
 				}
-				return out;
-			};
-			const eyeP = offset(q0, 0, 1.62, 0);
-			for (const cell of legLava()) {
-				if (distance(eyeP, offset(cell, 0.5, 0.5, 0.5)) > 4.5) continue;
-				if (await placeCobble(bot, cell)) capped++;
+				for (const cell of legCells().dig) {
+					if (distance(eyeP, offset(cell, 0.5, 0.5, 0.5)) > 4.5) continue;
+					await digAt(bot, cell);
+					dug++;
+				}
+				const after = legCells();
+				if (after.fill.length || after.dig.length || after.wall) {
+					blocked = true;
+					return;
+				}
+				await walkToXZ(bot, tx, tz, { targetDist: 0.4, maxTime: 2000 });
+				legs++;
+				if (distance(bot.entity.position, q0) < 0.5) {
+					blocked = true;
+					return;
+				}
 			}
-			if (legLava().length) {
-				blocked = true;
-				break;
-			}
-			await walkToXZ(bot, tx, tz, { targetDist: 0.4, maxTime: 2000 });
-			legs++;
-			if (distance(bot.entity.position, q0) < 0.5) break;
+		};
+		const side = (z: number): string => (!anc ? "?" : z >= anc.z + 1 ? "front" : z <= anc.z - 2 ? "back" : "plane");
+		const waypoints: [number, number][] = [];
+		const s0 = side(Math.floor(bot.entity.position.z));
+		const s1 = side(feet.z);
+		if (anc && s0 !== s1 && s0 !== "plane" && s1 !== "plane") {
+			const endX = Math.abs(feet.x - (anc.x - 2)) <= Math.abs(feet.x - (anc.x + 5)) ? anc.x - 2 : anc.x + 5;
+			waypoints.push([endX + 0.5, bot.entity.position.z], [endX + 0.5, c.z]);
 		}
-		if (capped || blocked) logEvent("cast", "fill_bridge", `legs ${legs} capped ${capped} ${blocked ? "BLOCKED by lava out of reach" : "clear"} → ${feet.x},${feet.y},${feet.z}`, bot.entity.position);
+		waypoints.push([c.x, c.z]);
+		for (const [wx, wz] of waypoints) {
+			await walkLegs(wx, wz);
+			if (blocked) break;
+		}
+		if (capped || dug || blocked || waypoints.length > 1) logEvent("cast", "fill_bridge", `legs ${legs} capped ${capped} dug ${dug} detour=${waypoints.length > 1} ${blocked ? "BLOCKED" : "clear"} → ${feet.x},${feet.y},${feet.z}`, bot.entity.position);
 		if (blocked && Math.hypot(bot.entity.position.x - c.x, bot.entity.position.z - c.z) > 1.8) {
-			logEvent("cast", "fill_reach", `refused feet ${feet.x},${feet.y},${feet.z} gap=${gap.toFixed(1)} lavaOnLine=true d0=${d0.toFixed(1)}`, p);
+			logEvent("cast", "fill_reach", `refused feet ${feet.x},${feet.y},${feet.z} gap=${gap.toFixed(1)} blocked d0=${d0.toFixed(1)}`, p);
 			return false;
 		}
 		void lavaOnLine;
