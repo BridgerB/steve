@@ -1598,6 +1598,32 @@ const stripMineForLava = async (
 };
 
 export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
+	// Reuse the site a previous dispatch started. Natural gym: once a block failed,
+	// every re-dispatch found the pool again, picked a NEW anchor a block off and
+	// started a fresh frame, throwing away the obsidian already cast (n3-1: 8
+	// dispatches, n3-3: 16, never past 1 block). If the bot is still near its last
+	// anchor and that frame has obsidian, go back to it, top up lava, and carry on;
+	// castObsidianAt skips cells that are already obsidian.
+	{
+		const prev = siteAnchor.get(bot);
+		if (prev && distance(bot.entity.position, offset(prev, 0.5, 0, 0.5)) <= 16) {
+			let obs = 0;
+			for (let x = 0; x <= 3; x++)
+				for (let y = 0; y <= 4; y++)
+					if (getBlock(bot, vec3(prev.x + x, prev.y + y, prev.z))?.name === "obsidian") obs++;
+			if (obs > 0) {
+				logEvent("cast", "site_reuse", `${prev.x},${prev.y},${prev.z} has ${obs} obsidian — resuming the same frame`);
+				setPhase("lava_fill");
+				await goTo(bot, prev, { range: 1, timeout: 20000 }).catch(() => {});
+				if (count(bot, "lava_bucket") < 1 && count(bot, "bucket") >= 1) await fillBucket(bot, "lava");
+				if (count(bot, "lava_bucket") >= 1) {
+					logEvent("cast", "site_ready", `${prev.x},${prev.y},${prev.z} (reused)`);
+					return { success: true, message: "Resumed the cast site" };
+				}
+				logEvent("cast", "site_reuse_no_lava", `${prev.x},${prev.y},${prev.z}`);
+			}
+		}
+	}
 	setPhase("find_lava");
 	const deadline = Date.now() + 20 * 60_000;
 	// SPOT exposed lava WIDE — surface/cave lava is air-adjacent, so findFluidSource sees it
