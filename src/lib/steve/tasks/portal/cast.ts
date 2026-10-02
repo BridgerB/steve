@@ -810,6 +810,7 @@ const fillBucket = async (
 		let dug = 0;
 		let legs = 0;
 		let blocked = false;
+		let why = "";
 		const walkLegs = async (gx: number, gz: number): Promise<void> => {
 			for (let leg = 0; leg < 6; leg++) {
 				const q0 = bot.entity.position;
@@ -873,6 +874,8 @@ const fillBucket = async (
 				}
 				const after = legCells();
 				if (after.fill.length || after.dig.length || after.wall) {
+					const first = after.fill[0] ?? after.dig[0];
+					why = `fill=${after.fill.length} dig=${after.dig.length} wall=${after.wall} first=${first ? `${first.x},${first.y},${first.z}:${getBlock(bot, first)?.name}` : "-"} botY=${Math.floor(bot.entity.position.y)} stanceY=${feet.y}`;
 					blocked = true;
 					return;
 				}
@@ -881,6 +884,7 @@ const fillBucket = async (
 				bot.setControlState("jump", false);
 				legs++;
 				if (distance(bot.entity.position, q0) < 0.5) {
+					why = `did not move botY=${Math.floor(bot.entity.position.y)} stanceY=${feet.y}`;
 					blocked = true;
 					return;
 				}
@@ -899,7 +903,7 @@ const fillBucket = async (
 			await walkLegs(wx, wz);
 			if (blocked) break;
 		}
-		if (capped || dug || blocked || waypoints.length > 1) logEvent("cast", "fill_bridge", `legs ${legs} capped ${capped} dug ${dug} detour=${waypoints.length > 1} ${blocked ? "BLOCKED" : "clear"} → ${feet.x},${feet.y},${feet.z}`, bot.entity.position);
+		if (capped || dug || blocked || waypoints.length > 1) logEvent("cast", "fill_bridge", `legs ${legs} capped ${capped} dug ${dug} detour=${waypoints.length > 1} ${blocked ? `BLOCKED ${why}` : "clear"} → ${feet.x},${feet.y},${feet.z}`, bot.entity.position);
 		if (blocked && Math.hypot(bot.entity.position.x - c.x, bot.entity.position.z - c.z) > 1.8) {
 			logEvent("cast", "fill_reach", `refused feet ${feet.x},${feet.y},${feet.z} gap=${gap.toFixed(1)} blocked d0=${d0.toFixed(1)}`, p);
 			return false;
