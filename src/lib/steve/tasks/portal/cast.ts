@@ -1271,8 +1271,20 @@ const buildBacking = async (
 	by: number,
 	bz: number,
 ): Promise<void> => {
+	let skipped = 0;
 	for (let dx = 0; dx <= 3; dx++) {
 		const colX = bx + dx;
+		// Natural gym (n9-2/n9-3): the backing phase took 340-450 s vs 70 s on the arena —
+		// the builder walks to z=bz-2, which on natural ground is solid rock behind the
+		// wall, then pillars all 5 cells. A column whose 5 backing cells are already solid
+		// (natural rock) needs nothing: skip it. The arena backing row is air, so the
+		// arena never skips.
+		let solidN = 0;
+		for (let dy = 0; dy <= 4; dy++) if (isSolid(getBlock(bot, vec3(colX, by + dy, bz - 1))?.name)) solidN++;
+		if (solidN === 5) {
+			skipped++;
+			continue;
+		}
 		bot.setControlState("sneak", false); // navigation phase
 		await descendToY(bot, by);
 		await goTo(bot, vec3(colX, by, bz - 2), {
@@ -1289,6 +1301,7 @@ const buildBacking = async (
 			await placeCobble(bot, vec3(colX, h, bz - 1));
 		}
 	}
+	if (skipped) logEvent("cast", "backing_skip", `${skipped} of 4 backing columns already solid`);
 	bot.setControlState("sneak", false);
 	await descendToY(bot, by);
 };
