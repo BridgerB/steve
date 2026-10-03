@@ -152,6 +152,24 @@ export const runGymStep = async (
 		}
 	}
 
+	// Harness respawn: the server ignores the landing spawnpoint when that cell is later
+	// obstructed (base2-1 respawned at world spawn 6000 blocks away, into the spawn area
+	// earlier runs left full of frames and spilled lava). A respawn more than 200 from the
+	// landing is moved back onto the landing's heightmap — what a fresh race bot near its
+	// own start would get. Counted in extra.harness_respawns.
+	let harnessRespawns = 0;
+	const onRespawn = () => {
+		setTimeout(() => {
+			const p = bot.entity?.position;
+			if (opts.noTeleport || !p || Math.hypot(p.x - landing[0], p.z - landing[1]) <= 200) return;
+			harnessRespawns++;
+			rcon(`execute positioned ${landing[0]} 0 ${landing[1]} positioned over motion_blocking_no_leaves run tp ${name} ~0.5 ~ ~0.5`)
+				.then((r) => log(`[gym:${step.slug}] harness respawn → landing ${landing[0]},${landing[1]}: ${r}`))
+				.catch(() => {});
+		}, 1500);
+	};
+	(bot as unknown as { on: (e: string, f: () => void) => void }).on("respawn", onRespawn);
+
 	const t0 = Date.now();
 	let message = "";
 	let extra: Record<string, unknown> | undefined;
@@ -162,6 +180,7 @@ export const runGymStep = async (
 		]);
 		message = (res as { message?: string })?.message ?? "";
 		extra = (res as { extra?: Record<string, unknown> })?.extra;
+		if (harnessRespawns) extra = { ...(extra ?? {}), harness_respawns: harnessRespawns };
 	} catch (e) {
 		message = e instanceof Error ? e.message : String(e);
 	}
