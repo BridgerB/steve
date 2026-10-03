@@ -2005,7 +2005,7 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 				descendWet.set(bot, wet + 1);
 				return { success: false, message: "in water — yielding to escape_water" };
 			}
-			const r = await digDownVertical(bot, lava.y + 1, Math.min(deadline, Date.now() + 300000));
+			const r = await digDownVertical(bot, lava.y + 1, Math.min(deadline, Date.now() + 300000), undefined, 30000);
 			descendWet.set(bot, 0);
 			const dp = bot.entity.position;
 			logEvent(

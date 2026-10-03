@@ -1036,16 +1036,22 @@ export const digDownVertical = async (
 	targetY: number,
 	deadline: number,
 	harvest?: { isTarget: (name: string) => boolean; dropItem: string },
+	stallMs?: number,
 ): Promise<{ y: number; stopped: string | null }> => {
 	await ensurePickaxe(bot);
 	let sideTries = 0;
 	let sideSteps = 0;
 	let lastFloor = floorY(bot);
+	// Optional stall guard (used by the portal cast's lava descent only): natural gym
+	// n21-1 sat at one y for the whole 300 s budget, twice, with no progress.
+	let lastProgress = Date.now();
 	while (floorY(bot) > targetY && Date.now() < deadline) {
 		if (floorY(bot) < lastFloor) {
 			lastFloor = floorY(bot);
 			sideSteps = 0; // descended — the sidestep budget resets
+			lastProgress = Date.now();
 		}
+		if (stallMs && Date.now() - lastProgress > stallMs) return { y: floorY(bot), stopped: `stalled ${Math.round(stallMs / 1000)}s` };
 		if ((bot.health ?? 20) < 8) return { y: floorY(bot), stopped: "low health" };
 		if (bot.entity?.isInWater) return { y: floorY(bot), stopped: "in water" };
 		if (!STONE_PLUS_PICKS.has(bot.heldItem?.name ?? "")) await ensurePickaxe(bot);
