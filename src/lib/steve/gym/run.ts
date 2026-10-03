@@ -97,6 +97,11 @@ export const runGymStep = async (
 			if (ly >= 55 && !wet && !lava) {
 				landed = true;
 				landing = [tx, tz];
+				// Respawn at this landing, not world spawn: p0b's deaths respawned at spawn,
+				// where earlier gym runs left frames and spilled lava (3 lava deaths at the
+				// same cell 31,40,61). A fresh-terrain respawn is what a race bot gets.
+				const lp = (bot as { entity?: { position?: { x: number; y: number; z: number } } }).entity?.position;
+				if (lp) await rcon(`spawnpoint ${name} ${Math.floor(lp.x)} ${Math.floor(lp.y)} ${Math.floor(lp.z)}`).catch(() => {});
 				break;
 			}
 			log(`[gym:${step.slug}] bad landing (y=${Math.floor(ly)}${wet ? " water" : ""}${lava ? " lava" : ""}) — next cell`);
