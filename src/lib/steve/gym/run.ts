@@ -58,6 +58,7 @@ export const runGymStep = async (
 	let seed: string | undefined;
 	try {
 		seed = /\[(-?\d+)\]/.exec(await rcon("seed"))?.[1];
+		if (seed) process.env.GYM_SEED = seed;
 	} catch {}
 	const forced: [number, number][] = [];
 	let landing: [number, number] = [cx, cz];

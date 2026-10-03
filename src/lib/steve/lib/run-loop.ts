@@ -17,7 +17,8 @@
 
 import type { Bot } from "typecraft";
 import { beginTaskEpoch, exploreRandom, rememberResource, taskScope } from "./bot-utils.ts";
-import { logEvent } from "./logger.ts";
+import { getRaceId, logEvent } from "./logger.ts";
+import { type AttemptOutcome, buildId, senseContext, writeAttempt } from "./attempts.ts";
 import { type Channel, CLOSED } from "./channel.ts";
 import { getPhase, isDragonDead } from "../state.ts";
 import { getNextStep, getProgress, steps } from "../steps.ts";
@@ -50,6 +51,10 @@ export type RunState = Readonly<{
 	// Consecutive ticks the RUNNING step's own isComplete() has been true (see the
 	// self-cancel in the tick reducer).
 	completeTicks: number;
+	// Identical-failure streak (cycle 4 Part 6): the 4th identical failure of a step
+	// escalates (re-site + relocate) instead of re-dispatching the same thing again.
+	lastFail: string;
+	sameFails: number;
 }>;
 
 export const initialRunState: RunState = {
@@ -62,6 +67,8 @@ export const initialRunState: RunState = {
 	stormRelocate: false,
 	failureBackoffTicks: 0,
 	completeTicks: 0,
+	lastFail: "",
+	sameFails: 0,
 };
 
 // Steps that may be CANCELLED once their own isComplete() holds: pure gather/mine
@@ -94,6 +101,7 @@ export type Command =
 	| { type: "runStep"; stepId: string; state: GameState; epoch: number; timeoutMs: number }
 	| { type: "escapeWater" }
 	| { type: "abortExplore" }
+	| { type: "escalate"; stepId: string | null }
 	| { type: "closeWindow" }
 	| { type: "publishStatus"; status: SteveStatus }
 	| { type: "rememberSurfaceWater"; pos: Vec3 }
@@ -121,7 +129,7 @@ const DEADLOCK_IDS = [
 // cancelled (taskScope), so a longer budget is safe.
 const stepTimeoutMs = (stepId: string): number =>
 	stepId === "build_nether_portal"
-		? 900000 // the 294-cell site chamber alone is ~6 min of stone-pick digging (race54)
+		? 905000 // castAttempt's own 900 s budget cuts first and reports why (cycle 4 Part 6)
 		: stepId === "mine_iron" || stepId === "mine_coal"
 			? 300000
 			: stepId === "gather_wood"
@@ -172,12 +180,14 @@ export const reduce = (
 		case "death":
 			return {
 				state: {
+					...rs,
 					epoch: rs.epoch + 1,
 					status: "idle",
 					currentStepId: null,
 					completed: new Set(),
 					consecutiveFailures: 0,
 					failureBackoffTicks: 0,
+					completeTicks: 0,
 				},
 				commands: [
 					{ type: "console", msg: "Died! Respawning..." },
@@ -233,7 +243,7 @@ export const reduce = (
 						]
 					: [];
 				return {
-					state: { ...rs, status: "idle", consecutiveFailures: 0, failureBackoffTicks: relocate ? 200 : 0, completed, stormRelocate: relocate ? false : rs.stormRelocate },
+					state: { ...rs, status: "idle", consecutiveFailures: 0, failureBackoffTicks: relocate ? 200 : 0, completed, stormRelocate: relocate ? false : rs.stormRelocate, lastFail: "", sameFails: 0 },
 					commands: [
 						{ type: "closeWindow" },
 						{ type: "console", msg: `✓ ${ev.result.message}` },
@@ -248,15 +258,33 @@ export const reduce = (
 				{ type: "console", msg: `✗ ${ev.result.message} (fail #${failures})` },
 				{ type: "event", category: "step", event: "fail", detail: ev.result.message },
 			];
+			// Same step, same reason (digits stripped: coordinates/counts differ) → streak.
+			const failKey = `${stepId}|${ev.result.message.replace(/-?\d+(\.\d+)?/g, "#")}`;
+			const sameFails = failKey === rs.lastFail ? rs.sameFails + 1 : 1;
+			if (sameFails >= 4 && failures < 20) {
+				return {
+					state: { ...rs, status: "idle", consecutiveFailures: failures, failureBackoffTicks: 200, lastFail: "", sameFails: 0 },
+					commands: [
+						...base,
+						{ type: "console", msg: `ESCALATE: 4th identical failure of ${stepId} — re-site + relocate` },
+						{ type: "event", category: "step", event: "escalate", detail: `${stepId}: ${ev.result.message}` },
+						{ type: "escalate", stepId },
+					],
+				};
+			}
 			if (failures >= 20) {
 				return {
 					state: {
+						...rs,
 						epoch: rs.epoch + 1,
 						status: "idle",
 						currentStepId: null,
 						completed: new Set(),
 						consecutiveFailures: 0,
 						failureBackoffTicks: 0,
+						completeTicks: 0,
+						lastFail: "",
+						sameFails: 0,
 					},
 					commands: [
 						...base,
@@ -271,6 +299,8 @@ export const reduce = (
 					...rs,
 					status: "idle",
 					consecutiveFailures: failures,
+					lastFail: failKey,
+					sameFails,
 					// Back off so a fast-failing step can't re-run at the 20Hz tick rate
 					// (hot-spin → CPU burn + viewer flicker). Grows with the streak, capped
 					// at 60 ticks (~3s).
@@ -428,11 +458,49 @@ const runCommand = (bot: Bot, ch: Channel<Event>, c: Command): void => {
 			// preempt/timeout/death is unwound by throwIfPreempted() inside the shared
 			// primitives instead of running on beside its replacement.
 			beginTaskEpoch(bot, c.epoch);
+			const startMs = Date.now();
+			const context = senseContext(bot);
+			const row = (outcome: AttemptOutcome, reason: string) => {
+				const p = bot.entity?.position;
+				writeAttempt({
+					run_id: `${getRaceId()}-${step.id}-${startMs}`,
+					bot_impl: "ts",
+					build: buildId(),
+					world_seed: process.env.GYM_SEED ?? null,
+					skill: step.id,
+					step_id: step.id,
+					source: process.env.GYM_RUN_ID ? "gym" : "race",
+					bot: bot.username,
+					start_ms: startMs,
+					duration_s: Math.round((Date.now() - startMs) / 100) / 10,
+					outcome,
+					reason,
+					death_cause: null,
+					pos: p ? [Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)] : null,
+					deepest_phase: "",
+					progress: 0,
+					params: {},
+					context,
+				});
+			};
 			Promise.race([taskScope.run({ bot, epoch: c.epoch }, () => step.execute(bot, c.state)), timeout])
-				.then((result) => ch.put({ type: "stepDone", epoch: c.epoch, result }))
-				.catch((err) =>
-					ch.put({ type: "stepError", epoch: c.epoch, message: err instanceof Error ? err.message : String(err) }),
-				);
+				.then((result) => {
+					const o = (result as { outcome?: AttemptOutcome }).outcome;
+					row(result.success ? "ok" : o ?? (/timed out/.test(result.message) ? "timeout" : "failed"), result.message);
+					ch.put({ type: "stepDone", epoch: c.epoch, result });
+				})
+				.catch((err) => {
+					const message = err instanceof Error ? err.message : String(err);
+					row(/preempted/.test(message) ? "timeout" : "failed", message);
+					ch.put({ type: "stepError", epoch: c.epoch, message });
+				});
+			return;
+		}
+		case "escalate": {
+			// Re-site (a portal site that keeps failing the same way is abandoned) and wander.
+			if (c.stepId === "build_nether_portal")
+				import("../tasks/portal/cast.ts").then((m) => m.forgetSite(bot)).catch(() => {});
+			exploreRandom(bot, 48).catch(() => {});
 			return;
 		}
 		case "escapeWater":

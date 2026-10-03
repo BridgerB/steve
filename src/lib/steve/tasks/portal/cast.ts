@@ -25,6 +25,7 @@ import {
 	walkToXZ,
 } from "../../lib/bot-utils.ts";
 import { logEvent, setPhase } from "../../lib/logger.ts";
+import { setTarget } from "../../lib/progress.ts";
 import { ensurePickaxe } from "../mining/main.ts";
 import type { Block, StepResult } from "../../types.ts";
 
@@ -1108,6 +1109,11 @@ const fillBucket = async (
 /** The cast site prepareCastSite cleared (per bot): the frame must be built
  *  exactly there, or the 294-cell chamber was dug around the wrong volume. */
 const siteAnchor = new WeakMap<Bot, Vec3>();
+/** Forget the cast site (cycle 4: after a death the bot re-sites from its respawn and
+ *  never walks back to a site far away — n19-2 walked 9,220 blocks toward a dead one). */
+export const forgetSite = (bot: Bot): void => {
+	siteAnchor.delete(bot);
+};
 // Set when the bot dies during a cast (gym n1-2: died 80s into the cast, respawned at
 // world spawn and castObsidianAt kept "reassessing" from 13,000 blocks away for 23
 // minutes). Every cast loop checks it and ends the step instead. One listener per bot.
@@ -1910,6 +1916,8 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 		lava = await stripMineForLava(bot, digDownVertical, deadline);
 	}
 	if (!lava) return { success: false, message: "No lava pool found to cast at" };
+	// Cycle 4 Part 6: closing distance to the pool is this sub-phase's progress metric.
+	setTarget(lava);
 
 	// Lava the bot can bucket from where it stands: exposed, within 6 horizontally
 	// and 4 vertically. Anything else is "seen" but not reachable yet.
@@ -2176,6 +2184,7 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 		`${bx},${by},${bz} lava=${lava.x},${lava.y},${lava.z}`,
 	);
 	siteAnchor.set(bot, vec3(bx, by, bz));
+	setTarget(null);
 	setPhase("chamber");
 
 	// 3. Clear a flat chamber (frame box + scaffold) and lay a solid floor.

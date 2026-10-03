@@ -23,7 +23,7 @@ import { gatherFood } from "../tasks/food/main.ts";
 import { gatherWood } from "../tasks/gather-wood/main.ts";
 import { mineBlock } from "../tasks/mining/main.ts";
 import { smeltItems } from "../tasks/smelt/main.ts";
-import { buildPortalByCasting, prepareCastSite } from "../tasks/portal/cast.ts";
+import { castAttempt } from "../tasks/portal/attempt.ts";
 import { enterPortal } from "../tasks/portal/enter.ts";
 import { countInventoryItems } from "../lib/test-utils.ts";
 import { setPhase } from "../lib/logger.ts";
@@ -140,11 +140,9 @@ export const GYM_STEPS: GymStep[] = [
 				`fill ${lx - 4} ${by - 2} ${lz - 4} ${lx + 4} ${by - 1} ${lz + 4} lava`,
 			).catch(() => {});
 		},
-		run: async (b) => {
-			const prep = await prepareCastSite(b);
-			if (!prep.success) return prep;
-			return buildPortalByCasting(b);
-		},
+		// Same guarded attempt as the race and the natural gym (stall detector, death
+		// ends it, one portal_cast row), with the arena's old 30-min budget.
+		run: (b) => castAttempt(b, { budgetMs: 1_800_000, source: "gym" }),
 		pass: (b) =>
 			!!b.findBlock?.({
 				matching: (n: string) => n === "nether_portal",
@@ -202,18 +200,11 @@ export const GYM_STEPS: GymStep[] = [
 						continue;
 					}
 					dispatches++;
-					const cast = (async (): Promise<StepResult> => {
-						const prep = await prepareCastSite(b);
-						if (!prep.success) return prep;
-						return buildPortalByCasting(b);
-					})();
+					// Each dispatch runs guarded (cycle 4 Part 6): its own 900 s budget (or what is
+					// left of the 2700 s), a stall detector on the ratcheted progress, and death
+					// ending the dispatch (the site is forgotten; the next dispatch re-sites).
 					const cap = Math.min(perDispatch, total - (Date.now() - t0));
-					let timer: ReturnType<typeof setTimeout> | undefined;
-					const budget = new Promise<StepResult>((r) => {
-						timer = setTimeout(() => r({ success: false, message: `Build Nether Portal timed out (${Math.round(cap / 1000)}s dispatch)` }), cap);
-					});
-					res = await Promise.race([cast, budget]);
-					clearTimeout(timer);
+					res = await castAttempt(b, { budgetMs: cap, source: "gym" });
 					if (res.success) break;
 					await new Promise((r) => setTimeout(r, 1000));
 				}

@@ -430,14 +430,11 @@ export const steps: readonly Step[] = [
 			s.world.dimension === "overworld",
 		isComplete: (s) => s.world.portalBuilt,
 		execute: async (bot, _state) => {
-			const { prepareCastSite, buildPortalByCasting } = await import(
-				"./tasks/portal/cast.ts"
-			);
-			// Clear a flat site next to a lava pool + fill the lava bucket, then
-			// cast the 10-obsidian frame and light it (no diamond, no cheats).
-			const prep = await prepareCastSite(bot);
-			if (!prep.success) return prep;
-			return buildPortalByCasting(bot);
+			const { castAttempt } = await import("./tasks/portal/attempt.ts");
+			// Clear a site next to a lava pool, then cast the 10-obsidian frame and light it
+			// (no diamond, no cheats) — one guarded attempt: 900 s budget, stall detector,
+			// death ends it (cycle 4 Part 6). Writes a portal_cast row to the event log.
+			return castAttempt(bot, { budgetMs: 900_000, source: "race" });
 		},
 	},
 
