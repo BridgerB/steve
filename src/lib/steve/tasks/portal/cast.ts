@@ -26,6 +26,7 @@ import {
 } from "../../lib/bot-utils.ts";
 import { logEvent, setPhase } from "../../lib/logger.ts";
 import { setTarget } from "../../lib/progress.ts";
+import { param } from "../../ml/bandit.ts";
 import { ensurePickaxe } from "../mining/main.ts";
 import type { Block, StepResult } from "../../types.ts";
 
@@ -2170,10 +2171,32 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 		const movedZ = lavaH() < 3.5 ? await tunnelToward(bot, 0, az, 6).catch(() => 0) : 0;
 		logEvent("cast", "site_close", `tunnelled x${movedX} z${movedZ} away from the lava — now ${lavaH().toFixed(1)}`);
 	}
+	// Cycle 4 §7.1: anchor at the lava's LEVEL — feet at lava surface + 1, never above.
+	// n16-2, n17-1, n21-1 anchored 12-31 above the pool (the range rule was horizontal
+	// only) and every refill stance then sat at pool level, unreachable. Too high and far
+	// enough off the pool → dig straight down here to lava+1 (digDownVertical refuses lava
+	// or a deep drop below); too low → staircase up. Still off level → do not anchor.
+	const dyMax = param("anchor_dy_max", 3);
+	const maxD = param("anchor_max_d", 12);
+	const dy = (): number => Math.floor(bot.entity.position.y) - (lava.y + 1);
+	if (Math.abs(dy()) > dyMax && lavaH() >= 3.5 && lavaH() <= maxD) {
+		const before = dy();
+		if (before > 0) {
+			const { digDownVertical } = await import("../mining/main.ts");
+			await digDownVertical(bot, lava.y + 1, Math.min(deadline, Date.now() + 120000), undefined, 30000);
+		} else {
+			await digStaircaseUp(bot, lava.y + 1, Math.min(deadline, Date.now() + 120000));
+		}
+		logEvent("cast", "site_level", `feet ${before} → ${dy()} from lava+1 (max ${dyMax}), ${lavaH().toFixed(1)} from lava`, bot.entity.position);
+	}
 	const gapH = lavaH();
-	if (gapH < 3.5 || gapH > 12 || bot.entity.isInWater) {
+	if (gapH < 3.5 || gapH > maxD || bot.entity.isInWater) {
 		logEvent("cast", "site_out_of_range", `bot ${gapH.toFixed(1)} from lava ${lava.x},${lava.y},${lava.z} — not anchoring`);
-		return { success: false, message: `Cast site ${gapH.toFixed(0)} from its lava (need 3.5-12) — retry` };
+		return { success: false, message: `Cast site ${gapH.toFixed(0)} from its lava (need 3.5-${maxD}) — retry` };
+	}
+	if (Math.abs(dy()) > dyMax) {
+		logEvent("cast", "site_off_level", `feet ${dy()} from lava+1 (max ${dyMax}) at ${Math.floor(bot.entity.position.y)} for lava y=${lava.y} — not anchoring`);
+		return { success: false, message: `Cast site ${dy()} off the lava's level (max ${dyMax}) — retry` };
 	}
 	const bx = Math.floor(bot.entity.position.x);
 	const by = Math.floor(bot.entity.position.y);

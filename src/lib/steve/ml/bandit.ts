@@ -78,6 +78,15 @@ export const updateParams = (chosen: Record<string, string>, ok: boolean, path =
 	return p;
 };
 
+// The draw the current attempt runs with (one bot per process), so skill code deep in
+// a task reads its arm without threading the draw through every call.
+let current: Record<string, string> = {};
+export const useParams = (chosen: Record<string, string>): void => {
+	current = chosen;
+};
+/** The current attempt's numeric value of a parameter, or the fallback (scripted value). */
+export const param = (name: string, fallback: number): number => num(current, name, fallback);
+
 /** Numeric value of a parameter from a draw, with a fallback. */
 export const num = (chosen: Record<string, string>, name: string, fallback: number): number => {
 	const v = Number(chosen[name]);

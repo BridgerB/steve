@@ -9,7 +9,7 @@ import type { Bot } from "typecraft";
 import { buildId, senseContext, writeAttempt } from "../../lib/attempts.ts";
 import { getRaceId } from "../../lib/logger.ts";
 import { guardedAttempt, progressSnapshot } from "../../lib/progress.ts";
-import { drawParams, num } from "../../ml/bandit.ts";
+import { drawParams, num, useParams } from "../../ml/bandit.ts";
 import type { StepResult } from "../../types.ts";
 import { buildPortalByCasting, forgetSite, prepareCastSite } from "./cast.ts";
 
@@ -20,6 +20,7 @@ export const castAttempt = async (
 	opts: { budgetMs: number; source: "gym" | "race" },
 ): Promise<StepResult & { outcome: string }> => {
 	const params = drawParams();
+	useParams(params);
 	const startMs = Date.now();
 	const context = senseContext(bot);
 	const g = await guardedAttempt(
