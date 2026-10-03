@@ -56,7 +56,12 @@ db.exec(`CREATE TABLE IF NOT EXISTS runs (
 	outcome TEXT, death_cause TEXT, message TEXT, mobs TEXT, note TEXT)`);
 // Harness health per run, so harness damage shows in the table before it eats a
 // batch (b13: 692 leaked forceloads, full heap, 7 of 10 runs lost).
-for (const col of ["forceloads INTEGER", "mem_avail_mb INTEGER", "tick_ms REAL", "tick_p99_ms REAL"]) {
+for (const col of [
+	"forceloads INTEGER", "mem_avail_mb INTEGER", "tick_ms REAL", "tick_p99_ms REAL",
+	// cycle 4: replayable trials + the primary natural-cast metric
+	"seed TEXT", "landing_x INTEGER", "landing_z INTEGER", "land_y INTEGER",
+	"time_to_portal_s REAL", "dispatches INTEGER", "deaths INTEGER",
+]) {
 	try {
 		db.exec(`ALTER TABLE runs ADD COLUMN ${col}`);
 	} catch {}
@@ -97,12 +102,29 @@ const health = async (): Promise<{ forceloads: number; tickMs: number | null; p9
 	}
 };
 
+// GYM_LANDINGS=<file>: a JSON array of [x, z] landings, slot i replays landings[i-1]
+// (paired comparisons on the same terrain, cycle 4 Part 4).
+const LANDINGS: [number, number][] = process.env.GYM_LANDINGS
+	? (JSON.parse(readFileSync(process.env.GYM_LANDINGS, "utf8")) as [number, number][])
+	: [];
+let slotLanding: [number, number] | undefined;
+
 const runOne = (raceId: string): Promise<{ code: number | null; out: string }> =>
 	new Promise((resolve) => {
 		const p = spawn(
 			process.execPath,
 			["--env-file=.env", "--import", "./typecraft-resolve.mjs", "gym-cli.ts"],
-			{ env: { ...process.env, STEP: SLUG, BOT: process.env.BOT ?? "Gym_cast", GYM_RUN_ID: raceId }, stdio: ["ignore", "pipe", "pipe"] },
+			{
+				env: {
+					...process.env,
+					STEP: SLUG,
+					BOT: process.env.BOT ?? "Gym_cast",
+					MC_USERNAME: process.env.BOT ?? "Gym_cast",
+					GYM_RUN_ID: raceId,
+					...(slotLanding ? { GYM_LANDING: `${slotLanding[0]},${slotLanding[1]}` } : {}),
+				},
+				stdio: ["ignore", "pipe", "pipe"],
+			},
 		);
 		let out = "";
 		p.stdout.on("data", (d) => (out += d.toString()));
@@ -111,6 +133,7 @@ const runOne = (raceId: string): Promise<{ code: number | null; out: string }> =
 	});
 
 for (let i = 1; i <= RUNS; i++) {
+	slotLanding = LANDINGS[i - 1];
 	const runId = `${BATCH}-${i}`;
 	const raceId = `gym-${SLUG}-${runId}`;
 	// Pre-run check: RCON must answer. A dead link makes every run a harness loss
@@ -149,7 +172,17 @@ for (let i = 1; i <= RUNS; i++) {
 	writeFileSync(`data/gym/logs/${raceId}.log`, out);
 	const seconds = (Date.now() - t0) / 1000;
 	const m = /GYMRESULT (\{.*\})/.exec(out);
-	const res = m ? (JSON.parse(m[1]!) as { pass: boolean; durationMs: number; message: string }) : null;
+	const res = m
+		? (JSON.parse(m[1]!) as {
+				pass: boolean;
+				durationMs: number;
+				message: string;
+				y?: number;
+				seed?: string;
+				landing?: [number, number];
+				extra?: { time_to_portal_s?: number; dispatches?: number; deaths?: number };
+			})
+		: null;
 	const hb = q(`SELECT detail FROM events WHERE race_id='${esc(rid)}' AND category='hb' AND detail LIKE '%phase=%' ORDER BY id DESC LIMIT 1`)[0];
 	const phase = hb ? (/phase=(.*?) last=/.exec(String(hb.detail))?.[1] ?? "") : "";
 	const lastCast = q(`SELECT event, detail FROM events WHERE race_id='${esc(rid)}' AND category='cast' AND event NOT IN ('pillar_step','pool','descend','shuffle') ORDER BY id DESC LIMIT 1`)[0];
@@ -165,9 +198,12 @@ for (let i = 1; i <= RUNS; i++) {
 	const castOk = (SLUG !== "build-nether-portal" && SLUG !== "portal-natural") || obsidian >= 10;
 	const outcome = res?.pass && castOk ? "pass" : /^HARNESS/.test(message) ? "harness" : disc ? "disconnect" : deathCause ? "death" : /timeout/i.test(message) ? "timeout" : "fail";
 	const lastEv = lastCast ? `${lastCast.event} ${String(lastCast.detail ?? "").slice(0, 60)}` : "";
-	db.prepare(`INSERT OR REPLACE INTO runs (run_id,batch,slug,commit_hash,started_at,seconds,deepest_phase,last_cast_event,obsidian,outcome,death_cause,message,mobs,note,forceloads,mem_avail_mb,tick_ms,tick_p99_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+	db.prepare(`INSERT OR REPLACE INTO runs (run_id,batch,slug,commit_hash,started_at,seconds,deepest_phase,last_cast_event,obsidian,outcome,death_cause,message,mobs,note,forceloads,mem_avail_mb,tick_ms,tick_p99_ms,seed,landing_x,landing_z,land_y,time_to_portal_s,dispatches,deaths) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
 		runId, BATCH, SLUG, commit, startedAt, seconds, phase, lastEv, obsidian, outcome, deathCause, message.slice(0, 300), MOBS, "",
 		h.forceloads, memMb, h.tickMs, h.p99,
+		res?.seed ?? null, res?.landing?.[0] ?? null, res?.landing?.[1] ?? null, res?.y ?? null,
+		outcome === "pass" ? (res?.extra?.time_to_portal_s ?? null) : null,
+		res?.extra?.dispatches ?? null, res?.extra?.deaths ?? null,
 	);
 	console.log(`${runId}  ${outcome.padEnd(7)} ${seconds.toFixed(0).padStart(4)}s  obsidian=${obsidian}  phase='${phase}'  last='${lastEv}'  ${message.slice(0, 80)}`);
 }

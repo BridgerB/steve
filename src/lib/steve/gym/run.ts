@@ -15,8 +15,15 @@ export interface GymResult {
 	pass: boolean;
 	durationMs: number;
 	x: number;
+	y?: number;
 	z: number;
 	message: string;
+	/** World seed from RCON `seed` (recorded for replayable, paired trials). */
+	seed?: string;
+	/** The landing cell requested (replay it with GYM_LANDING="x,z"). */
+	landing?: [number, number];
+	/** Step-reported extras (e.g. time_to_portal_s, dispatches, deaths). */
+	extra?: Record<string, unknown>;
 }
 
 export interface RunGymOpts {
@@ -43,54 +50,63 @@ export const runGymStep = async (
 	for (const item of step.prereq) await rcon(`give ${name} ${item}`).catch(() => {});
 	await sleep(400);
 
-	// Random surface teleport. spreadplayers drops the bot on the top solid block
-	// near (cx,cz) — no fall damage, and it loads the chunks itself. forceload keeps
-	// them resident so the task can act immediately.
+	// Surface placement WITHOUT spreadplayers (cycle 4, Part 5.4: spreadplayers into
+	// ungenerated terrain generates chunks synchronously on the server thread and crashed
+	// Server B with a 60 s watchdog tick). Forceload the landing chunk, wait until it is
+	// loaded, then tp onto the motion-blocking heightmap. GYM_LANDING="x,z" replays a
+	// recorded landing (paired comparisons); otherwise a random cell in (0..10k)².
+	let seed: string | undefined;
+	try {
+		seed = /\[(-?\d+)\]/.exec(await rcon("seed"))?.[1];
+	} catch {}
+	const forced: [number, number][] = [];
+	let landing: [number, number] = [cx, cz];
 	if (!opts.noTeleport) {
-		// spreadplayers fails outright over water/steep terrain ("too many entities
-		// for space") and leaves the bot where it was (e2-1: in the previous run's
-		// portal), or lands it in a cave (e2-3: y=-45, scaffold in rock). Retry a new
-		// random cell up to 3 times until it reports a spread onto a surface y >= 55.
+		const fixed = (process.env.GYM_LANDING ?? "").split(",").map(Number);
 		let landed = false;
 		for (let t = 0; t < 3; t++) {
-			const tx = t === 0 ? cx : Math.floor(Math.random() * 10000);
-			const tz = t === 0 ? cz : Math.floor(Math.random() * 10000);
+			const tx = t === 0 && fixed.length === 2 && fixed.every(Number.isFinite) ? fixed[0]! : t === 0 ? cx : Math.floor(Math.random() * 10000);
+			const tz = t === 0 && fixed.length === 2 && fixed.every(Number.isFinite) ? fixed[1]! : t === 0 ? cz : Math.floor(Math.random() * 10000);
 			await rcon(`forceload add ${tx} ${tz}`).catch(() => {});
-			await sleep(400);
-			const sp = await rcon(`spreadplayers ${tx} ${tz} 0 24 false ${name}`).catch(
-				(e) => `ERR ${e}`,
-			);
-			log(`[gym:${step.slug}] spreadplayers ${tx},${tz} → ${sp}`);
-			// The client position lags the server teleport: e4-3 read y=67 (the old
-			// spot) right after a spread that actually landed at y=-12. Wait until the
-			// position has moved to the new cell before judging the landing.
-			const p0 = bot.entity?.position;
+			forced.push([tx, tz]);
+			let loaded = false;
+			for (let w = 0; w < 60 && !loaded; w++) {
+				const r = await rcon(`execute if loaded ${tx} 0 ${tz}`).catch(() => "");
+				if (/passed/i.test(r)) loaded = true;
+				else await sleep(500);
+			}
+			if (!loaded) {
+				log(`[gym:${step.slug}] chunk ${tx},${tz} never loaded — next cell`);
+				continue;
+			}
+			const tp = await rcon(
+				`execute positioned ${tx} 0 ${tz} positioned over motion_blocking_no_leaves run tp ${name} ~0.5 ~ ~0.5`,
+			).catch((e) => `ERR ${e}`);
+			log(`[gym:${step.slug}] tp-over ${tx},${tz} → ${tp}`);
+			// The client position lags the server teleport: wait until it has moved here.
 			for (let w = 0; w < 30; w++) {
 				await sleep(200);
 				const p = bot.entity?.position;
-				if (p && (Math.abs(p.x - tx) < 40 && Math.abs(p.z - tz) < 40)) break;
-				if (!/Spread 1 /.test(sp)) break;
-				void p0;
+				if (p && Math.abs(p.x - tx) < 8 && Math.abs(p.z - tz) < 8) break;
 			}
 			await sleep(1200);
 			const ly = bot.entity?.position?.y ?? 0;
-			// b9-3: spread onto an ocean surface (y=62) — the arena scaffold then sat in
-			// water and the cast refused the wet anchor. Treat a water landing as bad too.
 			const wet = !!(bot as { entity?: { isInWater?: boolean } }).entity?.isInWater;
-			if (/Spread 1 /.test(sp) && ly >= 55 && !wet) {
+			const lava = /passed/i.test(await rcon(`execute as ${name} at @s if block ~ ~ ~ minecraft:lava`).catch(() => ""));
+			if (ly >= 55 && !wet && !lava) {
 				landed = true;
+				landing = [tx, tz];
 				break;
 			}
-			log(`[gym:${step.slug}] bad landing (y=${Math.floor(ly)}) — re-spreading`);
+			log(`[gym:${step.slug}] bad landing (y=${Math.floor(ly)}${wet ? " water" : ""}${lava ? " lava" : ""}) — next cell`);
 			await rcon(`forceload remove ${tx} ${tz}`).catch(() => {});
+			forced.pop();
 		}
-		// b12-5: all 3 spreads failed (RCON replies garbled under server lag), the run
-		// went ahead at a y=130 landing with no arena, and scored a cast failure. No
-		// landing = no test: report it as a harness result, not a step result.
 		if (!landed) {
-			const message = "HARNESS no good landing after 3 spreads";
+			for (const [fx, fz] of forced) await rcon(`forceload remove ${fx} ${fz}`).catch(() => {});
+			const message = "HARNESS no good landing after 3 cells";
 			log(`[gym:${step.slug}] FAIL 0s — ${message}`);
-			return { pass: false, durationMs: 0, x: cx, z: cz, message };
+			return { pass: false, durationMs: 0, x: cx, z: cz, message, seed };
 		}
 	}
 	try {
@@ -132,12 +148,14 @@ export const runGymStep = async (
 
 	const t0 = Date.now();
 	let message = "";
+	let extra: Record<string, unknown> | undefined;
 	try {
 		const res = await Promise.race([
 			step.run(bot),
 			sleep(step.timeoutMs).then(() => ({ success: false, message: "gym timeout" })),
 		]);
 		message = (res as { message?: string })?.message ?? "";
+		extra = (res as { extra?: Record<string, unknown> })?.extra;
 	} catch (e) {
 		message = e instanceof Error ? e.message : String(e);
 	}
@@ -150,7 +168,7 @@ export const runGymStep = async (
 		pass = false;
 	}
 
-	const result: GymResult = { pass, durationMs, x: gx, z: gz, message };
+	const result: GymResult = { pass, durationMs, x: gx, y: gy, z: gz, message, seed, landing, extra };
 	log(`[gym:${step.slug}] ${pass ? "PASS" : "FAIL"} ${(durationMs / 1000).toFixed(1)}s @${gx},${gy},${gz} — ${message}`);
 	try {
 		// Store the reproduction fields: exact tp (x,y,z) + prereqs → re-run anywhere.
@@ -167,6 +185,8 @@ export const runGymStep = async (
 	} catch {
 		/* db optional */
 	}
-	if (!opts.noTeleport) await rcon(`forceload remove ${cx} ${cz}`).catch(() => {});
+	// Release exactly the chunk(s) this run forceloaded (the old code released the
+	// FIRST cell even when a later one was kept, leaking forceloads).
+	for (const [fx, fz] of forced) await rcon(`forceload remove ${fx} ${fz}`).catch(() => {});
 	return result;
 };
