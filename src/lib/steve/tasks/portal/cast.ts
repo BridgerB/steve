@@ -235,8 +235,41 @@ const descendToY = async (bot: Bot, targetFeetY: number): Promise<void> => {
 };
 
 /** The cheap building block we have most of (dirt preferred, then cobblestone). */
-const buildBlockName = (bot: Bot): string =>
-	count(bot, "dirt") > 0 ? "dirt" : "cobblestone";
+// Every block the cast may pillar and mould with. Natural digging yields more than dirt
+// and cobble (cobbled_deepslate, andesite, granite, diorite, tuff); n8-2 stopped at
+// "Need ~30 dirt/cobble (have 11)" and looped 398 dispatches.
+const BUILD_BLOCKS = ["dirt", "cobblestone", "cobbled_deepslate", "andesite", "granite", "diorite", "tuff"];
+const buildBlockName = (bot: Bot): string => BUILD_BLOCKS.find((n) => count(bot, n) > 0) ?? "cobblestone";
+const buildStockOf = (bot: Bot): number => BUILD_BLOCKS.reduce((a, n) => a + count(bot, n), 0);
+/** Dig nearby solid ground (outside the frame box, never next to lava) until the
+ *  pack holds WANT build blocks or nothing diggable is in reach. */
+const topUpBuildBlocks = async (bot: Bot, want: number, frame: Vec3 | null): Promise<number> => {
+	const DIGGABLE = new Set(["dirt", "grass_block", "coarse_dirt", "stone", "cobblestone", "deepslate", "cobbled_deepslate", "andesite", "granite", "diorite", "tuff"]);
+	const inFrame = (p: Vec3) =>
+		!!frame && p.x >= frame.x - 1 && p.x <= frame.x + 4 && p.z >= frame.z - 2 && p.z <= frame.z + 2 && p.y >= frame.y - 1 && p.y <= frame.y + 6;
+	let dug = 0;
+	for (let round = 0; round < 3 && buildStockOf(bot) < want; round++) {
+		const feet = bot.entity.position;
+		const cells = bot
+			.findBlocks({ matching: (n: string) => DIGGABLE.has(n), maxDistance: 5, count: 80, exposed: false } as never)
+			.map((p: { x: number; y: number; z: number }) => vec3(p.x, p.y, p.z))
+			.filter((p: Vec3) => !inFrame(p) && !touchesLava(bot, p) && !(p.x === Math.floor(feet.x) && p.z === Math.floor(feet.z) && p.y < feet.y))
+			.filter((p: Vec3) => distance(offset(bot.entity.position, 0, 1.62, 0), offset(p, 0.5, 0.5, 0.5)) <= 4.5)
+			.slice(0, want - buildStockOf(bot) + 4);
+		if (!cells.length) break;
+		for (const c of cells) {
+			if (buildStockOf(bot) >= want) break;
+			await digAt(bot, c);
+			dug++;
+		}
+		try {
+			await bot.collectDrops(6, 4000, async (p) => {
+				await goTo(bot, p, { range: 1, timeout: 2500 });
+			});
+		} catch {}
+	}
+	return dug;
+};
 
 /**
  * Walk in a straight line toward (tx, tz) at ground level, digging any
@@ -687,6 +720,33 @@ const fillBucket = async (
 		`[SCOOP] ${fluid} bot=${Math.floor(here.x)},${Math.floor(here.y)},${Math.floor(here.z)} raw=${raw.length} src0=${src0.length} srcs=${srcs.length} nearest=${srcs[0] ? `${srcs[0].x},${srcs[0].y},${srcs[0].z}@${Math.round(Math.sqrt(d2(srcs[0])))} rim=${hasRim(srcs[0])}` : "none"}`,
 	);
 
+	// Scoop from WHERE THE BOT STANDS first. Natural gym (n5, n6): the stance sweep
+	// below walks to a rim cell before every scoop, and on uneven natural ground that
+	// walk fails (fill_reach ok=false / lavaOnLine refusals) or ends at a height where
+	// the scoop ray hits the cell above the source (filled=false) — the first fill
+	// after site prep was the most common deepest phase. If any source within reach
+	// is hit squarely by the use-ray from here, scoop it without moving.
+	{
+		const eyeP = offset(bot.entity.position, 0, 1.62, 0);
+		const near = pool
+			.map((p) => vec3(p.x, p.y, p.z))
+			.filter((p) => distance(eyeP, offset(p, 0.5, 0.5, 0.5)) <= 4.5)
+			.sort((a, b) => d2(a) - d2(b))
+			.slice(0, 16);
+		for (const p of near) {
+			for (const look of [vec3(p.x + 0.5, p.y + 0.95, p.z + 0.5), vec3(p.x + 0.5, p.y + 0.5, p.z + 0.5)]) {
+				const hit = useTargetCell(bot, look);
+				if (!hit || hit.x !== p.x || hit.y !== p.y || hit.z !== p.z) continue;
+				if (!(await equip(bot, "bucket"))) break;
+				await reliableUse(bot, look, p);
+				if (count(bot, `${fluid}_bucket`) > 0) {
+					logEvent("cast", "scoop_here", `${fluid} src ${p.x},${p.y},${p.z} from where the bot stands`, bot.entity.position);
+					return true;
+				}
+			}
+			if (count(bot, `${fluid}_bucket`) > 0) return true;
+		}
+	}
 	const NB8: [number, number][] = [
 		[1, 0],
 		[-1, 0],
@@ -722,17 +782,203 @@ const fillBucket = async (
 		// (d0 == gap every time) even 4 blocks away on flat stone, so the straight walk
 		// is the ONLY way onto the rim. Keep the lava-on-line refusal, drop the gap cap
 		// (7 = the far side of a 9-wide pool from where descend leaves us).
-		if (gap > 7 || lavaOnLine) {
-			logEvent("cast", "fill_reach", `refused feet ${feet.x},${feet.y},${feet.z} gap=${gap.toFixed(1)} lavaOnLine=${lavaOnLine} d0=${d0.toFixed(1)}`, p);
+		// Natural gym n10: 39 refill walks, most refused 'lavaOnLine' (pool inlets between
+		// the bot and every rim stance), each costing 15-20 s until the 900 s ran out.
+		// Placement-first: cap the lava cells on the walk line (floor and foot level)
+		// with build blocks when they are in reach, then walk over them. Placing into
+		// lava is safe; only digging next to it floods.
+		// Progressive, placement-first walk (natural n10/n11: refills between blocks were
+		// the time sink — 38 fill_reach in n11-1, the stances 7-9 blocks away, refused
+		// for gap > 7 or lava on the line, and the one-shot bridge capped 0 cells because
+		// they were out of reach). Walk toward the stance 3 blocks per leg; before each leg
+		// cap the lava on that leg (floor + foot level, within reach) with build blocks;
+		// walk only a leg that is lava-free. Up to 12 blocks.
+		if (gap > 12) {
+			logEvent("cast", "fill_reach", `refused feet ${feet.x},${feet.y},${feet.z} gap=${gap.toFixed(1)} (>12) d0=${d0.toFixed(1)}`, p);
 			return false;
 		}
-		await walkToXZ(bot, c.x, c.z, { targetDist: 0.4, maxTime: 2500 });
+		// n12-1: the legs stopped after one leg against SOLID rock (24 refill walks, 1
+		// obsidian) because the pool lay behind the frame's backing wall. Now: (1) when the
+		// bot and the stance are on opposite sides of the frame plane, detour round the
+		// nearer frame end; (2) dig solid rock on a leg (feet + head) unless it is part of
+		// the frame box or touches lava — the template only forbids digging the frame,
+		// the backing, the molds and anything next to lava.
+		const anc = siteAnchor.get(bot);
+		const inFrameBox = (x: number, y: number, z: number): boolean =>
+			!!anc && x >= anc.x - 1 && x <= anc.x + 4 && z >= anc.z - 1 && z <= anc.z + 1 && y >= anc.y - 1 && y <= anc.y + 6;
+		let capped = 0;
+		let dug = 0;
+		let legs = 0;
+		let blocked = false;
+		let why = "";
+		const walkLegs = async (gx: number, gz: number): Promise<void> => {
+			for (let leg = 0; leg < 6; leg++) {
+				const q0 = bot.entity.position;
+				const rem = Math.hypot(gx - q0.x, gz - q0.z);
+				if (rem <= 0.6) return;
+				const len = Math.min(3, rem);
+				const tx = q0.x + ((gx - q0.x) / rem) * len;
+				const tz = q0.z + ((gz - q0.z) / rem) * len;
+				const n = Math.max(1, Math.ceil(len));
+				// n13: 34 of 35 bridged walks came back BLOCKED — near the pool rim every
+				// solid block touches lava, so a single foot-level block (a plain step up)
+				// counted as an undiggable wall. A foot block with open head room is a STEP
+				// (walk it with jump held); a 2-high obstacle becomes a step by digging only
+				// its head block when that one is safe; a wall is only 2-high and undiggable.
+				// Terrain-following leg check (n15-1 log: 'dig=2 first=…,62,…:stone botY=64
+				// stanceY=62' — the leg was checked at the STANCE's y while the bot walked 2
+				// higher, so it tried to dig out the ground under its own path). Track the
+				// walking level column by column from the bot's own feet: step up one block
+				// over a foot-level block with head room, drop 1-2 blocks onto solid non-lava
+				// floor, dig only a head/feet block that is safe, fill lava or a hole.
+				const legCells = (): { fill: Vec3[]; dig: Vec3[]; wall: boolean; step: boolean } => {
+					const fill: Vec3[] = [];
+					const dig: Vec3[] = [];
+					let wall = false;
+					let step = false;
+					let y = Math.floor(q0.y);
+					const safe = (c: Vec3) => !inFrameBox(c.x, c.y, c.z) && getBlock(bot, c)?.name !== "obsidian" && !touchesLava(bot, c);
+					for (let i = 1; i <= n; i++) {
+						const lx = Math.floor(q0.x + ((tx - q0.x) * i) / n);
+						const lz = Math.floor(q0.z + ((tz - q0.z) * i) / n);
+						if (lx === Math.floor(q0.x) && lz === Math.floor(q0.z)) continue;
+						const at = (yy: number) => vec3(lx, yy, lz);
+						const nm = (yy: number) => getBlock(bot, at(yy))?.name;
+						const lava = (yy: number) => isLava(nm(yy));
+						const solid = (yy: number) => isSolid(nm(yy)) && !lava(yy);
+						if (lava(y)) fill.push(at(y));
+						if (lava(y + 1)) {
+							wall = true;
+							continue;
+						}
+						if (solid(y)) {
+							if (!solid(y + 1) && !solid(y + 2)) {
+								step = true;
+								y += 1;
+								continue;
+							}
+							if (safe(at(y + 1)) && (!solid(y + 2) || safe(at(y + 2)))) {
+								dig.push(at(y + 1));
+								if (solid(y + 2)) dig.push(at(y + 2));
+								step = true;
+								y += 1;
+								continue;
+							}
+							if (safe(at(y)) && safe(at(y + 1))) {
+								dig.push(at(y), at(y + 1));
+								continue;
+							}
+							wall = true;
+							continue;
+						}
+						if (solid(y + 1)) {
+							if (safe(at(y + 1))) dig.push(at(y + 1));
+							else wall = true;
+						}
+						if (solid(y - 1)) continue;
+						if (lava(y - 1)) {
+							fill.push(at(y - 1));
+							continue;
+						}
+						if (solid(y - 2)) {
+							y -= 1;
+							continue;
+						}
+						if (solid(y - 3) && !lava(y - 2)) {
+							y -= 2;
+							continue;
+						}
+						fill.push(at(y - 1));
+					}
+					return { fill, dig, wall, step };
+				};
+				const eyeP = offset(q0, 0, 1.62, 0);
+				for (const cell of legCells().fill) {
+					if (distance(eyeP, offset(cell, 0.5, 0.5, 0.5)) > 4.5) continue;
+					if (await placeCobble(bot, cell)) capped++;
+				}
+				// n19: ~41 bridged walks came back "BLOCKED fill=0 dig=N" — the dig left every
+				// cell standing. digAt swings whatever is held (a bucket or a build block after a
+				// pour); stone by hand outlasts its 6 s cap. Equip the pickaxe before digging.
+				const toDig = legCells().dig.filter((cell) => distance(eyeP, offset(cell, 0.5, 0.5, 0.5)) <= 4.5);
+				if (toDig.length) await ensurePickaxe(bot).catch(() => false);
+				for (const cell of toDig) {
+					await digAt(bot, cell);
+					dug++;
+				}
+				const after = legCells();
+				if (after.fill.length || after.dig.length || after.wall) {
+					const first = after.fill[0] ?? after.dig[0];
+					why = `fill=${after.fill.length} dig=${after.dig.length} wall=${after.wall} first=${first ? `${first.x},${first.y},${first.z}:${getBlock(bot, first)?.name}` : "-"} botY=${Math.floor(bot.entity.position.y)} stanceY=${feet.y}`;
+					blocked = true;
+					return;
+				}
+				// n17-2: 11 legs 'did not move' at botY=48 with a step ahead — the jump hit the
+				// ceiling of the bot's own 2-high tunnel. A step needs head room ABOVE THE BOT
+				// too: clear the block over its head first (if safe).
+				if (after.step) {
+					const hb = vec3(Math.floor(q0.x), Math.floor(q0.y) + 2, Math.floor(q0.z));
+					const hn = getBlock(bot, hb)?.name;
+					if (isSolid(hn) && !isLava(hn) && !inFrameBox(hb.x, hb.y, hb.z) && !touchesLava(bot, hb)) {
+						await digAt(bot, hb);
+						dug++;
+					}
+					bot.setControlState("jump", true);
+				}
+				await walkToXZ(bot, tx, tz, { targetDist: 0.4, maxTime: 2000 });
+				bot.setControlState("jump", false);
+				legs++;
+				if (distance(bot.entity.position, q0) < 0.5) {
+					why = `did not move botY=${Math.floor(bot.entity.position.y)} stanceY=${feet.y}`;
+					blocked = true;
+					return;
+				}
+			}
+		};
+		const side = (z: number): string => (!anc ? "?" : z >= anc.z + 1 ? "front" : z <= anc.z - 2 ? "back" : "plane");
+		const waypoints: [number, number][] = [];
+		const s0 = side(Math.floor(bot.entity.position.z));
+		const s1 = side(feet.z);
+		if (anc && s0 !== s1 && s0 !== "plane" && s1 !== "plane") {
+			const endX = Math.abs(feet.x - (anc.x - 2)) <= Math.abs(feet.x - (anc.x + 5)) ? anc.x - 2 : anc.x + 5;
+			waypoints.push([endX + 0.5, bot.entity.position.z], [endX + 0.5, c.z]);
+		}
+		// n20-2: 25 walks 'BLOCKED fill=0 dig=0 wall=true' — the pool sat to the SIDE of the
+		// frame (lava at x-7) and the straight line from the working row crossed the side
+		// column's molds inside the frame box. If the line still crosses the frame box,
+		// go out to the corridor one row in front of the working row (z = anchor+2), along
+		// it, then in to the stance.
+		if (anc && waypoints.length === 0) {
+			const p0 = bot.entity.position;
+			let crosses = false;
+			const nn = Math.max(1, Math.ceil(Math.hypot(c.x - p0.x, c.z - p0.z)));
+			for (let i = 1; i < nn && !crosses; i++) {
+				const lx = Math.floor(p0.x + ((c.x - p0.x) * i) / nn);
+				const lz = Math.floor(p0.z + ((c.z - p0.z) * i) / nn);
+				if (inFrameBox(lx, feet.y, lz) && isSolid(getBlock(bot, vec3(lx, feet.y, lz))?.name)) crosses = true;
+			}
+			if (crosses) {
+				const cz = anc.z + 2 + 0.5;
+				waypoints.push([p0.x, cz], [c.x, cz]);
+			}
+		}
+		waypoints.push([c.x, c.z]);
+		for (const [wx, wz] of waypoints) {
+			await walkLegs(wx, wz);
+			if (blocked) break;
+		}
+		if (capped || dug || blocked || waypoints.length > 1) logEvent("cast", "fill_bridge", `legs ${legs} capped ${capped} dug ${dug} detour=${waypoints.length > 1} ${blocked ? `BLOCKED ${why}` : "clear"} → ${feet.x},${feet.y},${feet.z}`, bot.entity.position);
+		if (blocked && Math.hypot(bot.entity.position.x - c.x, bot.entity.position.z - c.z) > 1.8) {
+			logEvent("cast", "fill_reach", `refused feet ${feet.x},${feet.y},${feet.z} gap=${gap.toFixed(1)} blocked d0=${d0.toFixed(1)}`, p);
+			return false;
+		}
+		void lavaOnLine;
 		// gym b12-2, b12-7 (both stuck 6/10): goTo to the stance climbed ONTO the mold,
 		// the bot stood 2 above the stance (y feet+2), the XZ-only check said ok, and
 		// every scoop aimed at its own column (filled=false ×3 per stance) until
 		// fill_fail. A stance is reached only at stance height; if we're up on the
 		// mold, step off it onto a dry, lava-free cell at stance height first.
-		const high = bot.entity.position.y - feet.y > 0.6;
+		const high = bot.entity.position.y - feet.y > 1.5;
 		if (high) {
 			const q = bot.entity.position;
 			const fx = Math.floor(q.x);
@@ -747,7 +993,7 @@ const fillBucket = async (
 				if (![feet.y, feet.y + 1, Math.floor(q.y), Math.floor(q.y) + 1].every((yy) => clear(getBlock(bot, vec3(x, yy, z))?.name))) continue;
 				await walkToXZ(bot, x + 0.5, z + 0.5, { targetDist: 0.3, maxTime: 1500 });
 				stepped = `${x},${feet.y},${z}`;
-				if (bot.entity.position.y - feet.y <= 0.6) break;
+				if (bot.entity.position.y - feet.y <= 1.5) break;
 			}
 			logEvent("cast", "fill_high", `on the mold at y=${q.y.toFixed(1)} (stance y=${feet.y}) — stepped off to ${stepped} now y=${bot.entity.position.y.toFixed(1)}`, bot.entity.position);
 			return false;
@@ -1211,8 +1457,41 @@ const buildBacking = async (
 	by: number,
 	bz: number,
 ): Promise<void> => {
+	let skipped = 0;
+	let frontFilled = 0;
 	for (let dx = 0; dx <= 3; dx++) {
 		const colX = bx + dx;
+		// Natural gym (n9-2/n9-3): the backing phase took 340-450 s vs 70 s on the arena —
+		// the builder walks to z=bz-2, which on natural ground is solid rock behind the
+		// wall, then pillars all 5 cells. A column whose 5 backing cells are already solid
+		// (natural rock) needs nothing: skip it. The arena backing row is air, so the
+		// arena never skips.
+		let solidN = 0;
+		for (let dy = 0; dy <= 4; dy++) if (isSolid(getBlock(bot, vec3(colX, by + dy, bz - 1))?.name)) solidN++;
+		if (solidN === 5) {
+			skipped++;
+			continue;
+		}
+		// n18: the backing phase still took 220-500 s — a column with ANY gap walked to
+		// z=bz-2 (rock behind the wall) and pillared all 5 cells. From the working row
+		// (z=bz+1) every backing cell is within ~3.6 of the eye across the empty frame
+		// plane: fill the gaps from there, and fall back to the old route only if a
+		// placement fails.
+		{
+			bot.setControlState("sneak", false);
+			await descendToY(bot, by);
+			await goTo(bot, vec3(colX, by, bz + 1), { range: 1, timeout: 10000 }).catch(() => {});
+			let missing = 0;
+			for (let dy = 0; dy <= 4; dy++) {
+				const c = vec3(colX, by + dy, bz - 1);
+				if (isSolid(getBlock(bot, c)?.name)) continue;
+				if (distance(offset(bot.entity.position, 0, 1.62, 0), offset(c, 0.5, 0.5, 0.5)) > 4.5 || !(await placeCobble(bot, c))) missing++;
+			}
+			if (missing === 0) {
+				frontFilled++;
+				continue;
+			}
+		}
 		bot.setControlState("sneak", false); // navigation phase
 		await descendToY(bot, by);
 		await goTo(bot, vec3(colX, by, bz - 2), {
@@ -1229,6 +1508,7 @@ const buildBacking = async (
 			await placeCobble(bot, vec3(colX, h, bz - 1));
 		}
 	}
+	if (skipped || frontFilled) logEvent("cast", "backing_skip", `${skipped} of 4 backing columns already solid, ${frontFilled} filled from the front`);
 	bot.setControlState("sneak", false);
 	await descendToY(bot, by);
 };
@@ -1571,6 +1851,32 @@ const stripMineForLava = async (
 };
 
 export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
+	// Reuse the site a previous dispatch started. Natural gym: once a block failed,
+	// every re-dispatch found the pool again, picked a NEW anchor a block off and
+	// started a fresh frame, throwing away the obsidian already cast (n3-1: 8
+	// dispatches, n3-3: 16, never past 1 block). If the bot is still near its last
+	// anchor and that frame has obsidian, go back to it, top up lava, and carry on;
+	// castObsidianAt skips cells that are already obsidian.
+	{
+		const prev = siteAnchor.get(bot);
+		if (prev && distance(bot.entity.position, offset(prev, 0.5, 0, 0.5)) <= 16) {
+			let obs = 0;
+			for (let x = 0; x <= 3; x++)
+				for (let y = 0; y <= 4; y++)
+					if (getBlock(bot, vec3(prev.x + x, prev.y + y, prev.z))?.name === "obsidian") obs++;
+			if (obs > 0) {
+				logEvent("cast", "site_reuse", `${prev.x},${prev.y},${prev.z} has ${obs} obsidian — resuming the same frame`);
+				setPhase("lava_fill");
+				await goTo(bot, prev, { range: 1, timeout: 20000 }).catch(() => {});
+				if (count(bot, "lava_bucket") < 1 && count(bot, "bucket") >= 1) await fillBucket(bot, "lava");
+				if (count(bot, "lava_bucket") >= 1) {
+					logEvent("cast", "site_ready", `${prev.x},${prev.y},${prev.z} (reused)`);
+					return { success: true, message: "Resumed the cast site" };
+				}
+				logEvent("cast", "site_reuse_no_lava", `${prev.x},${prev.y},${prev.z}`);
+			}
+		}
+	}
 	setPhase("find_lava");
 	const deadline = Date.now() + 20 * 60_000;
 	// SPOT exposed lava WIDE — surface/cave lava is air-adjacent, so findFluidSource sees it
@@ -1674,9 +1980,24 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 			);
 			const wet = descendWet.get(bot) ?? 0;
 			if (wet === 0) {
-				await goTo(bot, vec3(cx, surfaceYAt(bot, cx, cz), cz), { range: 1.5, timeout: 20000 }).catch(
-					() => {},
-				);
+				// n14-n16: one 20 s walk to the dig column fell short and the bot dug down where
+				// it stood — the descent then ended 35-64 blocks from the lava (n14-1 61,
+				// n14-2 64, n14-4 52, n16-2 35) and minutes went into tunnelling or a
+				// 'lava_not_exposed' retry. Walk in ≤24-block legs, up to 4, until within 4 of
+				// the column; only then dig down.
+				for (let k = 0; k < 4; k++) {
+					const q = bot.entity.position;
+					const h = Math.hypot(cx + 0.5 - q.x, cz + 0.5 - q.z);
+					if (h <= 4) break;
+					const step = Math.min(24, h);
+					const wx = Math.floor(q.x + ((cx + 0.5 - q.x) / h) * step);
+					const wz = Math.floor(q.z + ((cz + 0.5 - q.z) / h) * step);
+					await goTo(bot, vec3(wx, surfaceYAt(bot, wx, wz), wz), { range: 2, timeout: 20000 }).catch(() => {});
+					if (bot.entity.isInWater) break;
+					if (Math.hypot(bot.entity.position.x - q.x, bot.entity.position.z - q.z) < 1) break;
+				}
+				const hd = Math.hypot(cx + 0.5 - bot.entity.position.x, cz + 0.5 - bot.entity.position.z);
+				logEvent("cast", "lava_column", `reached ${hd.toFixed(1)} from the dig column ${cx},${cz}`, bot.entity.position);
 			} else {
 				logEvent("cast", "lava_descend_here", `walk to the column ended in water ${wet}× — digging down where we stand`, p);
 			}
@@ -1684,7 +2005,7 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 				descendWet.set(bot, wet + 1);
 				return { success: false, message: "in water — yielding to escape_water" };
 			}
-			const r = await digDownVertical(bot, lava.y + 1, Math.min(deadline, Date.now() + 300000));
+			const r = await digDownVertical(bot, lava.y + 1, Math.min(deadline, Date.now() + 300000), undefined, 30000);
 			descendWet.set(bot, 0);
 			const dp = bot.entity.position;
 			logEvent(
@@ -1817,6 +2138,35 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 		return { success: false, message: "Cast anchor is in water — retry from dry land" };
 	}
 
+	// The anchor must sit 4-12 blocks (horizontally) from the lava it was chosen for.
+	// Natural gym n1r-2 / n1r-3: the 5-block stand-off goTo fell short, the anchor was
+	// taken 2-3 blocks from the pool, and the bot fell into the lava beside the frame
+	// (95 s and 6 s after portal_start). b12-5: a death mid-tunnel respawned the bot at
+	// world spawn and it anchored there, 7500 blocks from its lava. Too close → walk to
+	// the stand-off again, then try the opposite side; still out of range → fail the
+	// dispatch (the race retries) instead of anchoring a doomed site.
+	const lavaH = (): number =>
+		Math.hypot(bot.entity.position.x - (lava.x + 0.5), bot.entity.position.z - (lava.z + 0.5));
+	if (lavaH() < 3.5) {
+		await walkToXZ(bot, standSpot.x + 0.5, standSpot.z + 0.5, { targetDist: 0.5, maxTime: 4000 }).catch(() => {});
+	}
+	// Rewrite R3: too close and the walk could not get away (the bot is usually in its
+	// own dig-down tunnel: n2-1, n3-2 refused the anchor 27 and 29 times). TUNNEL
+	// straight away from the lava, X first then Z, until 3.5+ off. Never walk to "the
+	// other side": the pathfinder routed that walk across the pool (n4b-1 death).
+	if (lavaH() < 3.5) {
+		const ax = Math.sign(bot.entity.position.x - (lava.x + 0.5)) || dx;
+		const az = Math.sign(bot.entity.position.z - (lava.z + 0.5)) || 1;
+		const { tunnelToward } = await import("../mining/main.ts");
+		const movedX = await tunnelToward(bot, ax, 0, 6).catch(() => 0);
+		const movedZ = lavaH() < 3.5 ? await tunnelToward(bot, 0, az, 6).catch(() => 0) : 0;
+		logEvent("cast", "site_close", `tunnelled x${movedX} z${movedZ} away from the lava — now ${lavaH().toFixed(1)}`);
+	}
+	const gapH = lavaH();
+	if (gapH < 3.5 || gapH > 12 || bot.entity.isInWater) {
+		logEvent("cast", "site_out_of_range", `bot ${gapH.toFixed(1)} from lava ${lava.x},${lava.y},${lava.z} — not anchoring`);
+		return { success: false, message: `Cast site ${gapH.toFixed(0)} from its lava (need 3.5-12) — retry` };
+	}
 	const bx = Math.floor(bot.entity.position.x);
 	const by = Math.floor(bot.entity.position.y);
 	const bz = Math.floor(bot.entity.position.z);
@@ -1858,8 +2208,14 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 	// cells, not on the bot, and gets re-dug on the second pass. The pick is
 	// checked every cell (294 cells outlast a stone pick's 131 uses).
 	{
+		// Rewrite R1 (template site, natural gym gate 2026-10-02): dig ONLY the cells the
+		// template needs empty — the frame plane (z=0) and the standing row in front of
+		// it (z=+1). The old chamber dug z=-1..+5 (294 cells, 4-7 min on natural ground,
+		// n1r-4/n1r-5 ran out of time in it) and then rebuilt z=-1 as the backing wall.
+		// The backing row is now left solid where nature made it solid (buildBacking
+		// only fills the gaps), and the rows beyond z=+1 are never touched.
 		const cols: [number, number][] = [];
-		for (let z = -1; z <= 5; z++) {
+		for (let z = 0; z <= 1; z++) {
 			const xs = (z + 1) % 2 === 0 ? [-1, 0, 1, 2, 3, 4] : [4, 3, 2, 1, 0, -1];
 			for (const x of xs) cols.push([x, z]);
 		}
@@ -1919,7 +2275,7 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 		await goTo(bot, vec3(bx, by, bz), { range: 1, timeout: 45000 }).catch(() => {});
 	let floorSkipped = 0;
 	for (let x = -1; x <= 4; x++) {
-		for (let z = -1; z <= 5; z++) {
+		for (let z = -1; z <= 2; z++) {
 			const f = vec3(bx + x, by - 1, bz + z);
 			if (!isSolid(getBlock(bot, f)?.name) && !lavaTouching(f)) {
 				// Only cells in reach: placing from afar just burns place timeouts.
@@ -1943,6 +2299,27 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 		range: 0,
 		timeout: 10000,
 	}).catch(() => {});
+	// Cap the work area's floor. Natural gym: all three lava deaths (n1r-2, n1r-3,
+	// n2b-1) were the 'descend' after the backing-column pillar landing on a pool cell
+	// one block +x / -z of the anchor at floor level — the pool reaches under the frame
+	// even when the chosen source is 4+ blocks away. Place cobble into every lava cell
+	// at floor and foot level under the frame + backing wall + working row before
+	// casting, so the bot never steps or drops where lava can be.
+	{
+		let capped = 0;
+		let failed = 0;
+		for (let x = bx - 1; x <= bx + 4; x++) {
+			for (let z = bz - 2; z <= bz + 1; z++) {
+				for (const y of [by - 1, by]) {
+					const c = vec3(x, y, z);
+					if (!isLava(getBlock(bot, c)?.name)) continue;
+					if (await placeCobble(bot, c)) capped++;
+					else failed++;
+				}
+			}
+		}
+		if (capped || failed) logEvent("cast", "floor_capped", `${capped} lava cells capped, ${failed} failed, around ${bx},${by},${bz}`);
+	}
 	const lavaOk = count(bot, "lava_bucket") >= 1;
 	logEvent("cast", lavaOk ? "site_ready" : "site_no_lava", `${bx},${by},${bz}`);
 	return {
@@ -1969,7 +2346,11 @@ export const buildPortalByCasting = async (bot: Bot): Promise<StepResult> => {
 		return { success: true, message: "Obsidian frame already present" };
 	}
 
-	const buildStock = count(bot, "dirt") + count(bot, "cobblestone");
+	if (buildStockOf(bot) < 30) {
+		const dug = await topUpBuildBlocks(bot, 34, siteAnchor.get(bot) ?? null);
+		logEvent("cast", "block_topup", `dug ${dug} → ${buildStockOf(bot)} build blocks`, bot.entity.position);
+	}
+	const buildStock = buildStockOf(bot);
 	if (buildStock < 30) {
 		return {
 			success: false,
