@@ -189,5 +189,6 @@ export const runGymStep = async (
 	// Release exactly the chunk(s) this run forceloaded (the old code released the
 	// FIRST cell even when a later one was kept, leaking forceloads).
 	for (const [fx, fz] of forced) await rcon(`forceload remove ${fx} ${fz}`).catch(() => {});
+	if (step.teardown) await step.teardown(rcon).catch(() => {});
 	return result;
 };

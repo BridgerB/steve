@@ -24,6 +24,12 @@ import { gatherWood } from "../tasks/gather-wood/main.ts";
 import { mineBlock } from "../tasks/mining/main.ts";
 import { smeltItems } from "../tasks/smelt/main.ts";
 import { castAttempt } from "../tasks/portal/attempt.ts";
+import { bedDragon } from "../tasks/end/bed.ts";
+
+// Dragon gym (cycle 4 Part 8): the setup's RCON, kept for the run's truth check.
+let endRcon: ((cmd: string) => Promise<string>) | null = null;
+let dragonDead = false;
+const inEnd = (cmd: string) => `execute in minecraft:the_end run ${cmd}`;
 import { enterPortal } from "../tasks/portal/enter.ts";
 import { countInventoryItems } from "../lib/test-utils.ts";
 import { setPhase } from "../lib/logger.ts";
@@ -49,6 +55,8 @@ export interface GymStep {
 		rcon: (cmd: string) => Promise<string>,
 		at: { x: number; y: number; z: number },
 	) => Promise<void>;
+	/** Optional RCON cleanup after the run (e.g. release forceloads the setup added). */
+	teardown?: (rcon: (cmd: string) => Promise<string>) => Promise<void>;
 	timeoutMs: number;
 }
 
@@ -56,6 +64,42 @@ const has = (bot: Bot, pat: string, n: number): boolean =>
 	countInventoryItems(bot, pat) >= n;
 
 export const GYM_STEPS: GymStep[] = [
+	{
+		slug: "dragon",
+		label: "Kill the Dragon (beds)",
+		order: 40,
+		// Skill 12 starts with the crystals gone. Kit per Part 8.
+		prereq: ["white_bed 6", "obsidian 32", "iron_sword 1", "cooked_beef 16", "cobblestone 64", "cobblestone 64", "water_bucket 1"],
+		setup: async (b, rcon) => {
+			endRcon = rcon;
+			dragonDead = false;
+			await rcon(inEnd("forceload add -64 -64 64 64"));
+			for (let i = 0; i < 60; i++) {
+				if (/passed/i.test(await rcon("execute in minecraft:the_end if loaded 0 0 0").catch(() => ""))) break;
+				await new Promise((r) => setTimeout(r, 1000));
+			}
+			await rcon(inEnd("kill @e[type=minecraft:end_crystal]")).catch(() => "");
+			const alive = /passed/i.test(await rcon("execute in minecraft:the_end if entity @e[type=minecraft:ender_dragon]").catch(() => ""));
+			if (!alive) await rcon(inEnd("summon minecraft:ender_dragon 0 100 0")).catch(() => "");
+			// Stand on the end stone 8 south of the fountain, on the heightmap.
+			await rcon(`execute in minecraft:the_end positioned 0 0 8 positioned over motion_blocking_no_leaves run tp ${b.username} ~0.5 ~ ~0.5 180 0`);
+			await rcon(`effect clear ${b.username}`).catch(() => "");
+			await new Promise((r) => setTimeout(r, 3000));
+		},
+		run: async (b) => {
+			const res = await bedDragon(b, 900_000);
+			const alive = endRcon
+				? /passed/i.test(await endRcon("execute in minecraft:the_end if entity @e[type=minecraft:ender_dragon]").catch(() => "passed"))
+				: true;
+			dragonDead = !alive;
+			return { success: dragonDead, message: `${dragonDead ? "DRAGON DEAD" : "dragon alive"} — ${res.message}` };
+		},
+		pass: () => dragonDead,
+		teardown: async (rcon) => {
+			await rcon(inEnd("forceload remove -64 -64 64 64")).catch(() => "");
+		},
+		timeoutMs: 960_000,
+	},
 	{ slug: "gather-wood", label: "Gather Wood", order: 1, prereq: [], run: (b) => gatherWood(b, 4), pass: (b) => has(b, "_log", 4), timeoutMs: 90000 },
 	{ slug: "craft-planks", label: "Craft Planks", order: 2, prereq: ["oak_log 8"], run: (b) => craftPlanks(b), pass: (b) => has(b, "_planks", 4), timeoutMs: 25000 },
 	{ slug: "craft-table", label: "Craft Crafting Table", order: 3, prereq: ["oak_planks 8"], run: (b) => craftCraftingTable(b), pass: (b) => has(b, "crafting_table", 1), timeoutMs: 25000 },
