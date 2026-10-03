@@ -1435,6 +1435,7 @@ const buildBacking = async (
 	bz: number,
 ): Promise<void> => {
 	let skipped = 0;
+	let frontFilled = 0;
 	for (let dx = 0; dx <= 3; dx++) {
 		const colX = bx + dx;
 		// Natural gym (n9-2/n9-3): the backing phase took 340-450 s vs 70 s on the arena —
@@ -1447,6 +1448,26 @@ const buildBacking = async (
 		if (solidN === 5) {
 			skipped++;
 			continue;
+		}
+		// n18: the backing phase still took 220-500 s — a column with ANY gap walked to
+		// z=bz-2 (rock behind the wall) and pillared all 5 cells. From the working row
+		// (z=bz+1) every backing cell is within ~3.6 of the eye across the empty frame
+		// plane: fill the gaps from there, and fall back to the old route only if a
+		// placement fails.
+		{
+			bot.setControlState("sneak", false);
+			await descendToY(bot, by);
+			await goTo(bot, vec3(colX, by, bz + 1), { range: 1, timeout: 10000 }).catch(() => {});
+			let missing = 0;
+			for (let dy = 0; dy <= 4; dy++) {
+				const c = vec3(colX, by + dy, bz - 1);
+				if (isSolid(getBlock(bot, c)?.name)) continue;
+				if (distance(offset(bot.entity.position, 0, 1.62, 0), offset(c, 0.5, 0.5, 0.5)) > 4.5 || !(await placeCobble(bot, c))) missing++;
+			}
+			if (missing === 0) {
+				frontFilled++;
+				continue;
+			}
 		}
 		bot.setControlState("sneak", false); // navigation phase
 		await descendToY(bot, by);
@@ -1464,7 +1485,7 @@ const buildBacking = async (
 			await placeCobble(bot, vec3(colX, h, bz - 1));
 		}
 	}
-	if (skipped) logEvent("cast", "backing_skip", `${skipped} of 4 backing columns already solid`);
+	if (skipped || frontFilled) logEvent("cast", "backing_skip", `${skipped} of 4 backing columns already solid, ${frontFilled} filled from the front`);
 	bot.setControlState("sneak", false);
 	await descendToY(bot, by);
 };
