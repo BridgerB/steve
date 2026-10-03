@@ -909,7 +909,18 @@ const fillBucket = async (
 					blocked = true;
 					return;
 				}
-				if (after.step) bot.setControlState("jump", true);
+				// n17-2: 11 legs 'did not move' at botY=48 with a step ahead — the jump hit the
+				// ceiling of the bot's own 2-high tunnel. A step needs head room ABOVE THE BOT
+				// too: clear the block over its head first (if safe).
+				if (after.step) {
+					const hb = vec3(Math.floor(q0.x), Math.floor(q0.y) + 2, Math.floor(q0.z));
+					const hn = getBlock(bot, hb)?.name;
+					if (isSolid(hn) && !isLava(hn) && !inFrameBox(hb.x, hb.y, hb.z) && !touchesLava(bot, hb)) {
+						await digAt(bot, hb);
+						dug++;
+					}
+					bot.setControlState("jump", true);
+				}
 				await walkToXZ(bot, tx, tz, { targetDist: 0.4, maxTime: 2000 });
 				bot.setControlState("jump", false);
 				legs++;
