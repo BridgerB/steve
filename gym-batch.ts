@@ -160,7 +160,9 @@ for (let i = 1; i <= RUNS; i++) {
 	const disc = /DISCONNECTED (.*)/.exec(out)?.[1];
 	// b4-5: the step's pass check found a LEFTOVER portal (stale world after a silent
 	// disconnect) with 0 obsidian cast. A cast pass needs the cast to have happened.
-	const castOk = SLUG !== "build-nether-portal" || obsidian >= 10;
+	// n16-1: a natural run walked into an EXISTING portal (ruined or a leftover) in 59 s with 0
+	// obsidian cast and was scored a pass. A cast pass needs the bot's own 10 obsidian.
+	const castOk = (SLUG !== "build-nether-portal" && SLUG !== "portal-natural") || obsidian >= 10;
 	const outcome = res?.pass && castOk ? "pass" : /^HARNESS/.test(message) ? "harness" : disc ? "disconnect" : deathCause ? "death" : /timeout/i.test(message) ? "timeout" : "fail";
 	const lastEv = lastCast ? `${lastCast.event} ${String(lastCast.detail ?? "").slice(0, 60)}` : "";
 	db.prepare(`INSERT OR REPLACE INTO runs (run_id,batch,slug,commit_hash,started_at,seconds,deepest_phase,last_cast_event,obsidian,outcome,death_cause,message,mobs,note,forceloads,mem_avail_mb,tick_ms,tick_p99_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
