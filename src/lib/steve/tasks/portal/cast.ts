@@ -943,6 +943,25 @@ const fillBucket = async (
 			const endX = Math.abs(feet.x - (anc.x - 2)) <= Math.abs(feet.x - (anc.x + 5)) ? anc.x - 2 : anc.x + 5;
 			waypoints.push([endX + 0.5, bot.entity.position.z], [endX + 0.5, c.z]);
 		}
+		// n20-2: 25 walks 'BLOCKED fill=0 dig=0 wall=true' — the pool sat to the SIDE of the
+		// frame (lava at x-7) and the straight line from the working row crossed the side
+		// column's molds inside the frame box. If the line still crosses the frame box,
+		// go out to the corridor one row in front of the working row (z = anchor+2), along
+		// it, then in to the stance.
+		if (anc && waypoints.length === 0) {
+			const p0 = bot.entity.position;
+			let crosses = false;
+			const nn = Math.max(1, Math.ceil(Math.hypot(c.x - p0.x, c.z - p0.z)));
+			for (let i = 1; i < nn && !crosses; i++) {
+				const lx = Math.floor(p0.x + ((c.x - p0.x) * i) / nn);
+				const lz = Math.floor(p0.z + ((c.z - p0.z) * i) / nn);
+				if (inFrameBox(lx, feet.y, lz) && isSolid(getBlock(bot, vec3(lx, feet.y, lz))?.name)) crosses = true;
+			}
+			if (crosses) {
+				const cz = anc.z + 2 + 0.5;
+				waypoints.push([p0.x, cz], [c.x, cz]);
+			}
+		}
 		waypoints.push([c.x, c.z]);
 		for (const [wx, wz] of waypoints) {
 			await walkLegs(wx, wz);
