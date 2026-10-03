@@ -1925,9 +1925,24 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 			);
 			const wet = descendWet.get(bot) ?? 0;
 			if (wet === 0) {
-				await goTo(bot, vec3(cx, surfaceYAt(bot, cx, cz), cz), { range: 1.5, timeout: 20000 }).catch(
-					() => {},
-				);
+				// n14-n16: one 20 s walk to the dig column fell short and the bot dug down where
+				// it stood — the descent then ended 35-64 blocks from the lava (n14-1 61,
+				// n14-2 64, n14-4 52, n16-2 35) and minutes went into tunnelling or a
+				// 'lava_not_exposed' retry. Walk in ≤24-block legs, up to 4, until within 4 of
+				// the column; only then dig down.
+				for (let k = 0; k < 4; k++) {
+					const q = bot.entity.position;
+					const h = Math.hypot(cx + 0.5 - q.x, cz + 0.5 - q.z);
+					if (h <= 4) break;
+					const step = Math.min(24, h);
+					const wx = Math.floor(q.x + ((cx + 0.5 - q.x) / h) * step);
+					const wz = Math.floor(q.z + ((cz + 0.5 - q.z) / h) * step);
+					await goTo(bot, vec3(wx, surfaceYAt(bot, wx, wz), wz), { range: 2, timeout: 20000 }).catch(() => {});
+					if (bot.entity.isInWater) break;
+					if (Math.hypot(bot.entity.position.x - q.x, bot.entity.position.z - q.z) < 1) break;
+				}
+				const hd = Math.hypot(cx + 0.5 - bot.entity.position.x, cz + 0.5 - bot.entity.position.z);
+				logEvent("cast", "lava_column", `reached ${hd.toFixed(1)} from the dig column ${cx},${cz}`, bot.entity.position);
 			} else {
 				logEvent("cast", "lava_descend_here", `walk to the column ended in water ${wet}× — digging down where we stand`, p);
 			}
