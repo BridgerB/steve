@@ -897,8 +897,12 @@ const fillBucket = async (
 					if (distance(eyeP, offset(cell, 0.5, 0.5, 0.5)) > 4.5) continue;
 					if (await placeCobble(bot, cell)) capped++;
 				}
-				for (const cell of legCells().dig) {
-					if (distance(eyeP, offset(cell, 0.5, 0.5, 0.5)) > 4.5) continue;
+				// n19: ~41 bridged walks came back "BLOCKED fill=0 dig=N" — the dig left every
+				// cell standing. digAt swings whatever is held (a bucket or a build block after a
+				// pour); stone by hand outlasts its 6 s cap. Equip the pickaxe before digging.
+				const toDig = legCells().dig.filter((cell) => distance(eyeP, offset(cell, 0.5, 0.5, 0.5)) <= 4.5);
+				if (toDig.length) await ensurePickaxe(bot).catch(() => false);
+				for (const cell of toDig) {
 					await digAt(bot, cell);
 					dug++;
 				}
