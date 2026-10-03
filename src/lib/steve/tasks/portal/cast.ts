@@ -825,40 +825,70 @@ const fillBucket = async (
 				// counted as an undiggable wall. A foot block with open head room is a STEP
 				// (walk it with jump held); a 2-high obstacle becomes a step by digging only
 				// its head block when that one is safe; a wall is only 2-high and undiggable.
+				// Terrain-following leg check (n15-1 log: 'dig=2 first=…,62,…:stone botY=64
+				// stanceY=62' — the leg was checked at the STANCE's y while the bot walked 2
+				// higher, so it tried to dig out the ground under its own path). Track the
+				// walking level column by column from the bot's own feet: step up one block
+				// over a foot-level block with head room, drop 1-2 blocks onto solid non-lava
+				// floor, dig only a head/feet block that is safe, fill lava or a hole.
 				const legCells = (): { fill: Vec3[]; dig: Vec3[]; wall: boolean; step: boolean } => {
 					const fill: Vec3[] = [];
 					const dig: Vec3[] = [];
 					let wall = false;
 					let step = false;
+					let y = Math.floor(q0.y);
+					const safe = (c: Vec3) => !inFrameBox(c.x, c.y, c.z) && getBlock(bot, c)?.name !== "obsidian" && !touchesLava(bot, c);
 					for (let i = 1; i <= n; i++) {
 						const lx = Math.floor(q0.x + ((tx - q0.x) * i) / n);
 						const lz = Math.floor(q0.z + ((tz - q0.z) * i) / n);
-						const fl = getBlock(bot, vec3(lx, feet.y - 1, lz))?.name;
-						if (isLava(fl) || !isSolid(fl)) fill.push(vec3(lx, feet.y - 1, lz));
-						if (isLava(getBlock(bot, vec3(lx, feet.y, lz))?.name)) fill.push(vec3(lx, feet.y, lz));
-						const feetC = vec3(lx, feet.y, lz);
-						const headC = vec3(lx, feet.y + 1, lz);
-						const topC = vec3(lx, feet.y + 2, lz);
-						const fs = isSolid(getBlock(bot, feetC)?.name);
-						const hs = isSolid(getBlock(bot, headC)?.name);
-						const safe = (c: Vec3) => !inFrameBox(c.x, c.y, c.z) && getBlock(bot, c)?.name !== "obsidian" && !touchesLava(bot, c);
-						if (fs && !hs) {
-							// step up: need the cell above the head clear too
-							if (isSolid(getBlock(bot, topC)?.name)) {
-								if (safe(topC)) dig.push(topC);
-								else wall = true;
-							}
-							step = true;
-						} else if (fs && hs) {
-							if (safe(feetC) && safe(headC)) dig.push(feetC, headC);
-							else if (safe(headC)) {
-								dig.push(headC);
+						if (lx === Math.floor(q0.x) && lz === Math.floor(q0.z)) continue;
+						const at = (yy: number) => vec3(lx, yy, lz);
+						const nm = (yy: number) => getBlock(bot, at(yy))?.name;
+						const lava = (yy: number) => isLava(nm(yy));
+						const solid = (yy: number) => isSolid(nm(yy)) && !lava(yy);
+						if (lava(y)) fill.push(at(y));
+						if (lava(y + 1)) {
+							wall = true;
+							continue;
+						}
+						if (solid(y)) {
+							if (!solid(y + 1) && !solid(y + 2)) {
 								step = true;
-							} else wall = true;
-						} else if (!fs && hs) {
-							if (safe(headC)) dig.push(headC);
+								y += 1;
+								continue;
+							}
+							if (safe(at(y + 1)) && (!solid(y + 2) || safe(at(y + 2)))) {
+								dig.push(at(y + 1));
+								if (solid(y + 2)) dig.push(at(y + 2));
+								step = true;
+								y += 1;
+								continue;
+							}
+							if (safe(at(y)) && safe(at(y + 1))) {
+								dig.push(at(y), at(y + 1));
+								continue;
+							}
+							wall = true;
+							continue;
+						}
+						if (solid(y + 1)) {
+							if (safe(at(y + 1))) dig.push(at(y + 1));
 							else wall = true;
 						}
+						if (solid(y - 1)) continue;
+						if (lava(y - 1)) {
+							fill.push(at(y - 1));
+							continue;
+						}
+						if (solid(y - 2)) {
+							y -= 1;
+							continue;
+						}
+						if (solid(y - 3) && !lava(y - 2)) {
+							y -= 2;
+							continue;
+						}
+						fill.push(at(y - 1));
 					}
 					return { fill, dig, wall, step };
 				};
