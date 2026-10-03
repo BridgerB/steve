@@ -47,7 +47,7 @@ export const castAttempt = async (
 		duration_s: Math.round((Date.now() - startMs) / 100) / 10,
 		outcome,
 		reason: g.message,
-		death_cause: null,
+		death_cause: outcome === "death" ? snap.deathCause : null,
 		pos: p ? [Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)] : null,
 		deepest_phase: snap.phase,
 		progress: snap.obsidian,

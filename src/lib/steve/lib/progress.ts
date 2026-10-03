@@ -40,6 +40,7 @@ let lastImprove = Date.now();
 let lastPhase = "";
 let target: { x: number; y: number; z: number } | null = null;
 let bestDist = Number.POSITIVE_INFINITY;
+let deathCause: string | null = null;
 
 const score = (): number => (phaseRank >= 1000 ? phaseRank : obsidian * 10 + phaseRank);
 
@@ -63,7 +64,9 @@ export const notePhase = (phase: string): void => {
 };
 
 /** Called by logger.logEvent for every event: obsidian placements ratchet progress. */
-export const noteEvent = (category: string, event: string): void => {
+export const noteEvent = (category: string, event: string, detail?: string): void => {
+	// The server's death message key (e.g. "death.attack.lava") for the attempt row.
+	if (category === "death" && event === "message") deathCause = /death\.[a-zA-Z_.]+/.exec(detail ?? "")?.[0] ?? "unknown";
 	if (category === "cast" && event === "obsidian") {
 		obsidian++;
 		bump();
@@ -87,9 +90,11 @@ export const resetProgress = (): void => {
 	lastImprove = Date.now();
 	target = null;
 	bestDist = Number.POSITIVE_INFINITY;
+	deathCause = null;
 };
 
-export const progressSnapshot = (): { obsidian: number; phase: string; score: number; idleS: number } => ({
+export const progressSnapshot = (): { obsidian: number; phase: string; score: number; idleS: number; deathCause: string | null } => ({
+	deathCause,
 	obsidian,
 	phase: lastPhase,
 	score: best,

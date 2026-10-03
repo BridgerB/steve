@@ -135,11 +135,11 @@ let phase = "";
 // Listeners (cycle 4): the progress ratchet registers here so the logger needs no
 // import of it (avoids an import cycle through bot-utils).
 const phaseListeners: ((p: string) => void)[] = [];
-const eventListeners: ((category: string, event: string) => void)[] = [];
+const eventListeners: ((category: string, event: string, detail?: string) => void)[] = [];
 export const onPhase = (f: (p: string) => void): void => {
 	phaseListeners.push(f);
 };
-export const onEvent = (f: (category: string, event: string) => void): void => {
+export const onEvent = (f: (category: string, event: string, detail?: string) => void): void => {
 	eventListeners.push(f);
 };
 export const setPhase = (p: string): void => {
@@ -160,7 +160,7 @@ export const logEvent = (
 ): void => {
 	for (const f of eventListeners) {
 		try {
-			f(category, event);
+			f(category, event, detail);
 		} catch {}
 	}
 	if (category === "step" && event === "start") lastStep = (detail ?? "").slice(0, 40);
