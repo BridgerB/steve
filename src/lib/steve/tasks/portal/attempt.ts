@@ -11,7 +11,7 @@ import { getRaceId } from "../../lib/logger.ts";
 import { guardedAttempt, progressSnapshot } from "../../lib/progress.ts";
 import { drawParams, num, useParams } from "../../ml/bandit.ts";
 import type { StepResult } from "../../types.ts";
-import { buildPortalByCasting, forgetSite, prepareCastSite } from "./cast.ts";
+import { buildPortalByCasting, prepareCastSite } from "./cast.ts";
 
 let attemptN = 0;
 
@@ -30,7 +30,10 @@ export const castAttempt = async (
 			if (!prep.success) return prep;
 			return buildPortalByCasting(bot);
 		},
-		{ budgetMs: opts.budgetMs, stallMs: num(params, "stall_s", 180) * 1000, onDeath: () => forgetSite(bot) },
+		// Death ends the attempt but keeps the site: the next attempt walks back to a frame
+		// within 200 blocks (prepareCastSite) and re-sites only beyond that (cycle 4 Part 6).
+		// base1-1 lost a 9/10 frame to an unconditional forget on death.
+		{ budgetMs: opts.budgetMs, stallMs: num(params, "stall_s", 180) * 1000 },
 	);
 	const snap = progressSnapshot();
 	const outcome = g.success ? "ok" : "outcome" in g ? g.outcome : "failed";

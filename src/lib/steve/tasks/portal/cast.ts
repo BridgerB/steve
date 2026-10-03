@@ -1866,7 +1866,29 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 	// castObsidianAt skips cells that are already obsidian.
 	{
 		const prev = siteAnchor.get(bot);
-		if (prev && distance(bot.entity.position, offset(prev, 0.5, 0, 0.5)) <= 16) {
+		const far = prev ? distance(bot.entity.position, offset(prev, 0.5, 0, 0.5)) : 0;
+		// Beyond 200 blocks (a respawn at world spawn) the site is dropped and the bot re-sites.
+		if (prev && far > 200) {
+			logEvent("cast", "site_dropped", `${prev.x},${prev.y},${prev.z} is ${Math.round(far)} away — re-siting`);
+			siteAnchor.delete(bot);
+		}
+		// Within 200 (after a death the bot respawns near its landing): walk back in legs.
+		if (prev && far > 16 && far <= 200) {
+			setPhase("lava_fill");
+			for (let k = 0; k < 10; k++) {
+				const q = bot.entity.position;
+				const h = Math.hypot(prev.x + 0.5 - q.x, prev.z + 0.5 - q.z);
+				if (h <= 12) break;
+				const step = Math.min(24, h);
+				const wx = Math.floor(q.x + ((prev.x + 0.5 - q.x) / h) * step);
+				const wz = Math.floor(q.z + ((prev.z + 0.5 - q.z) / h) * step);
+				const wy = h <= 30 ? prev.y : surfaceYAt(bot, wx, wz);
+				await goTo(bot, vec3(wx, wy, wz), { range: 2, timeout: 20000 }).catch(() => {});
+				if (Math.hypot(bot.entity.position.x - q.x, bot.entity.position.z - q.z) < 1) break;
+			}
+			logEvent("cast", "site_return", `${prev.x},${prev.y},${prev.z} was ${Math.round(far)} away, now ${distance(bot.entity.position, offset(prev, 0.5, 0, 0.5)).toFixed(1)}`, bot.entity.position);
+		}
+		if (siteAnchor.get(bot) && distance(bot.entity.position, offset(prev!, 0.5, 0, 0.5)) <= 16) {
 			let obs = 0;
 			for (let x = 0; x <= 3; x++)
 				for (let y = 0; y <= 4; y++)
