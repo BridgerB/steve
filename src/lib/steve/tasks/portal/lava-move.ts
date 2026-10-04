@@ -19,7 +19,10 @@ const name = (bot: Bot, x: number, y: number, z: number): string =>
 	(bot.blockAt(vec3(x, y, z)) as { name?: string } | null)?.name ?? "air";
 const lava = (n: string) => n === "lava" || n === "flowing_lava";
 const air = (n: string) => n === "air" || n === "cave_air" || n === "void_air";
-const solid = (n: string) => !air(n) && !lava(n) && n !== "water" && !/(grass|flower|fern|torch|snow$|carpet|vine|button|rail|sapling)/.test(n);
+// Non-solid plants and thin blocks by exact shape of name — s4n: a /grass/ match vetoed
+// every stance on grass_block ("footing grass_block").
+const NOT_SOLID = /^(short_grass|tall_grass|grass|fern|large_fern|dead_bush|snow|torch|wall_torch|.*_carpet|vine|.*_button|rail|.*_rail|.*_sapling|.*_flower|dandelion|poppy|.*_tulip|cornflower|azure_bluet|oxeye_daisy|allium|blue_orchid|lily_of_the_valley|seagrass|tall_seagrass|kelp|kelp_plant|sweet_berry_bush|.*_mushroom|fire)$/;
+const solid = (n: string) => !air(n) && !lava(n) && n !== "water" && !NOT_SOLID.test(n);
 
 /** Any lava in the 3×3 ring around (x,z) at floor, feet or head height of a cell at feet y. */
 const lavaRing = (bot: Bot, x: number, y: number, z: number): boolean => {
@@ -68,18 +71,24 @@ export const lavaSafeMove = async (
 	} finally {
 		pf.setMovements({ exclusionAreasStep: [] });
 	}
-	// Sneaking settle onto the cell centre (no jumping on the last block).
-	bot.setControlState("sneak", true);
-	await walkToXZ(bot, Math.floor(target.x) + 0.5, Math.floor(target.z) + 0.5, { targetDist: 0.25, maxTime: 1500 }).catch(() => {});
-	bot.setControlState("sneak", false);
+	// Sneaking settle onto the cell centre (no jumping on the last block) — only from close
+	// by: a straight walk from afar can cross lava the pathfinder routed around.
+	{
+		const q = bot.entity.position;
+		if (Math.hypot(q.x - (Math.floor(target.x) + 0.5), q.z - (Math.floor(target.z) + 0.5)) <= 1.5) {
+			bot.setControlState("sneak", true);
+			await walkToXZ(bot, Math.floor(target.x) + 0.5, Math.floor(target.z) + 0.5, { targetDist: 0.25, maxTime: 1500 }).catch(() => {});
+			bot.setControlState("sneak", false);
+		}
+	}
 	const p = bot.entity.position;
 	const arrived = Math.hypot(p.x - (Math.floor(target.x) + 0.5), p.z - (Math.floor(target.z) + 0.5)) <= Math.max(0.8, opts.range ?? 0.5);
 	const problem = stanceProblem(bot) ?? (arrived ? null : "not arrived");
 	if (!problem) return true;
-	// Step back toward where we came from; the caller re-plans.
-	bot.setControlState("sneak", true);
-	await walkToXZ(bot, from.x, from.z, { targetDist: 0.5, maxTime: 2500 }).catch(() => {});
-	bot.setControlState("sneak", false);
+	// Stop where we are; the caller re-plans. (s4n: the old straight-line walk back toward
+	// the start crossed lava — two deaths right after a veto.)
+	bot.clearControlStates?.();
+	void from;
 	logEvent("cast", "move_vetoed", `${opts.why ?? "move"} to ${Math.floor(target.x)},${Math.floor(target.y)},${Math.floor(target.z)}: ${problem}`, bot.entity.position);
 	writeAttempt({
 		run_id: `${getRaceId()}-lsm-${t0}`,

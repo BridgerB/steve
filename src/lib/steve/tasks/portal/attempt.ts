@@ -22,7 +22,8 @@ export const castAttempt = async (
 	// A spare pickaxe before the attempt, while there is still cobble for one.
 	try {
 		const { ensureSparePickaxe } = await import("../mining/main.ts");
-		await ensureSparePickaxe(bot);
+		// Capped: s4n-1 hung 22 min in a table craft here, outside the attempt guard.
+		await Promise.race([ensureSparePickaxe(bot), new Promise((r) => setTimeout(r, 30_000))]);
 	} catch {}
 	const params = drawParams();
 	useParams(params);

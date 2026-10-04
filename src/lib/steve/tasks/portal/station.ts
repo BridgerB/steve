@@ -46,8 +46,11 @@ const EYE_SNEAK = 1.27;
 const key = (p: Vec3) => `${p.x},${p.y},${p.z}`;
 
 /** Lava sources the bot can see as exposed (air directly above) within `r`. */
+// Exposed = air directly above (the exposure rule the rest of the cast uses); the
+// line-of-sight filter returned nothing beside a built frame (s4n-1: station_none at a
+// 14-source pool).
 const visibleSources = (bot: Bot, deps: StationDeps, r: number): Vec3[] =>
-	(bot.findBlocks({ matching: (n: string) => n === "lava", maxDistance: r, count: 400 } as never) as Vec3[])
+	(bot.findBlocks({ matching: (n: string) => n === "lava", maxDistance: r, count: 400, exposed: false } as never) as Vec3[])
 		.map((p) => vec3(p.x, p.y, p.z))
 		.filter((p) => deps.isSource(p) && deps.isAir(deps.name(vec3(p.x, p.y + 1, p.z))));
 
@@ -68,26 +71,42 @@ const targetsFor = (deps: StationDeps, S: Vec3, d: [number, number]): Vec3[] => 
 	);
 };
 
+/** Why the last stand search found nothing (logged with station_none). */
+export const why = { sources: 0, openAbove: 0, frame: 0, floor: 0, body: 0, noTarget: 0 };
 const candidateStands = (bot: Bot, deps: StationDeps, frame: Vec3 | null, excluded: Vec3[]): Stand[] => {
+	for (const k of Object.keys(why) as (keyof typeof why)[]) why[k] = 0;
 	const inFrame = (p: Vec3) =>
 		!!frame && p.x >= frame.x - 1 && p.x <= frame.x + 4 && p.z >= frame.z - 2 && p.z <= frame.z + 2 && p.y >= frame.y - 1 && p.y <= frame.y + 6;
 	const nearExcluded = (p: Vec3) => excluded.some((e) => Math.abs(e.x - p.x) <= 2 && Math.abs(e.z - p.z) <= 2 && Math.abs(e.y - p.y) <= 2);
 	const seen = new Set<string>();
 	const out: Stand[] = [];
-	for (const L of visibleSources(bot, deps, 20)) {
+	const srcs = visibleSources(bot, deps, 20);
+	why.sources = srcs.length;
+	for (const L of srcs) {
 		const O = vec3(L.x, L.y + 1, L.z);
 		if (!deps.isAir(deps.name(O))) continue;
+		why.openAbove++;
 		for (const d of DIRS) {
 			const S = vec3(O.x - d[0], O.y, O.z - d[1]);
 			const k = `${key(S)}|${d[0]},${d[1]}`;
 			if (seen.has(k)) continue;
 			seen.add(k);
-			if (inFrame(S) || nearExcluded(S)) continue;
+			if (inFrame(S) || nearExcluded(S)) {
+				why.frame++;
+				continue;
+			}
 			const floor = deps.name(vec3(S.x, S.y - 1, S.z));
-			if (!deps.isSolid(floor) || deps.isLava(floor)) continue;
-			if (!deps.isAir(deps.name(S)) || !deps.isAir(deps.name(vec3(S.x, S.y + 1, S.z)))) continue;
+			if (!deps.isSolid(floor) || deps.isLava(floor)) {
+				why.floor++;
+				continue;
+			}
+			if (!deps.isAir(deps.name(S)) || !deps.isAir(deps.name(vec3(S.x, S.y + 1, S.z)))) {
+				why.body++;
+				continue;
+			}
 			const targets = targetsFor(deps, S, d);
 			if (targets.length) out.push({ S, d, targets });
+			else why.noTarget++;
 		}
 	}
 	const bp = bot.entity.position;
@@ -152,7 +171,7 @@ export const stationRefill = async (
 	for (let site = 0; site < 3 && !opts.enough(); site++) {
 		const st = candidateStands(bot, deps, opts.frame, excluded)[0];
 		if (!st) {
-			logEvent("cast", "station_none", `no stand with a target (site ${site}, excluded ${excluded.length})`, bot.entity.position);
+			logEvent("cast", "station_none", `no stand with a target (site ${site}, excluded ${excluded.length}) ${JSON.stringify(why)}`, bot.entity.position);
 			break;
 		}
 		const { S, d } = st;
