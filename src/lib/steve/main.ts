@@ -695,16 +695,34 @@ const runRace = async (count: number, timeoutMs: number) => {
 				for (let t = 0; t < 4; t++) {
 					// Cycle 5: onto the motion-blocking heightmap (the region is pregenerated),
 					// not a drop from y200.
+					// The heightmap tp needs the landing chunk loaded (pregeneration released its
+					// slices): forceload it and wait, as the gym does. Race c5: steve-race-808's tp
+					// silently failed, its spawn height (y=85) passed the landing check, and it
+					// played the first 25 minutes at world spawn.
+					await rcon(`forceload add ${sx} ${sz}`).catch(() => "");
+					for (let w = 0; w < 30; w++) {
+						if (/passed/i.test(await rcon(`execute if loaded ${sx} 0 ${sz}`).catch(() => ""))) break;
+						await sleep(1000);
+					}
 					await rcon(`execute positioned ${sx} 0 ${sz} positioned over motion_blocking_no_leaves run tp ${name} ~0.5 ~ ~0.5`);
 					await sleep(3000);
 					let landedY = 200;
+					let landedAway = Number.POSITIVE_INFINITY;
 					try {
 						const m = /\[(-?[\d.]+)d, (-?[\d.]+)d, (-?[\d.]+)d\]/.exec(
 							await rcon(`data get entity ${name} Pos`),
 						);
-						if (m) landedY = parseFloat(m[2]!);
+						if (m) {
+							landedY = parseFloat(m[2]!);
+							landedAway = Math.hypot(parseFloat(m[1]!) - (sx + 0.5), parseFloat(m[3]!) - (sz + 0.5));
+						}
 						sy = Math.floor(landedY);
 					} catch {}
+					await rcon(`forceload remove ${sx} ${sz}`).catch(() => "");
+					if (landedAway > 8) {
+						console.log(`  ${name} tp did not take (${Math.round(landedAway)} from ${sx},${sz}), retrying`);
+						continue;
+					}
 					// Lava under the column: race37 705 dropped from y200 straight into a
 					// lava pool ("tried to swim in lava", death 1). Treat as a bad landing.
 					let inLava = false;
