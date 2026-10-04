@@ -6,6 +6,13 @@
 import { getPickaxeTier } from "./state.ts";
 import type { GameState, Step, StepResult } from "./types.ts";
 
+// Cycle 4 (decision 5): the race kit carries lava — 3 buckets (two for lava, one for
+// water) so the cast front-loads lava. Iron need = 3 buckets × 3 + flint&steel 1.
+export const KIT_BUCKETS = 3;
+export const IRON_NEED = KIT_BUCKETS * 3 + 1;
+const kitBuckets = (s: GameState): number =>
+	s.inventory.buckets + s.inventory.waterBuckets + s.inventory.lavaBuckets;
+
 // Re-export types for convenience
 export type { Step, StepResult };
 
@@ -61,7 +68,7 @@ export const steps: readonly Step[] = [
 			// 2 buckets + 2 ingots, spent 4+ min on Gather Wood from y28).
 			// …but only while a stone pickaxe can still be re-crafted (race46 743: the
 			// pick wore out, 0 planks, no table → 'Need crafting table' every 3s forever).
-			(s.inventory.buckets + s.inventory.waterBuckets >= 2 &&
+			(kitBuckets(s) >= KIT_BUCKETS &&
 				(s.equipment.hasCraftingTable || s.inventory.planks >= 4)) ||
 			s.inventory.logs >= 5 ||
 			s.inventory.planks >= 20 ||
@@ -106,7 +113,7 @@ export const steps: readonly Step[] = [
 				// 8 ingots + 1 reclaimed raw_iron + 6 planks → an 85-block climb for
 				// firewood) doesn't count either.
 				(s.inventory.ironOre === 0 ||
-					s.inventory.ironIngots >= 8 ||
+					s.inventory.ironIngots >= IRON_NEED ||
 					s.inventory.coal >= 1 ||
 					s.inventory.planks >= 8 ||
 					s.inventory.logs >= 2) &&
@@ -251,12 +258,12 @@ export const steps: readonly Step[] = [
 		// 16 keeps a ~10-plank reserve for the table + tools after wood-smelting.
 		isComplete: (s) =>
 			s.inventory.coal >= 6 ||
-			s.inventory.ironIngots >= 7 ||
+			s.inventory.ironIngots >= IRON_NEED ||
 			s.inventory.planks >= 16 ||
 			// Bucket kit already crafted → nothing left to smelt, coal is dead weight.
 			// Race 606 had 2 buckets + 2 ingots (< 7) and spent 6 min relocate-looping
 			// on Mine Coal instead of going to fill water.
-			s.inventory.buckets + s.inventory.waterBuckets >= 2 ||
+			kitBuckets(s) >= KIT_BUCKETS ||
 			// READY TO SMELT → stop mining coal and go smelt with wood. Without this, a bot
 			// whose plank count dips below 16 (after crafting a table/tools) re-triggers
 			// Mine Coal, which relocate-LOOPS on sparse ore ("Relocated toward X,Y" forever)
@@ -290,20 +297,20 @@ export const steps: readonly Step[] = [
 		isComplete: (s) =>
 			s.inventory.ironOre +
 				s.inventory.ironIngots +
-				(s.inventory.buckets + s.inventory.waterBuckets) * 3 +
+				kitBuckets(s) * 3 +
 				(s.inventory.flintAndSteel >= 1 ? 1 : 0) >=
-			7,
+			IRON_NEED,
 		execute: async (bot, _state) => {
 			const { mineBlock } = await import("./tasks/mining/main.ts");
 			// Only the iron still MISSING from the kit — the band loop otherwise mines
 			// until 8 loose raw_iron (race28 669 went back to y24 after buckets + flint
 			// and steel were already crafted).
 			const kit =
-				(_state.inventory.buckets + _state.inventory.waterBuckets) * 3 +
+				kitBuckets(_state) * 3 +
 				(_state.inventory.flintAndSteel >= 1 ? 1 : 0);
 			// 7 = 2 buckets (6) + flint&steel (1). race39 712 sat 20 min in a flooded
 			// band hunting an 8th ore it never needed.
-			const need = 7 - kit - _state.inventory.ironIngots;
+			const need = IRON_NEED - kit - _state.inventory.ironIngots;
 			if (need <= 0) return { success: true, message: "Iron kit already complete" };
 			return mineBlock(bot, "iron_ore", Math.max(1, need));
 		},
@@ -321,11 +328,11 @@ export const steps: readonly Step[] = [
 		// spent ingots on buckets, doesn't loop back to re-smelt iron it no longer has.
 		isComplete: (s) =>
 			s.inventory.ironIngots +
-				(s.inventory.buckets + s.inventory.waterBuckets) * 3 >=
-			7,
+				kitBuckets(s) * 3 >=
+			IRON_NEED,
 		execute: async (bot, _state) => {
 			const { smeltItems } = await import("./tasks/smelt/main.ts");
-			return smeltItems(bot, "raw_iron", 8);
+			return smeltItems(bot, "raw_iron", IRON_NEED);
 		},
 	},
 
@@ -355,12 +362,16 @@ export const steps: readonly Step[] = [
 		name: "Craft Buckets",
 		priority: 14,
 		canExecute: (s) => s.inventory.ironIngots >= 3,
-		isComplete: (s) => s.inventory.buckets + s.inventory.waterBuckets >= 2,
-		execute: async (bot, _state) => {
+		isComplete: (s) => kitBuckets(s) >= KIT_BUCKETS,
+		execute: async (bot, state) => {
 			const { craftBucket } = await import("./tasks/craft/main.ts");
-			const r1 = await craftBucket(bot);
-			if (!r1.success) return r1;
-			return craftBucket(bot);
+			// Craft up to the kit size (3), one at a time while ingots last.
+			let r: StepResult = { success: false, message: "no bucket crafted" };
+			for (let have = kitBuckets(state); have < KIT_BUCKETS; have++) {
+				r = await craftBucket(bot);
+				if (!r.success) return r;
+			}
+			return r;
 		},
 	},
 
@@ -419,14 +430,11 @@ export const steps: readonly Step[] = [
 			s.world.dimension === "overworld",
 		isComplete: (s) => s.world.portalBuilt,
 		execute: async (bot, _state) => {
-			const { prepareCastSite, buildPortalByCasting } = await import(
-				"./tasks/portal/cast.ts"
-			);
-			// Clear a flat site next to a lava pool + fill the lava bucket, then
-			// cast the 10-obsidian frame and light it (no diamond, no cheats).
-			const prep = await prepareCastSite(bot);
-			if (!prep.success) return prep;
-			return buildPortalByCasting(bot);
+			const { castAttempt } = await import("./tasks/portal/attempt.ts");
+			// Clear a site next to a lava pool, then cast the 10-obsidian frame and light it
+			// (no diamond, no cheats) — one guarded attempt: 900 s budget, stall detector,
+			// death ends it (cycle 4 Part 6). Writes a portal_cast row to the event log.
+			return castAttempt(bot, { budgetMs: 900_000, source: "race" });
 		},
 	},
 

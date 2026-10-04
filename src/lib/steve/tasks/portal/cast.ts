@@ -25,6 +25,8 @@ import {
 	walkToXZ,
 } from "../../lib/bot-utils.ts";
 import { logEvent, setPhase } from "../../lib/logger.ts";
+import { setTarget } from "../../lib/progress.ts";
+import { param } from "../../ml/bandit.ts";
 import { ensurePickaxe } from "../mining/main.ts";
 import type { Block, StepResult } from "../../types.ts";
 
@@ -1108,6 +1110,11 @@ const fillBucket = async (
 /** The cast site prepareCastSite cleared (per bot): the frame must be built
  *  exactly there, or the 294-cell chamber was dug around the wrong volume. */
 const siteAnchor = new WeakMap<Bot, Vec3>();
+/** Forget the cast site (cycle 4: after a death the bot re-sites from its respawn and
+ *  never walks back to a site far away — n19-2 walked 9,220 blocks toward a dead one). */
+export const forgetSite = (bot: Bot): void => {
+	siteAnchor.delete(bot);
+};
 // Set when the bot dies during a cast (gym n1-2: died 80s into the cast, respawned at
 // world spawn and castObsidianAt kept "reassessing" from 13,000 blocks away for 23
 // minutes). Every cast loop checks it and ends the step instead. One listener per bot.
@@ -1859,7 +1866,29 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 	// castObsidianAt skips cells that are already obsidian.
 	{
 		const prev = siteAnchor.get(bot);
-		if (prev && distance(bot.entity.position, offset(prev, 0.5, 0, 0.5)) <= 16) {
+		const far = prev ? distance(bot.entity.position, offset(prev, 0.5, 0, 0.5)) : 0;
+		// Beyond 200 blocks (a respawn at world spawn) the site is dropped and the bot re-sites.
+		if (prev && far > 200) {
+			logEvent("cast", "site_dropped", `${prev.x},${prev.y},${prev.z} is ${Math.round(far)} away — re-siting`);
+			siteAnchor.delete(bot);
+		}
+		// Within 200 (after a death the bot respawns near its landing): walk back in legs.
+		if (prev && far > 16 && far <= 200) {
+			setPhase("lava_fill");
+			for (let k = 0; k < 10; k++) {
+				const q = bot.entity.position;
+				const h = Math.hypot(prev.x + 0.5 - q.x, prev.z + 0.5 - q.z);
+				if (h <= 12) break;
+				const step = Math.min(24, h);
+				const wx = Math.floor(q.x + ((prev.x + 0.5 - q.x) / h) * step);
+				const wz = Math.floor(q.z + ((prev.z + 0.5 - q.z) / h) * step);
+				const wy = h <= 30 ? prev.y : surfaceYAt(bot, wx, wz);
+				await goTo(bot, vec3(wx, wy, wz), { range: 2, timeout: 20000 }).catch(() => {});
+				if (Math.hypot(bot.entity.position.x - q.x, bot.entity.position.z - q.z) < 1) break;
+			}
+			logEvent("cast", "site_return", `${prev.x},${prev.y},${prev.z} was ${Math.round(far)} away, now ${distance(bot.entity.position, offset(prev, 0.5, 0, 0.5)).toFixed(1)}`, bot.entity.position);
+		}
+		if (siteAnchor.get(bot) && distance(bot.entity.position, offset(prev!, 0.5, 0, 0.5)) <= 16) {
 			let obs = 0;
 			for (let x = 0; x <= 3; x++)
 				for (let y = 0; y <= 4; y++)
@@ -1910,6 +1939,8 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 		lava = await stripMineForLava(bot, digDownVertical, deadline);
 	}
 	if (!lava) return { success: false, message: "No lava pool found to cast at" };
+	// Cycle 4 Part 6: closing distance to the pool is this sub-phase's progress metric.
+	setTarget(lava);
 
 	// Lava the bot can bucket from where it stands: exposed, within 6 horizontally
 	// and 4 vertically. Anything else is "seen" but not reachable yet.
@@ -2162,10 +2193,32 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 		const movedZ = lavaH() < 3.5 ? await tunnelToward(bot, 0, az, 6).catch(() => 0) : 0;
 		logEvent("cast", "site_close", `tunnelled x${movedX} z${movedZ} away from the lava — now ${lavaH().toFixed(1)}`);
 	}
+	// Cycle 4 §7.1: anchor at the lava's LEVEL — feet at lava surface + 1, never above.
+	// n16-2, n17-1, n21-1 anchored 12-31 above the pool (the range rule was horizontal
+	// only) and every refill stance then sat at pool level, unreachable. Too high and far
+	// enough off the pool → dig straight down here to lava+1 (digDownVertical refuses lava
+	// or a deep drop below); too low → staircase up. Still off level → do not anchor.
+	const dyMax = param("anchor_dy_max", 3);
+	const maxD = param("anchor_max_d", 12);
+	const dy = (): number => Math.floor(bot.entity.position.y) - (lava.y + 1);
+	if (Math.abs(dy()) > dyMax && lavaH() >= 3.5 && lavaH() <= maxD) {
+		const before = dy();
+		if (before > 0) {
+			const { digDownVertical } = await import("../mining/main.ts");
+			await digDownVertical(bot, lava.y + 1, Math.min(deadline, Date.now() + 120000), undefined, 30000);
+		} else {
+			await digStaircaseUp(bot, lava.y + 1, Math.min(deadline, Date.now() + 120000));
+		}
+		logEvent("cast", "site_level", `feet ${before} → ${dy()} from lava+1 (max ${dyMax}), ${lavaH().toFixed(1)} from lava`, bot.entity.position);
+	}
 	const gapH = lavaH();
-	if (gapH < 3.5 || gapH > 12 || bot.entity.isInWater) {
+	if (gapH < 3.5 || gapH > maxD || bot.entity.isInWater) {
 		logEvent("cast", "site_out_of_range", `bot ${gapH.toFixed(1)} from lava ${lava.x},${lava.y},${lava.z} — not anchoring`);
-		return { success: false, message: `Cast site ${gapH.toFixed(0)} from its lava (need 3.5-12) — retry` };
+		return { success: false, message: `Cast site ${gapH.toFixed(0)} from its lava (need 3.5-${maxD}) — retry` };
+	}
+	if (Math.abs(dy()) > dyMax) {
+		logEvent("cast", "site_off_level", `feet ${dy()} from lava+1 (max ${dyMax}) at ${Math.floor(bot.entity.position.y)} for lava y=${lava.y} — not anchoring`);
+		return { success: false, message: `Cast site ${dy()} off the lava's level (max ${dyMax}) — retry` };
 	}
 	const bx = Math.floor(bot.entity.position.x);
 	const by = Math.floor(bot.entity.position.y);
@@ -2176,6 +2229,7 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 		`${bx},${by},${bz} lava=${lava.x},${lava.y},${lava.z}`,
 	);
 	siteAnchor.set(bot, vec3(bx, by, bz));
+	setTarget(null);
 	setPhase("chamber");
 
 	// 3. Clear a flat chamber (frame box + scaffold) and lay a solid floor.

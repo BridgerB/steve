@@ -41,6 +41,7 @@ const liveEpoch = new WeakMap<Bot, number>();
 export const beginTaskEpoch = (bot: Bot, epoch: number): void => {
 	liveEpoch.set(bot, epoch);
 };
+export const currentTaskEpoch = (bot: Bot): number | undefined => liveEpoch.get(bot);
 export const throwIfPreempted = (): void => {
 	const s = taskScope.getStore();
 	if (!s) return;

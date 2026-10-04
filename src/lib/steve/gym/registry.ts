@@ -23,7 +23,13 @@ import { gatherFood } from "../tasks/food/main.ts";
 import { gatherWood } from "../tasks/gather-wood/main.ts";
 import { mineBlock } from "../tasks/mining/main.ts";
 import { smeltItems } from "../tasks/smelt/main.ts";
-import { buildPortalByCasting, prepareCastSite } from "../tasks/portal/cast.ts";
+import { castAttempt } from "../tasks/portal/attempt.ts";
+import { bedDragon } from "../tasks/end/bed.ts";
+
+// Dragon gym (cycle 4 Part 8): the setup's RCON, kept for the run's truth check.
+let endRcon: ((cmd: string) => Promise<string>) | null = null;
+let dragonDead = false;
+const inEnd = (cmd: string) => `execute in minecraft:the_end run ${cmd}`;
 import { enterPortal } from "../tasks/portal/enter.ts";
 import { countInventoryItems } from "../lib/test-utils.ts";
 import { setPhase } from "../lib/logger.ts";
@@ -49,6 +55,8 @@ export interface GymStep {
 		rcon: (cmd: string) => Promise<string>,
 		at: { x: number; y: number; z: number },
 	) => Promise<void>;
+	/** Optional RCON cleanup after the run (e.g. release forceloads the setup added). */
+	teardown?: (rcon: (cmd: string) => Promise<string>) => Promise<void>;
 	timeoutMs: number;
 }
 
@@ -56,6 +64,42 @@ const has = (bot: Bot, pat: string, n: number): boolean =>
 	countInventoryItems(bot, pat) >= n;
 
 export const GYM_STEPS: GymStep[] = [
+	{
+		slug: "dragon",
+		label: "Kill the Dragon (beds)",
+		order: 40,
+		// Skill 12 starts with the crystals gone. Kit per Part 8.
+		prereq: ["white_bed 6", "obsidian 32", "iron_sword 1", "cooked_beef 16", "cobblestone 64", "cobblestone 64", "water_bucket 1"],
+		setup: async (b, rcon) => {
+			endRcon = rcon;
+			dragonDead = false;
+			await rcon(inEnd("forceload add -64 -64 64 64"));
+			for (let i = 0; i < 60; i++) {
+				if (/passed/i.test(await rcon("execute in minecraft:the_end if loaded 0 0 0").catch(() => ""))) break;
+				await new Promise((r) => setTimeout(r, 1000));
+			}
+			await rcon(inEnd("kill @e[type=minecraft:end_crystal]")).catch(() => "");
+			const alive = /passed/i.test(await rcon("execute in minecraft:the_end if entity @e[type=minecraft:ender_dragon]").catch(() => ""));
+			if (!alive) await rcon(inEnd("summon minecraft:ender_dragon 0 100 0")).catch(() => "");
+			// Stand on the end stone 8 south of the fountain, on the heightmap.
+			await rcon(`execute in minecraft:the_end positioned 0 0 8 positioned over motion_blocking_no_leaves run tp ${b.username} ~0.5 ~ ~0.5 180 0`);
+			await rcon(`effect clear ${b.username}`).catch(() => "");
+			await new Promise((r) => setTimeout(r, 3000));
+		},
+		run: async (b) => {
+			const res = await bedDragon(b, 900_000);
+			const alive = endRcon
+				? /passed/i.test(await endRcon("execute in minecraft:the_end if entity @e[type=minecraft:ender_dragon]").catch(() => "passed"))
+				: true;
+			dragonDead = !alive;
+			return { success: dragonDead, message: `${dragonDead ? "DRAGON DEAD" : "dragon alive"} — ${res.message}` };
+		},
+		pass: () => dragonDead,
+		teardown: async (rcon) => {
+			await rcon(inEnd("forceload remove -64 -64 64 64")).catch(() => "");
+		},
+		timeoutMs: 960_000,
+	},
 	{ slug: "gather-wood", label: "Gather Wood", order: 1, prereq: [], run: (b) => gatherWood(b, 4), pass: (b) => has(b, "_log", 4), timeoutMs: 90000 },
 	{ slug: "craft-planks", label: "Craft Planks", order: 2, prereq: ["oak_log 8"], run: (b) => craftPlanks(b), pass: (b) => has(b, "_planks", 4), timeoutMs: 25000 },
 	{ slug: "craft-table", label: "Craft Crafting Table", order: 3, prereq: ["oak_planks 8"], run: (b) => craftCraftingTable(b), pass: (b) => has(b, "crafting_table", 1), timeoutMs: 25000 },
@@ -70,7 +114,7 @@ export const GYM_STEPS: GymStep[] = [
 	{ slug: "smelt-iron", label: "Smelt Iron", order: 12, prereq: ["raw_iron 8", "coal 8", "furnace 1"], run: (b) => smeltItems(b, "raw_iron", 8), pass: (b) => has(b, "iron_ingot", 3), timeoutMs: 120000 },
 	{ slug: "craft-iron-pickaxe", label: "Craft Iron Pickaxe", order: 13, prereq: ["iron_ingot 3", "stick 2", "crafting_table 1"], run: (b) => craftIronPickaxe(b), pass: (b) => has(b, "iron_pickaxe", 1), timeoutMs: 40000 },
 	{ slug: "craft-buckets", label: "Craft Buckets", order: 14, prereq: ["iron_ingot 6", "crafting_table 1"], run: (b) => craftBucket(b), pass: (b) => has(b, "bucket", 1), timeoutMs: 40000 },
-	{ slug: "fill-water", label: "Fill Water Buckets", order: 15, prereq: ["bucket 2"], run: (b) => fillWaterBucket(b), pass: (b) => has(b, "water_bucket", 1), timeoutMs: 360000 },
+	{ slug: "fill-water", label: "Fill Water Buckets", order: 15, prereq: ["bucket 3"], run: (b) => fillWaterBucket(b), pass: (b) => has(b, "water_bucket", 1), timeoutMs: 360000 },
 	{ slug: "gather-food", label: "Gather Food", order: 16, prereq: ["stone_sword 1"], run: (b) => gatherFood(b, 3), pass: (b) => countInventoryItems(b, "beef") + countInventoryItems(b, "mutton") + countInventoryItems(b, "chicken") + countInventoryItems(b, "porkchop") >= 1, timeoutMs: 90000 },
 	{ slug: "flint-and-steel", label: "Get Flint and Steel", order: 17, prereq: ["iron_ingot 1", "crafting_table 1", "stone_pickaxe 1", "cobblestone 32"], run: (b) => craftFlintAndSteel(b), pass: (b) => has(b, "flint_and_steel", 1), timeoutMs: 120000 },
 	{
@@ -88,7 +132,7 @@ export const GYM_STEPS: GymStep[] = [
 		// mid-descent and confound the lava-find/cast result under test.
 		prereq: [
 			"water_bucket 1",
-			"bucket 1",
+			"bucket 2",
 			"flint_and_steel 1",
 			"dirt 64",
 			"iron_pickaxe 1",
@@ -140,11 +184,9 @@ export const GYM_STEPS: GymStep[] = [
 				`fill ${lx - 4} ${by - 2} ${lz - 4} ${lx + 4} ${by - 1} ${lz + 4} lava`,
 			).catch(() => {});
 		},
-		run: async (b) => {
-			const prep = await prepareCastSite(b);
-			if (!prep.success) return prep;
-			return buildPortalByCasting(b);
-		},
+		// Same guarded attempt as the race and the natural gym (stall detector, death
+		// ends it, one portal_cast row), with the arena's old 30-min budget.
+		run: (b) => castAttempt(b, { budgetMs: 1_800_000, source: "gym" }),
 		pass: (b) =>
 			!!b.findBlock?.({
 				matching: (n: string) => n === "nether_portal",
@@ -166,48 +208,75 @@ export const GYM_STEPS: GymStep[] = [
 		order: 20,
 		prereq: [
 			"stone_pickaxe 2",
-			"bucket 1",
+			"bucket 2",
 			"water_bucket 1",
 			"flint_and_steel 1",
 			"cobblestone 64",
 			"oak_planks 16",
 		],
-		// The race re-dispatches a failed step and runs escape_water (priority 0) first
-		// whenever the bot is in water; many portal-step returns ("in water — yielding",
-		// "lava not exposed (1/3) — retunnel") are designed as "retry next dispatch".
-		// n1 ran a SINGLE dispatch and scored those as losses. Mirror the race: re-dispatch
-		// until success or the 900 s total budget is spent, escaping water in between.
+		// Cycle-4 budget semantics (decision 1): the race gives the portal step 900 s PER
+		// DISPATCH and re-dispatches it (escape_water first when wet); R5 keeps the frame
+		// across dispatches. So: 900 s per dispatch, re-dispatched, 2700 s TOTAL including
+		// the walk into the portal; the primary metric is time_to_portal_s (first dispatch
+		// → standing in the Nether). A run that dies 5 times is over.
 		run: async (b) => {
-			const deadline = Date.now() + 900_000;
+			const t0 = Date.now();
+			const total = 2_700_000;
+			const perDispatch = 900_000;
 			let res: StepResult = { success: false, message: "Build Nether Portal never dispatched" };
 			let dispatches = 0;
-			while (Date.now() < deadline) {
-				if (b.entity?.isInWater) {
-					const { escapeWater } = await import("../lib/bot-utils.ts");
-					await escapeWater(b).catch(() => false);
+			let deaths = 0;
+			const onDeath = () => {
+				deaths++;
+			};
+			b.on("death", onDeath);
+			const extra = (): Record<string, unknown> => ({
+				dispatches,
+				deaths,
+				elapsed_s: Math.round((Date.now() - t0) / 1000),
+			});
+			try {
+				while (Date.now() - t0 < total && deaths < 5) {
+					if (b.entity?.isInWater) {
+						const { escapeWater } = await import("../lib/bot-utils.ts");
+						await escapeWater(b).catch(() => false);
+						await new Promise((r) => setTimeout(r, 1000));
+						continue;
+					}
+					dispatches++;
+					// Each dispatch runs guarded (cycle 4 Part 6): its own 900 s budget (or what is
+					// left of the 2700 s), a stall detector on the ratcheted progress, and death
+					// ending the dispatch (the site is forgotten; the next dispatch re-sites).
+					const cap = Math.min(perDispatch, total - (Date.now() - t0));
+					res = await castAttempt(b, { budgetMs: cap, source: "gym" });
+					if (res.success) break;
 					await new Promise((r) => setTimeout(r, 1000));
-					continue;
 				}
-				dispatches++;
-				const cast = (async (): Promise<StepResult> => {
-					const prep = await prepareCastSite(b);
-					if (!prep.success) return prep;
-					return buildPortalByCasting(b);
-				})();
-				const left = deadline - Date.now();
-				const budget = new Promise<StepResult>((r) =>
-					setTimeout(() => r({ success: false, message: "Build Nether Portal timed out (900s)" }), left),
-				);
-				res = await Promise.race([cast, budget]);
-				if (res.success) break;
-				await new Promise((r) => setTimeout(r, 1000));
+				if (!res.success) {
+					const why = deaths >= 5 ? "died 5 times" : res.message;
+					return { success: false, message: `${why} [${dispatches} dispatches]`, extra: extra() } as StepResult;
+				}
+				setPhase("enter");
+				const left = total - (Date.now() - t0);
+				let timer: ReturnType<typeof setTimeout> | undefined;
+				const enter = await Promise.race([
+					enterPortal(b),
+					new Promise<StepResult>((r) => {
+						timer = setTimeout(() => r({ success: false, message: "enter timed out (2700s total)" }), Math.max(1000, left));
+					}),
+				]);
+				clearTimeout(timer);
+				const inNether = String(b.game?.dimension ?? "").includes("nether");
+				return {
+					...enter,
+					extra: { ...extra(), ...(inNether ? { time_to_portal_s: Math.round((Date.now() - t0) / 1000) } : {}) },
+				} as StepResult;
+			} finally {
+				b.removeListener?.("death", onDeath);
 			}
-			if (!res.success) return { ...res, message: `${res.message} [${dispatches} dispatches]` };
-			setPhase("enter");
-			return enterPortal(b);
 		},
 		pass: (b) => String(b.game?.dimension ?? "").includes("nether"),
-		timeoutMs: 1_000_000,
+		timeoutMs: 2_800_000,
 	},
 	{
 		slug: "enter-nether",

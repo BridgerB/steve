@@ -132,8 +132,23 @@ let lastEvent = "";
 // Sub-phase inside the current step, set by task code at phase boundaries (the
 // cast sets it at every stage) so a silent stall names where it is.
 let phase = "";
+// Listeners (cycle 4): the progress ratchet registers here so the logger needs no
+// import of it (avoids an import cycle through bot-utils).
+const phaseListeners: ((p: string) => void)[] = [];
+const eventListeners: ((category: string, event: string, detail?: string) => void)[] = [];
+export const onPhase = (f: (p: string) => void): void => {
+	phaseListeners.push(f);
+};
+export const onEvent = (f: (category: string, event: string, detail?: string) => void): void => {
+	eventListeners.push(f);
+};
 export const setPhase = (p: string): void => {
 	phase = p;
+	for (const f of phaseListeners) {
+		try {
+			f(p);
+		} catch {}
+	}
 };
 export const getLastActivity = (): string => `step=${lastStep} phase=${phase} last=${lastEvent}`;
 
@@ -143,6 +158,11 @@ export const logEvent = (
 	detail?: string,
 	pos?: { x: number; y: number; z: number },
 ): void => {
+	for (const f of eventListeners) {
+		try {
+			f(category, event, detail);
+		} catch {}
+	}
 	if (category === "step" && event === "start") lastStep = (detail ?? "").slice(0, 40);
 	else if (category !== "perf" && category !== "step" && category !== "hb")
 		lastEvent = `${category}/${event} ${(detail ?? "").slice(0, 60)}`;
