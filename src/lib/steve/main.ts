@@ -549,15 +549,20 @@ const runRace = async (count: number, timeoutMs: number) => {
 	// there — land AND trees, like a normal survival spawn. (spreadplayers was
 	// tried first: it fails outright over water and its wide-range search stalls
 	// the RCON connection.)
-	let baseX = FX;
-	let baseZ = FZ;
+	// RACE_BASE="x,z" starts the race search from a chosen cell instead of the grid
+	// (cycle 5: serial 808 mapped to the clear-cut core cell -3936,3968).
+	const override = (process.env.RACE_BASE ?? "").split(",").map(Number);
+	const GX = override.length === 2 && override.every(Number.isFinite) ? override[0]! : FX;
+	const GZ = override.length === 2 && override.every(Number.isFinite) ? override[1]! : FZ;
+	let baseX = GX;
+	let baseZ = GZ;
 	try {
-		const reply = await rcon(`execute positioned ${FX} 64 ${FZ} run locate biome minecraft:forest`);
+		const reply = await rcon(`execute positioned ${GX} 64 ${GZ} run locate biome minecraft:forest`);
 		const m = /\[(-?\d+), (?:~|-?\d+), (-?\d+)\]/.exec(reply);
 		if (m) {
 			baseX = parseInt(m[1]!, 10);
 			baseZ = parseInt(m[2]!, 10);
-			console.log(`  spawn: nearest forest to grid cell (${FX},${FZ}) is (${baseX},${baseZ})`);
+			console.log(`  spawn: nearest forest to cell (${GX},${GZ}) is (${baseX},${baseZ})`);
 		} else {
 			console.log(`  spawn: locate biome gave no coords (${reply.slice(0, 80)}) — using grid cell`);
 		}
