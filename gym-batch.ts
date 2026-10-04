@@ -14,6 +14,7 @@ import { spawn, execSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { connect } from "./src/lib/steve/lib/rcon.ts";
+import { runMetrics, type TelemetryEvent } from "./src/lib/steve/ml/screen.ts";
 import { fmtRate, quantile } from "./src/lib/steve/ml/stats.ts";
 import { writeAttempt } from "./src/lib/steve/lib/attempts.ts";
 
@@ -63,6 +64,8 @@ for (const col of [
 	// cycle 4: replayable trials + the primary natural-cast metric
 	"seed TEXT", "landing_x INTEGER", "landing_z INTEGER", "land_y INTEGER",
 	"time_to_portal_s REAL", "dispatches INTEGER", "deaths INTEGER",
+	// cycle 5: screening metrics (continuous) + per-fix diagnostic counters + tick time
+	"best_frame INTEGER", "block_gap_med_s REAL", "counters TEXT", "game_ticks INTEGER", "tick_rate REAL",
 ]) {
 	try {
 		db.exec(`ALTER TABLE runs ADD COLUMN ${col}`);
@@ -182,7 +185,7 @@ for (let i = 1; i <= RUNS; i++) {
 				y?: number;
 				seed?: string;
 				landing?: [number, number];
-				extra?: { time_to_portal_s?: number; dispatches?: number; deaths?: number };
+				extra?: { time_to_portal_s?: number; dispatches?: number; deaths?: number; game_ticks?: number; tick_rate?: number; harness_respawns?: number };
 			})
 		: null;
 	const hb = q(`SELECT detail FROM events WHERE race_id='${esc(rid)}' AND category='hb' AND detail LIKE '%phase=%' ORDER BY id DESC LIMIT 1`)[0];
@@ -199,13 +202,19 @@ for (let i = 1; i <= RUNS; i++) {
 	// obsidian cast and was scored a pass. A cast pass needs the bot's own 10 obsidian.
 	const castOk = (SLUG !== "build-nether-portal" && SLUG !== "portal-natural") || obsidian >= 10;
 	const outcome = res?.pass && castOk ? "pass" : /^HARNESS/.test(message) ? "harness" : disc ? "disconnect" : deathCause ? "death" : /timeout/i.test(message) ? "timeout" : "fail";
+	const metrics = runMetrics(
+		q(`SELECT ts, category, event, detail FROM events WHERE race_id='${esc(rid)}' AND category IN ('cast','death') ORDER BY ts`) as unknown as TelemetryEvent[],
+	);
 	const lastEv = lastCast ? `${lastCast.event} ${String(lastCast.detail ?? "").slice(0, 60)}` : "";
-	db.prepare(`INSERT OR REPLACE INTO runs (run_id,batch,slug,commit_hash,started_at,seconds,deepest_phase,last_cast_event,obsidian,outcome,death_cause,message,mobs,note,forceloads,mem_avail_mb,tick_ms,tick_p99_ms,seed,landing_x,landing_z,land_y,time_to_portal_s,dispatches,deaths) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+	db.prepare(`INSERT OR REPLACE INTO runs (run_id,batch,slug,commit_hash,started_at,seconds,deepest_phase,last_cast_event,obsidian,outcome,death_cause,message,mobs,note,forceloads,mem_avail_mb,tick_ms,tick_p99_ms,seed,landing_x,landing_z,land_y,time_to_portal_s,dispatches,deaths,best_frame,block_gap_med_s,counters,game_ticks,tick_rate) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
 		runId, BATCH, SLUG, commit, startedAt, seconds, phase, lastEv, obsidian, outcome, deathCause, message.slice(0, 300), MOBS, "",
 		h.forceloads, memMb, h.tickMs, h.p99,
 		res?.seed ?? null, res?.landing?.[0] ?? null, res?.landing?.[1] ?? null, res?.y ?? null,
 		outcome === "pass" ? (res?.extra?.time_to_portal_s ?? null) : null,
 		res?.extra?.dispatches ?? null, res?.extra?.deaths ?? null,
+		metrics.best_frame, metrics.block_gap_med_s,
+		JSON.stringify({ ...metrics.counters, harness_respawns: res?.extra?.harness_respawns ?? 0 }),
+		res?.extra?.game_ticks ?? null, res?.extra?.tick_rate ?? null,
 	);
 	writeAttempt({
 		run_id: rid,
@@ -233,15 +242,23 @@ for (let i = 1; i <= RUNS; i++) {
 			mem_avail_mb: memMb,
 			tick_ms: h.tickMs,
 			harness: outcome === "harness" || outcome === "disconnect",
+			best_frame: metrics.best_frame,
+			lava_deaths: metrics.lava_deaths,
+			block_gap_med_s: metrics.block_gap_med_s,
+			game_ticks: res?.extra?.game_ticks ?? null,
+			tick_rate: res?.extra?.tick_rate ?? null,
+			harness_respawns: res?.extra?.harness_respawns ?? 0,
+			...Object.fromEntries(Object.entries(metrics.counters).map(([k, v]) => [`n_${k}`, v])),
 		},
 	});
+	console.log(`  best_frame=${metrics.best_frame} deaths=${metrics.deaths} gap_med=${metrics.block_gap_med_s ?? "-"} counters=${JSON.stringify(Object.fromEntries(Object.entries(metrics.counters).filter(([, v]) => v)))}`);
 	console.log(`${runId}  ${outcome.padEnd(7)} ${seconds.toFixed(0).padStart(4)}s  obsidian=${obsidian}  phase='${phase}'  last='${lastEv}'  ${message.slice(0, 80)}`);
 }
 
 // Summary with honest numbers (cycle 4 Part 5.1): every rate with its Wilson 95%
 // interval over the runs that measured the step (harness rows excluded and counted).
-const rows = db.prepare(`SELECT outcome, seconds, deepest_phase, death_cause, obsidian, time_to_portal_s FROM runs WHERE batch=?`).all(BATCH) as {
-	outcome: string; seconds: number; deepest_phase: string; death_cause: string; obsidian: number; time_to_portal_s: number | null;
+const rows = db.prepare(`SELECT outcome, seconds, deepest_phase, death_cause, obsidian, time_to_portal_s, best_frame, deaths FROM runs WHERE batch=?`).all(BATCH) as {
+	outcome: string; seconds: number; deepest_phase: string; death_cause: string; obsidian: number; time_to_portal_s: number | null; best_frame: number | null; deaths: number | null;
 }[];
 const real = rows.filter((r) => r.outcome !== "harness" && r.outcome !== "disconnect");
 const passN = real.filter((r) => r.outcome === "pass").length;
@@ -250,6 +267,11 @@ const passSecs = real.filter((r) => r.outcome === "pass").map((r) => r.seconds);
 const fmtT = (xs: number[]) => (xs.length ? `median ${quantile(xs, 0.5).toFixed(0)} s, p80 ${quantile(xs, 0.8).toFixed(0)} s (n=${xs.length})` : "n=0");
 console.log(`\nSUMMARY ${BATCH} ${SLUG} @${commit} mobs=${MOBS}: pass ${fmtRate(passN, real.length)}; harness/disconnect ${rows.length - real.length}`);
 if (ttp.length) console.log(`  time-to-portal: ${fmtT(ttp)}`);
+{
+	const mean = (xs: number[]) => (xs.length ? (xs.reduce((a, b) => a + b, 0) / xs.length).toFixed(2) : "-");
+	const bf = real.map((r) => Number(r.best_frame ?? 0));
+	console.log(`  screening: best_frame median ${bf.length ? quantile(bf, 0.5) : "-"} mean ${mean(bf)}; obsidian mean ${mean(real.map((r) => r.obsidian))}; deaths mean ${mean(real.map((r) => Number(r.deaths ?? 0)))}`);
+}
 console.log(`  pass duration: ${fmtT(passSecs)}`);
 const tally = (key: (r: (typeof rows)[number]) => string, label: string) => {
 	const m = new Map<string, number>();

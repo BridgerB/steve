@@ -131,3 +131,31 @@ export const bootstrapMedianFaster = (
 	for (let i = 0; i < iters; i++) if (resampleMedian(b) < resampleMedian(a)) faster++;
 	return faster / iters;
 };
+
+/**
+ * Bootstrap of the difference in means (cycle 5 screening): resample each group with
+ * replacement and return P(mean B > mean A) plus the 95% interval of mean B − mean A.
+ * Ties count half, so identical groups give 0.5.
+ */
+export const bootstrapMeanDiff = (
+	a: number[],
+	b: number[],
+	iters = 10_000,
+	rng: Rng = rngFrom(3),
+): { pBGreater: number; lo: number; hi: number } => {
+	if (!a.length || !b.length) return { pBGreater: Number.NaN, lo: Number.NaN, hi: Number.NaN };
+	const mean = (xs: number[]) => {
+		let s = 0;
+		for (let i = 0; i < xs.length; i++) s += xs[Math.floor(rng() * xs.length)]!;
+		return s / xs.length;
+	};
+	const diffs: number[] = [];
+	let greater = 0;
+	for (let i = 0; i < iters; i++) {
+		const d = mean(b) - mean(a);
+		diffs.push(d);
+		if (d > 0) greater++;
+		else if (d === 0) greater += 0.5;
+	}
+	return { pBGreater: greater / iters, lo: quantile(diffs, 0.025), hi: quantile(diffs, 0.975) };
+};

@@ -22,3 +22,14 @@ describe("stats", () => {
 		expect(bootstrapMedianFaster([900, 1000, 1100, 1200], [400, 500, 600, 700])).toBeGreaterThan(0.95);
 	});
 });
+
+describe("bootstrapMeanDiff", () => {
+	it("separates clearly different means and not identical ones", async () => {
+		const { bootstrapMeanDiff } = await import("./stats.ts");
+		const hi = bootstrapMeanDiff([1, 2, 1, 2, 1, 2], [7, 8, 9, 8, 7, 9]);
+		expect(hi.pBGreater).toBeGreaterThan(0.99);
+		expect(hi.lo).toBeGreaterThan(4);
+		const same = bootstrapMeanDiff([3, 3, 3], [3, 3, 3]);
+		expect(same.pBGreater).toBe(0.5);
+	});
+});

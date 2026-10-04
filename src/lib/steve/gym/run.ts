@@ -156,12 +156,13 @@ export const runGymStep = async (
 	// obstructed (base2-1 respawned at world spawn 6000 blocks away, into the spawn area
 	// earlier runs left full of frames and spilled lava). A respawn more than 200 from the
 	// landing is moved back onto the landing's heightmap — what a fresh race bot near its
-	// own start would get. Counted in extra.harness_respawns.
+	// own start would get. Counted in extra.harness_respawns. Cycle 5: the respawn must be
+	// within 32 of the landing (was 200); the world-spawn pollution is a harness fact.
 	let harnessRespawns = 0;
 	const onRespawn = () => {
 		setTimeout(() => {
 			const p = bot.entity?.position;
-			if (opts.noTeleport || !p || Math.hypot(p.x - landing[0], p.z - landing[1]) <= 200) return;
+			if (opts.noTeleport || !p || Math.hypot(p.x - landing[0], p.z - landing[1]) <= 32) return;
 			harnessRespawns++;
 			rcon(`execute positioned ${landing[0]} 0 ${landing[1]} positioned over motion_blocking_no_leaves run tp ${name} ~0.5 ~ ~0.5`)
 				.then((r) => log(`[gym:${step.slug}] harness respawn → landing ${landing[0]},${landing[1]}: ${r}`))
@@ -170,6 +171,14 @@ export const runGymStep = async (
 	};
 	(bot as unknown as { on: (e: string, f: () => void) => void }).on("respawn", onRespawn);
 
+	// Game ticks and the server's target tick rate, so every row carries tick and wall
+	// time (cycle 5: the tick-rate experiment).
+	const gameTime = async (): Promise<number | null> => {
+		const m = /(-?\d+)/.exec(await rcon("time query gametime").catch(() => ""));
+		return m ? Number(m[1]) : null;
+	};
+	const tickRate = Number(/Target tick rate: ([\d.]+)/.exec(await rcon("tick query").catch(() => ""))?.[1] ?? NaN);
+	const gt0 = await gameTime();
 	const t0 = Date.now();
 	let message = "";
 	let extra: Record<string, unknown> | undefined;
@@ -188,10 +197,16 @@ export const runGymStep = async (
 
 	let pass = false;
 	try {
-		pass = step.pass(bot);
+		pass = step.truthPass ? await step.truthPass(rcon, name) : step.pass(bot);
 	} catch {
 		pass = false;
 	}
+	const gt1 = await gameTime();
+	extra = {
+		...(extra ?? {}),
+		...(gt0 !== null && gt1 !== null ? { game_ticks: gt1 - gt0 } : {}),
+		...(Number.isFinite(tickRate) ? { tick_rate: tickRate } : {}),
+	};
 
 	const result: GymResult = { pass, durationMs, x: gx, y: gy, z: gz, message, seed, landing, extra };
 	log(`[gym:${step.slug}] ${pass ? "PASS" : "FAIL"} ${(durationMs / 1000).toFixed(1)}s @${gx},${gy},${gz} — ${message}`);
