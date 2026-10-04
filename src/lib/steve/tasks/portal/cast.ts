@@ -693,7 +693,7 @@ const fillBucket = async (
 	const reach = async (feet: Vec3): Promise<boolean> => {
 		const c = vec3(feet.x + 0.5, feet.y, feet.z + 0.5);
 		const gap0 = Math.hypot(bot.entity.position.x - c.x, bot.entity.position.z - c.z);
-		const ok = await lavaSafeMove(bot, feet, { range: 0.6, timeout: 15000, why: `fill_${fluid}` });
+		const ok = await lavaSafeMove(bot, feet, { range: 0.6, timeout: 15000, why: `fill_${fluid}`, besideLava: true });
 		const atY = Math.abs(bot.entity.position.y - feet.y) <= 1.2;
 		logEvent("cast", "fill_reach", `feet ${feet.x},${feet.y},${feet.z} gap=${gap0.toFixed(1)} ok=${ok && atY}`, bot.entity.position);
 		return ok && atY;
