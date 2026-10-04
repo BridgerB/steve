@@ -626,8 +626,23 @@ interface BotMemory {
 	waterHeadingAt: number;
 }
 const botMemory = new WeakMap<Bot, BotMemory>();
+// Where the bot was at the last memory access. A jump of more than 500 blocks between two
+// accesses is a teleport (race placement, gym landing, respawn), and every remembered
+// position belongs to the old place. Race c5: bots joined at world spawn, remembered a
+// table and water there, were teleported ~17,400 blocks to the race base, then walked
+// toward "Couldn't reach water (17336 away)" and "table_far_recraft dist 17425".
+const memoryAt = new WeakMap<Bot, { x: number; z: number }>();
 
 export const getMemory = (bot: Bot): BotMemory => {
+	const p = bot.entity?.position;
+	if (p) {
+		const last = memoryAt.get(bot);
+		if (last && Math.hypot(p.x - last.x, p.z - last.z) > 500 && botMemory.has(bot)) {
+			botMemory.delete(bot);
+			logEvent("memory", "teleport_reset", `moved ${Math.round(Math.hypot(p.x - last.x, p.z - last.z))} blocks since the last memory access — forgetting remembered positions`, p);
+		}
+		memoryAt.set(bot, { x: p.x, z: p.z });
+	}
 	let mem = botMemory.get(bot);
 	if (!mem) {
 		mem = {
