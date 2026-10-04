@@ -941,10 +941,20 @@ export const castObsidianAt = async (
 		const lavaAlready = isLava(getBlock(bot, pos)?.name);
 		if (lavaAlready) {
 			logEvent("cast", "lava_already", `${pos.x},${pos.y},${pos.z} feet=${feetY(bot)} — skipping to the water pour`, bot.entity.position);
+			// s6n-3: the bot stood at the cup's own level (a resumed frame) and left the block
+			// four times in two seconds. Climb onto the +Z wall first: walk to the stance, then
+			// pillar to the pour height (placing the wall under the feet).
 			if (feetY(bot) < pos.y + 1) {
-				logEvent("cast", "lava_unreachable", `${pos.x},${pos.y},${pos.z} feet=${feetY(bot)} below the pour height — leaving this block`);
-				bot.setControlState("sneak", false);
-				return false;
+				const lv = (getBlock(bot, pos) as { properties?: { level?: unknown } } | null)?.properties?.level;
+				const source = lv == null || String(lv) === "0";
+				await lavaSafeMove(bot, vec3(pos.x, baseY, standZ), { range: 1, timeout: 15000, why: "lava_already_stance" });
+				const climbed = Math.abs(bot.entity.position.x - (pos.x + 0.5)) + Math.abs(bot.entity.position.z - (standZ + 0.5)) <= 1.2 && (await pillarUp(bot, pos.y + 1));
+				logEvent("cast", "lava_already_climb", `${pos.x},${pos.y},${pos.z} source=${source} climbed=${climbed} feet=${feetY(bot)}`, bot.entity.position);
+				if (!climbed || feetY(bot) < pos.y + 1) {
+					logEvent("cast", "lava_unreachable", `${pos.x},${pos.y},${pos.z} feet=${feetY(bot)} below the pour height — leaving this block`);
+					bot.setControlState("sneak", false);
+					return false;
+				}
 			}
 			afterLava = "lava";
 			cupState = "SSSSS";
