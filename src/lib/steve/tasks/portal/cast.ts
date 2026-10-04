@@ -972,10 +972,25 @@ export const castObsidianAt = async (
 		// off any perch and routes around blocks to the open floor in front.
 		// Cycle 5 Build A: the stance in front of the cup is near lava — lava_safe_move
 		// (pathfinder with lava-adjacent steps refused, sneaking settle, chunk-data check).
-		await lavaSafeMove(bot, vec3(pos.x, baseY, standZ), { range: 1, timeout: 15000, why: "mold_stance" });
-		for (let p = 0; p < 4 && off() > 0.6; p++) {
-			await descendToY(bot, baseY);
-			await shuffleTo(bot, pos.x + 0.5, standZ + 0.5);
+		// R2-lite (climb order): after a block in this column the bot already stands on the
+		// bowl's +Z wall, one above the next cup — the previous bowl walls ARE the next cup's
+		// walls. With lava and water in hand, stay up and cast the block above instead of
+		// pathing to the floor and pillaring again (s8n: the mold phase was 43 of 123 minutes).
+		const stayUp =
+			count(bot, "lava_bucket") >= 1 &&
+			count(bot, "water_bucket") >= 1 &&
+			off() <= 0.6 &&
+			feetY(bot) >= pos.y &&
+			feetY(bot) <= pos.y + 1 &&
+			isSolid(getBlock(bot, vec3(pos.x, feetY(bot) - 1, standZ))?.name);
+		if (stayUp) {
+			logEvent("cast", "r2_stay", `${pos.x},${pos.y},${pos.z} feet=${feetY(bot)}`, bot.entity.position);
+		} else {
+			await lavaSafeMove(bot, vec3(pos.x, baseY, standZ), { range: 1, timeout: 15000, why: "mold_stance" });
+			for (let p = 0; p < 4 && off() > 0.6; p++) {
+				await descendToY(bot, baseY);
+				await shuffleTo(bot, pos.x + 0.5, standZ + 0.5);
+			}
 		}
 		// FLOAT GUARD: if the bot ended up far from the spot (it got shoved/floated),
 		// don't keep stabbing at the block from across the arena. Warn, do ONE clean
