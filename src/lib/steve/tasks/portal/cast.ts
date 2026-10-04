@@ -26,6 +26,7 @@ import {
 } from "../../lib/bot-utils.ts";
 import { logEvent, setPhase } from "../../lib/logger.ts";
 import { setTarget } from "../../lib/progress.ts";
+import { lavaSafeMove, stanceProblem } from "./lava-move.ts";
 import { param } from "../../ml/bandit.ts";
 import { ensurePickaxe } from "../mining/main.ts";
 import type { Block, StepResult } from "../../types.ts";
@@ -1079,6 +1080,7 @@ const fillBucket = async (
 			}
 			if (await scoop(src)) {
 				logEvent("cast", "filled", `${fluid}_bucket above`);
+				if (fluid === "lava") await sealRing(bot, "after_scoop");
 				return true;
 			}
 		}
@@ -1094,6 +1096,7 @@ const fillBucket = async (
 			if (!(await reach(feet))) continue;
 			if (await scoop(src)) {
 				logEvent("cast", "filled", `${fluid}_bucket level`);
+				if (fluid === "lava") await sealRing(bot, "after_scoop");
 				return true;
 			}
 		}
@@ -1128,6 +1131,29 @@ const armDeathWatch = (bot: Bot): void => {
 		if (diedInCast.get(bot) === false) logEvent("cast", "died_mid_cast", "aborting the cast");
 		diedInCast.set(bot, true);
 	});
+};
+
+/**
+ * Cycle 5 Build A: place cobble into every lava cell of the bot's 3×3 ring at feet and
+ * head height (never below — the pool stays reachable from above). base3: 5 deaths
+ * 0–3 s after exposing or scooping the pool, with lava beside the body. Returns cells
+ * sealed; logs lava_ring_sealed.
+ */
+const sealRing = async (bot: Bot, why: string): Promise<number> => {
+	const p = bot.entity.position;
+	const fx = Math.floor(p.x);
+	const fy = Math.floor(p.y);
+	const fz = Math.floor(p.z);
+	let n = 0;
+	for (const dy of [0, 1])
+		for (let dx = -1; dx <= 1; dx++)
+			for (let dz = -1; dz <= 1; dz++) {
+				if (!dx && !dz) continue;
+				const c = vec3(fx + dx, fy + dy, fz + dz);
+				if (isLava(getBlock(bot, c)?.name) && (await placeCobble(bot, c))) n++;
+			}
+	if (n) logEvent("cast", "lava_ring_sealed", `${n} cell(s) at ${fx},${fy},${fz} (${why})`, p);
+	return n;
 };
 
 // Cells this process has cast (the bot's own obsidian; also the obsidian_lost diagnostic).
@@ -1216,10 +1242,9 @@ export const castObsidianAt = async (
 		// previous block the bot is on a high pillar and often shoved onto clutter
 		// where the manual descend wedges — the A* pathfinder reliably digs down
 		// off any perch and routes around blocks to the open floor in front.
-		await goTo(bot, vec3(pos.x, baseY, standZ), {
-			range: 1,
-			timeout: 15000,
-		}).catch(() => {});
+		// Cycle 5 Build A: the stance in front of the cup is near lava — lava_safe_move
+		// (pathfinder with lava-adjacent steps refused, sneaking settle, chunk-data check).
+		await lavaSafeMove(bot, vec3(pos.x, baseY, standZ), { range: 1, timeout: 15000, why: "mold_stance" });
 		for (let p = 0; p < 4 && off() > 0.6; p++) {
 			await descendToY(bot, baseY);
 			await shuffleTo(bot, pos.x + 0.5, standZ + 0.5);
@@ -1349,6 +1374,19 @@ export const castObsidianAt = async (
 			"pre_pour",
 			`${pos.x},${pos.y},${pos.z} bot=${bp.x.toFixed(2)},${bp.z.toFixed(2)} feet=${feetY(bot)}`,
 		);
+		// Cycle 5 Build A: never pour with the +Z wall (the bot's own footing) missing or
+		// with lava in the body ring. base3: 4 deaths right after pre_pour — the next pillar
+		// step found air/lava under the feet and the bot dropped into the lava it poured.
+		{
+			const footing = getBlock(bot, vec3(pos.x, pos.y, standZ))?.name;
+			const problem = !isSolid(footing) || isLava(footing) ? `footing ${footing}` : stanceProblem(bot);
+			if (problem) {
+				logEvent("cast", "pre_pour_unsafe", `${pos.x},${pos.y},${pos.z}: ${problem}`, bot.entity.position);
+				bot.setControlState("sneak", false);
+				await sealRing(bot, "pre_pour");
+				continue;
+			}
+		}
 		await equip(bot, "lava_bucket");
 		// Aim at the far-bottom of the cup so the ray clears the top of the +Z wall
 		// we stand on by ~25 cm even at the sneaking eye height (see reliableUse).
@@ -1358,6 +1396,7 @@ export const castObsidianAt = async (
 		}
 		await sleep(400);
 		afterLava = getBlock(bot, pos)?.name ?? "?";
+		await sealRing(bot, "post_pour");
 		} // end !lavaAlready
 
 		// 5. Seal the water bowl: pillar one more onto the +Z bowl wall (feet =
@@ -2171,6 +2210,9 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 				logEvent("cast", "filled", "lava_bucket on-expose");
 		}
 	}
+	// Cycle 5 Build A: the exposure dig opened the pool beside the body — seal any lava
+	// in the ring at feet/head height before moving on (base3: 5 deaths within 3 s).
+	await sealRing(bot, "on_expose");
 
 	// 2. Stand a safe ~5 blocks back from the lava on the dominant axis so the
 	//    cleared chamber sits between us and the pool (well within fill range).
@@ -2186,7 +2228,8 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 	void dz;
 	setPhase("anchor");
 	const standSpot = vec3(lava.x + dx * 5, lava.y, lava.z);
-	await goTo(bot, standSpot, { range: 1, timeout: 20000 }).catch(() => {});
+	// Cycle 5 Build A: base3 had 6 deaths in the anchor phase.
+	await lavaSafeMove(bot, standSpot, { range: 1, timeout: 20000, why: "anchor_standoff" });
 	// Never anchor a site in water: 713's retry stood in a pond, the anchor was logged
 	// there, and the escape/portal steps ping-ponged at the bank.
 	if (bot.entity.isInWater) {

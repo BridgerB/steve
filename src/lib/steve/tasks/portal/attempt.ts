@@ -9,7 +9,7 @@ import type { Bot } from "typecraft";
 import { buildId, senseContext, writeAttempt } from "../../lib/attempts.ts";
 import { getRaceId } from "../../lib/logger.ts";
 import { guardedAttempt, progressSnapshot } from "../../lib/progress.ts";
-import { drawParams, num, useParams } from "../../ml/bandit.ts";
+import { drawParams, num, updateParams, useParams } from "../../ml/bandit.ts";
 import type { StepResult } from "../../types.ts";
 import { buildPortalByCasting, prepareCastSite } from "./cast.ts";
 
@@ -58,5 +58,10 @@ export const castAttempt = async (
 		params,
 		context,
 	});
+	// Credit the drawn arms (cycle 5 decision 6: live on anchor_dy_max and stall_s; pinned
+	// params are never updated). Reward: the attempt placed obsidian or finished.
+	try {
+		updateParams(params, g.success || snap.obsidian > 0);
+	} catch {}
 	return { success: g.success, message: g.message, outcome };
 };

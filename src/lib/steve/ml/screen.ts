@@ -36,6 +36,8 @@ export const COUNTED = [
 	"frame_present_false",
 	"frame_present_blocked",
 	"move_vetoed",
+	"lava_ring_sealed",
+	"pre_pour_unsafe",
 	"site_off_level",
 	"site_level",
 	"station_scoop",
