@@ -938,6 +938,19 @@ export const castObsidianAt = async (
 		// digs the +Z wall column the bot stands on, which IS the cup wall, and the
 		// lava pours out onto the bot (race59 794 died 6s after its first pour).
 		// Skip straight to sealing the bowl and pouring the water.
+		// Leaked lava in the working row (a cup that overflowed earlier) kills every later
+		// approach (s7n-2 died 5× at one block). Cap it with placed cobble first: the stance
+		// column and its two neighbours, two rows out, at floor and feet level.
+		{
+			let capped = 0;
+			for (let dx = -1; dx <= 1; dx++)
+				for (const dz of [0, 1])
+					for (const yy of [baseY - 1, baseY]) {
+						const c = vec3(pos.x + dx, yy, standZ + dz);
+						if (isLava(getBlock(bot, c)?.name) && distance(bot.entity.position, offset(c, 0.5, 0.5, 0.5)) <= 4.5 && (await placeCobble(bot, c))) capped++;
+					}
+			if (capped) logEvent("cast", "workrow_lava_capped", `${capped} cell(s) in front of ${pos.x},${pos.y},${pos.z}`, bot.entity.position);
+		}
 		const lavaAlready = isLava(getBlock(bot, pos)?.name);
 		if (lavaAlready) {
 			logEvent("cast", "lava_already", `${pos.x},${pos.y},${pos.z} feet=${feetY(bot)} — skipping to the water pour`, bot.entity.position);
@@ -1102,6 +1115,20 @@ export const castObsidianAt = async (
 		// Cycle 5 Build A: never pour with the +Z wall (the bot's own footing) missing or
 		// with lava in the body ring. base3: 4 deaths right after pre_pour — the next pillar
 		// step found air/lava under the feet and the bot dropped into the lava it poured.
+		// A rejected placement shows as a solid "ghost" in the client until the server's
+		// revert arrives (s7n-1/2: the gate saw the +Z wall, the lava went in, the next pillar
+		// step found air under the feet and the bot dropped beside its own pour). Give the
+		// server time to correct the block and the bot's position, then re-check; if the wall
+		// is gone, pillar again before pouring.
+		await sleep(400);
+		if (!isSolid(getBlock(bot, vec3(pos.x, pos.y, standZ))?.name) || feetY(bot) < pos.y + 1) {
+			logEvent("cast", "footing_reverted", `${pos.x},${pos.y},${standZ} now ${getBlock(bot, vec3(pos.x, pos.y, standZ))?.name} feet=${feetY(bot)}`, bot.entity.position);
+			if (!(await pillarUp(bot, pos.y + 1))) {
+				bot.setControlState("sneak", false);
+				continue;
+			}
+			await sleep(400);
+		}
 		{
 			const footing = getBlock(bot, vec3(pos.x, pos.y, standZ))?.name;
 			// Footing and lava in the body ring only — the pour stance is a one-wide pillar.

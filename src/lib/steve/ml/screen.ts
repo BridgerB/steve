@@ -38,6 +38,8 @@ export const COUNTED = [
 	"move_vetoed",
 	"lava_ring_sealed",
 	"pre_pour_unsafe",
+	"footing_reverted",
+	"workrow_lava_capped",
 	"site_off_level",
 	"site_level",
 	"station_scoop",
