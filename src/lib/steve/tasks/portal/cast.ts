@@ -2228,8 +2228,24 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 	void dz;
 	setPhase("anchor");
 	const standSpot = vec3(lava.x + dx * 5, lava.y, lava.z);
-	// Cycle 5 Build A: base3 had 6 deaths in the anchor phase.
-	await lavaSafeMove(bot, standSpot, { range: 1, timeout: 20000, why: "anchor_standoff" });
+	// Cycle 5 Build B (§7.1, enclosed approach): at the exposure point the bot is at the
+	// lava's level beside the pool. Tunnel straight back along X through rock (tunnelToward
+	// refuses a dig that exposes liquid) until 5 off the pool, so the approach to the
+	// anchor never crosses the open cavern. Walk (lava_safe_move) only if the tunnel is
+	// blocked. base3 had 6 deaths in the anchor phase.
+	{
+		const lvl = Math.abs(Math.floor(bot.entity.position.y) - (lava.y + 1)) <= 1;
+		const offPool = () => Math.hypot(bot.entity.position.x - (lava.x + 0.5), bot.entity.position.z - (lava.z + 0.5));
+		let moved = 0;
+		if (lvl && offPool() < 5) {
+			const { tunnelToward } = await import("../mining/main.ts");
+			const want = Math.max(1, Math.ceil(5 - offPool()));
+			moved = await tunnelToward(bot, dx, 0, want).catch(() => 0);
+			await sealRing(bot, "site_tunnel");
+			logEvent("cast", "site_tunnel", `tunnelled ${moved}/${want} along x from the pool — now ${offPool().toFixed(1)} off`, bot.entity.position);
+		}
+		if (!(lvl && offPool() >= 3.5)) await lavaSafeMove(bot, standSpot, { range: 1, timeout: 20000, why: "anchor_standoff" });
+	}
 	// Never anchor a site in water: 713's retry stood in a pond, the anchor was logged
 	// there, and the escape/portal steps ping-ponged at the bank.
 	if (bot.entity.isInWater) {

@@ -46,6 +46,7 @@ export const COUNTED = [
 	"obsidian_lost",
 	"spare_pick",
 	"site_anchor",
+	"site_tunnel",
 	"site_return",
 ];
 
