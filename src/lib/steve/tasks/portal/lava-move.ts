@@ -1,0 +1,99 @@
+/**
+ * lava_safe_move (cycle 4 §7.4): the one guarded primitive for any move that can end
+ * within four blocks of lava.
+ *   - the pathfinder runs with lava-adjacent cells refused (exclusionAreasStep: any
+ *     lava in the 3×3 ring at floor, feet or head level of a step cell);
+ *   - the last block is a sneaking, non-jumping settle;
+ *   - post-condition from chunk data: solid non-lava footing, no lava in the 3×3×2 body
+ *     ring, no floor missing beside the feet;
+ *   - on failure it steps back toward where it came from, writes a `vetoed` primitive
+ *     row, and returns false. The caller re-plans; it never improvises.
+ */
+import type { Bot } from "typecraft";
+import { vec3, type Vec3 } from "typecraft";
+import { buildId, writeAttempt } from "../../lib/attempts.ts";
+import { getPathfinder, goTo, walkToXZ } from "../../lib/bot-utils.ts";
+import { getRaceId, logEvent } from "../../lib/logger.ts";
+
+const name = (bot: Bot, x: number, y: number, z: number): string =>
+	(bot.blockAt(vec3(x, y, z)) as { name?: string } | null)?.name ?? "air";
+const lava = (n: string) => n === "lava" || n === "flowing_lava";
+const air = (n: string) => n === "air" || n === "cave_air" || n === "void_air";
+const solid = (n: string) => !air(n) && !lava(n) && n !== "water" && !/(grass|flower|fern|torch|snow$|carpet|vine|button|rail|sapling)/.test(n);
+
+/** Any lava in the 3×3 ring around (x,z) at floor, feet or head height of a cell at feet y. */
+const lavaRing = (bot: Bot, x: number, y: number, z: number): boolean => {
+	for (let dx = -1; dx <= 1; dx++)
+		for (let dz = -1; dz <= 1; dz++)
+			for (let dy = -1; dy <= 1; dy++) if (lava(name(bot, x + dx, y + dy, z + dz))) return true;
+	return false;
+};
+
+/** Why the stance at the bot's feet is unsafe, or null when it is safe. */
+export const stanceProblem = (bot: Bot): string | null => {
+	const p = bot.entity.position;
+	const x = Math.floor(p.x);
+	const y = Math.floor(p.y);
+	const z = Math.floor(p.z);
+	const floor = name(bot, x, y - 1, z);
+	if (!solid(floor)) return `footing ${floor}`;
+	for (let dx = -1; dx <= 1; dx++)
+		for (let dz = -1; dz <= 1; dz++)
+			for (const dy of [0, 1]) if (lava(name(bot, x + dx, y + dy, z + dz))) return `lava in ring ${dx},${dy},${dz}`;
+	for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+		const beside = name(bot, x + dx, y, z + dz);
+		const under = name(bot, x + dx, y - 1, z + dz);
+		if (air(beside) && !solid(under)) return `drop beside ${dx},${dz} (${under})`;
+	}
+	return null;
+};
+
+export const lavaSafeMove = async (
+	bot: Bot,
+	target: Vec3,
+	opts: { range?: number; timeout?: number; why?: string } = {},
+): Promise<boolean> => {
+	const t0 = Date.now();
+	const from = bot.entity.position.clone?.() ?? vec3(bot.entity.position.x, bot.entity.position.y, bot.entity.position.z);
+	const pf = getPathfinder(bot);
+	pf.setMovements({ exclusionAreasStep: [(x, y, z) => (lavaRing(bot, x, y, z) ? Number.POSITIVE_INFINITY : 0)] });
+	try {
+		await goTo(bot, target, { range: opts.range ?? 0.5, timeout: opts.timeout ?? 20000 }).catch(() => false);
+	} finally {
+		pf.setMovements({ exclusionAreasStep: [] });
+	}
+	// Sneaking settle onto the cell centre (no jumping on the last block).
+	bot.setControlState("sneak", true);
+	await walkToXZ(bot, Math.floor(target.x) + 0.5, Math.floor(target.z) + 0.5, { targetDist: 0.25, maxTime: 1500 }).catch(() => {});
+	bot.setControlState("sneak", false);
+	const p = bot.entity.position;
+	const arrived = Math.hypot(p.x - (Math.floor(target.x) + 0.5), p.z - (Math.floor(target.z) + 0.5)) <= Math.max(0.8, opts.range ?? 0.5);
+	const problem = stanceProblem(bot) ?? (arrived ? null : "not arrived");
+	if (!problem) return true;
+	// Step back toward where we came from; the caller re-plans.
+	bot.setControlState("sneak", true);
+	await walkToXZ(bot, from.x, from.z, { targetDist: 0.5, maxTime: 2500 }).catch(() => {});
+	bot.setControlState("sneak", false);
+	logEvent("cast", "move_vetoed", `${opts.why ?? "move"} to ${Math.floor(target.x)},${Math.floor(target.y)},${Math.floor(target.z)}: ${problem}`, bot.entity.position);
+	writeAttempt({
+		run_id: `${getRaceId()}-lsm-${t0}`,
+		bot_impl: "ts",
+		build: buildId(),
+		world_seed: process.env.GYM_SEED ?? null,
+		skill: "lava_safe_move",
+		step_id: opts.why ?? "move",
+		source: process.env.GYM_RUN_ID ? "gym" : "race",
+		bot: bot.username,
+		start_ms: t0,
+		duration_s: Math.round((Date.now() - t0) / 100) / 10,
+		outcome: "vetoed",
+		reason: problem,
+		death_cause: null,
+		pos: [Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)],
+		deepest_phase: "",
+		progress: 0,
+		params: {},
+		context: {},
+	});
+	return false;
+};
