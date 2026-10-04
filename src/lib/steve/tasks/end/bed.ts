@@ -50,6 +50,13 @@ const placeOn = async (bot: Bot, name: string, cell: Vec3): Promise<boolean> => 
 };
 
 export const bedDragon = async (bot: Bot, budgetMs: number): Promise<StepResult> => {
+	// The harness teleports the bot into the End; the client inventory view is reset on
+	// the dimension change (d1-1: "out of beds after 0" with 6 beds given). Resync first.
+	try {
+		await (bot as Bot & { resyncInventory?: () => Promise<void> }).resyncInventory?.();
+	} catch {}
+	await sleep(1000);
+	logEvent("end", "dragon_start", `beds ${windowItems(bot.inventory).filter((i) => i.name.endsWith("_bed")).reduce((a, i) => a + i.count, 0)} obsidian ${windowItems(bot.inventory).filter((i) => i.name === "obsidian").reduce((a, i) => a + i.count, 0)} dim ${String(bot.game?.dimension ?? "?")}`, bot.entity.position);
 	const t0 = Date.now();
 	let beds = 0;
 	let gone = 0;
