@@ -30,6 +30,9 @@ import {
 import { type Event, runGoLoop } from "./lib/run-loop.ts";
 import { syncFromBot } from "./state.ts";
 
+// Set once the local web viewer has been started in this process (see the reconnect note).
+let viewerStarted = false;
+
 // ============================================
 // CONFIGURATION
 // ============================================
@@ -114,9 +117,17 @@ export const startBot = async (): Promise<Bot> => {
 				viewDistance: 4,
 			});
 		});
-	} else if (viewerPort > 0) {
+	} else if (viewerPort > 0 && !viewerStarted) {
+		// One viewer per process: an in-process reconnect builds a new bot and would bind the
+		// port again — EADDRINUSE, unhandled, exit (race c5: steve-race-810 used all three
+		// respawns on it and dropped out with a 5-obsidian frame).
+		viewerStarted = true;
 		bot.once("spawn", () => {
-			createWebViewer(bot, { port: viewerPort, viewDistance: 4 });
+			try {
+				createWebViewer(bot, { port: viewerPort, viewDistance: 4 });
+			} catch (e) {
+				console.error(`viewer on :${viewerPort} failed: ${e instanceof Error ? e.message : e}`);
+			}
 		});
 	}
 
