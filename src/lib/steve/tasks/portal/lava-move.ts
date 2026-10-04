@@ -33,22 +33,13 @@ const lavaRing = (bot: Bot, x: number, y: number, z: number): boolean => {
 };
 
 /** Why the stance at the bot's feet is unsafe, or null when it is safe. */
-/**
- * Why the stance at the bot's feet is unsafe, or null. `besideLava` stances (a fill
- * stance is next to the pool by design) only require lava-free feet and head cells and
- * solid non-lava footing.
- */
-export const stanceProblem = (bot: Bot, besideLava = false): string | null => {
+export const stanceProblem = (bot: Bot): string | null => {
 	const p = bot.entity.position;
 	const x = Math.floor(p.x);
 	const y = Math.floor(p.y);
 	const z = Math.floor(p.z);
 	const floor = name(bot, x, y - 1, z);
 	if (!solid(floor)) return `footing ${floor}`;
-	if (besideLava) {
-		if (lava(name(bot, x, y, z)) || lava(name(bot, x, y + 1, z))) return "lava in the body cell";
-		return null;
-	}
 	for (let dx = -1; dx <= 1; dx++)
 		for (let dz = -1; dz <= 1; dz++)
 			for (const dy of [0, 1]) if (lava(name(bot, x + dx, y + dy, z + dz))) return `lava in ring ${dx},${dy},${dz}`;
@@ -69,21 +60,12 @@ export const stanceProblem = (bot: Bot, besideLava = false): string | null => {
 export const lavaSafeMove = async (
 	bot: Bot,
 	target: Vec3,
-	opts: { range?: number; timeout?: number; why?: string; besideLava?: boolean } = {},
+	opts: { range?: number; timeout?: number; why?: string } = {},
 ): Promise<boolean> => {
 	const t0 = Date.now();
 	const from = bot.entity.position.clone?.() ?? vec3(bot.entity.position.x, bot.entity.position.y, bot.entity.position.z);
 	const pf = getPathfinder(bot);
-	// The target cell itself is exempt: s6n had 271 "not arrived" fill walks because a
-	// fill stance is lava-adjacent by design and the last step onto it was refused.
-	const tx = Math.floor(target.x);
-	const ty = Math.floor(target.y);
-	const tz = Math.floor(target.z);
-	pf.setMovements({
-		exclusionAreasStep: [
-			(x, y, z) => (x === tx && z === tz && Math.abs(y - ty) <= 1 ? 0 : lavaRing(bot, x, y, z) ? Number.POSITIVE_INFINITY : 0),
-		],
-	});
+	pf.setMovements({ exclusionAreasStep: [(x, y, z) => (lavaRing(bot, x, y, z) ? Number.POSITIVE_INFINITY : 0)] });
 	try {
 		await goTo(bot, target, { range: opts.range ?? 0.5, timeout: opts.timeout ?? 20000 }).catch(() => false);
 	} finally {
@@ -101,7 +83,7 @@ export const lavaSafeMove = async (
 	}
 	const p = bot.entity.position;
 	const arrived = Math.hypot(p.x - (Math.floor(target.x) + 0.5), p.z - (Math.floor(target.z) + 0.5)) <= Math.max(0.8, opts.range ?? 0.5);
-	const problem = stanceProblem(bot, opts.besideLava) ?? (arrived ? null : "not arrived");
+	const problem = stanceProblem(bot) ?? (arrived ? null : "not arrived");
 	if (!problem) return true;
 	// Stop where we are; the caller re-plans. (s4n: the old straight-line walk back toward
 	// the start crossed lava — two deaths right after a veto.)
