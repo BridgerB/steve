@@ -40,10 +40,16 @@ export const stanceProblem = (bot: Bot): string | null => {
 	for (let dx = -1; dx <= 1; dx++)
 		for (let dz = -1; dz <= 1; dz++)
 			for (const dy of [0, 1]) if (lava(name(bot, x + dx, y + dy, z + dz))) return `lava in ring ${dx},${dy},${dz}`;
+	// A drop beside the feet is a problem only when it is deep (> 3) or ends in lava: a
+	// one-wide pillar or a frame-edge stance always has air beside it (s2a: the pour gate
+	// vetoed every arena pour on "drop beside (air)").
 	for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
-		const beside = name(bot, x + dx, y, z + dz);
-		const under = name(bot, x + dx, y - 1, z + dz);
-		if (air(beside) && !solid(under)) return `drop beside ${dx},${dz} (${under})`;
+		if (!air(name(bot, x + dx, y, z + dz))) continue;
+		let d = 1;
+		while (d <= 4 && air(name(bot, x + dx, y - d, z + dz))) d++;
+		const land = name(bot, x + dx, y - d, z + dz);
+		if (lava(land)) return `lava drop beside ${dx},${dz} (${d} down)`;
+		if (d > 3) return `deep drop beside ${dx},${dz}`;
 	}
 	return null;
 };

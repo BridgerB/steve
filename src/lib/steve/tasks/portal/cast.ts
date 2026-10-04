@@ -26,7 +26,7 @@ import {
 } from "../../lib/bot-utils.ts";
 import { logEvent, setPhase } from "../../lib/logger.ts";
 import { setTarget } from "../../lib/progress.ts";
-import { lavaSafeMove, stanceProblem } from "./lava-move.ts";
+import { lavaSafeMove } from "./lava-move.ts";
 import { param } from "../../ml/bandit.ts";
 import { ensurePickaxe } from "../mining/main.ts";
 import type { Block, StepResult } from "../../types.ts";
@@ -1379,7 +1379,16 @@ export const castObsidianAt = async (
 		// step found air/lava under the feet and the bot dropped into the lava it poured.
 		{
 			const footing = getBlock(bot, vec3(pos.x, pos.y, standZ))?.name;
-			const problem = !isSolid(footing) || isLava(footing) ? `footing ${footing}` : stanceProblem(bot);
+			// Footing and lava in the body ring only — the pour stance is a one-wide pillar.
+			const ringLava = (() => {
+				const q = bot.entity.position;
+				for (const dy of [0, 1])
+					for (let dx = -1; dx <= 1; dx++)
+						for (let dz = -1; dz <= 1; dz++)
+							if (isLava(getBlock(bot, vec3(Math.floor(q.x) + dx, Math.floor(q.y) + dy, Math.floor(q.z) + dz))?.name)) return `lava in ring ${dx},${dy},${dz}`;
+				return null;
+			})();
+			const problem = !isSolid(footing) || isLava(footing) ? `footing ${footing}` : ringLava;
 			if (problem) {
 				logEvent("cast", "pre_pour_unsafe", `${pos.x},${pos.y},${pos.z}: ${problem}`, bot.entity.position);
 				bot.setControlState("sneak", false);
