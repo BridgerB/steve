@@ -1130,12 +1130,38 @@ const armDeathWatch = (bot: Bot): void => {
 	});
 };
 
+// Cells this process has cast (the bot's own obsidian; also the obsidian_lost diagnostic).
+const castDone = new Set<string>();
+// Origins of frames this process started (portal_start). A frame's 10 cells are
+// x..x+3 / y..y+4 at z, corners excluded (buildPortalByCasting's at(dx, dy)).
+const ownFrames = new Map<string, Vec3>();
+const FRAME_DXY: [number, number][] = [[1, 0], [2, 0], [0, 1], [0, 2], [0, 3], [3, 1], [3, 2], [3, 3], [1, 4], [2, 4]];
+/** Cells of an own frame that hold obsidian this bot cast. */
+const ownObsidianIn = (bot: Bot, o: Vec3): number =>
+	FRAME_DXY.filter(([dx, dy]) => {
+		const k = `${o.x + dx},${o.y + dy},${o.z}`;
+		return castDone.has(k) && getBlock(bot, vec3(o.x + dx, o.y + dy, o.z))?.name === "obsidian";
+	}).length;
+/** The own frame with obsidian nearest to p within 16, if any. */
+const ownFrameNear = (bot: Bot, p: Vec3): { origin: Vec3; obs: number } | null => {
+	let best: { origin: Vec3; obs: number; d: number } | null = null;
+	for (const o of ownFrames.values()) {
+		const d = distance(p, o);
+		if (d > 16) continue;
+		const obs = ownObsidianIn(bot, o);
+		if (obs > 0 && (!best || d < best.d)) best = { origin: o, obs, d };
+	}
+	return best ? { origin: best.origin, obs: best.obs } : null;
+};
+
 export const castObsidianAt = async (
 	bot: Bot,
 	pos: Vec3,
 	baseY: number,
 ): Promise<boolean> => {
 	if (getBlock(bot, pos)?.name === "obsidian") return true;
+	if (castDone.has(`${pos.x},${pos.y},${pos.z}`))
+		logEvent("cast", "obsidian_lost", `${pos.x},${pos.y},${pos.z} was cast earlier, now ${getBlock(bot, pos)?.name ?? "?"}`, bot.entity.position);
 	// Stand 1 block in front (on the pillar top, which doubles as the cup's near
 	// wall) and look DOWN past it into the cup — matching the validated geometry.
 	// Standing 2 out lets the near wall occlude the pour.
@@ -1439,6 +1465,7 @@ export const castObsidianAt = async (
 
 		if (getBlock(bot, pos)?.name === "obsidian" || afterWater === "obsidian") {
 			logEvent("cast", "obsidian", `${pos.x},${pos.y},${pos.z}`);
+			castDone.add(`${pos.x},${pos.y},${pos.z}`);
 			bot.setControlState("sneak", false);
 			return true;
 		}
@@ -1898,11 +1925,9 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 				setPhase("lava_fill");
 				await goTo(bot, prev, { range: 1, timeout: 20000 }).catch(() => {});
 				if (count(bot, "lava_bucket") < 1 && count(bot, "bucket") >= 1) await fillBucket(bot, "lava");
-				if (count(bot, "lava_bucket") >= 1) {
-					logEvent("cast", "site_ready", `${prev.x},${prev.y},${prev.z} (reused)`);
-					return { success: true, message: "Resumed the cast site" };
-				}
-				logEvent("cast", "site_reuse_no_lava", `${prev.x},${prev.y},${prev.z}`);
+				if (count(bot, "lava_bucket") < 1) logEvent("cast", "site_reuse_no_lava", `${prev.x},${prev.y},${prev.z} — resuming anyway; the cast refills per block`);
+				logEvent("cast", "site_ready", `${prev.x},${prev.y},${prev.z} (reused)`);
+				return { success: true, message: "Resumed the cast site" };
 			}
 		}
 	}
@@ -2223,6 +2248,16 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 	const bx = Math.floor(bot.entity.position.x);
 	const by = Math.floor(bot.entity.position.y);
 	const bz = Math.floor(bot.entity.position.z);
+	{
+		const near = ownFrameNear(bot, vec3(bx, by, bz));
+		if (near) {
+			const o = near.origin;
+			logEvent("cast", "reanchor_prevented", `new anchor ${bx},${by},${bz} is within 16 of own frame ${o.x},${o.y},${o.z} (${near.obs} own obsidian) — resuming it`, bot.entity.position);
+			siteAnchor.set(bot, o);
+			setTarget(null);
+			return { success: true, message: `Resumed own frame at ${o.x},${o.y},${o.z}` };
+		}
+	}
 	logEvent(
 		"cast",
 		"site_anchor",
@@ -2390,14 +2425,15 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
  * dirt cup, lava + water from above → obsidian), digs the 2x3 gap, then lights it.
  */
 export const buildPortalByCasting = async (bot: Bot): Promise<StepResult> => {
-	// Already standing in a built frame?
-	const existing = bot.findBlocks({
-		matching: (n: string) => n === "obsidian",
-		maxDistance: 8,
-		count: 12,
-	});
-	if (existing.length >= 10) {
-		return { success: true, message: "Obsidian frame already present" };
+	// No "frame already present" shortcut: base3-6 returned success on a radius count of
+	// someone else's obsidian with 3 of its own cast, and the shortcut skipped lighting.
+	// A complete own frame goes through the normal flow (cast cells are skipped, then the
+	// gap is cleared and the frame lit). Diagnostic only: where the old rule would fire.
+	{
+		const n = bot.findBlocks({ matching: (x: string) => x === "obsidian", maxDistance: 8, count: 12 } as never).length;
+		const a = siteAnchor.get(bot);
+		const own = a ? ownObsidianIn(bot, a) : 0;
+		if (n >= 10 && own < 10) logEvent("cast", "frame_present_blocked", `${n} obsidian within 8, ${own}/10 own at the anchor`);
 	}
 
 	if (buildStockOf(bot) < 30) {
@@ -2433,8 +2469,13 @@ export const buildPortalByCasting = async (bot: Bot): Promise<StepResult> => {
 		await goTo(bot, anchor, { range: 0.5, timeout: 15000 }).catch(() => {});
 		await walkToXZ(bot, anchor.x + 0.5, anchor.z + 0.5, { targetDist: 0.3, maxTime: 2000 });
 	}
-	const onAnchor = !!anchor && distance(bot.entity.position, offset(anchor, 0.5, 0, 0.5)) <= 1.5;
-	logEvent("cast", "frame_origin", onAnchor ? `anchor ${anchor!.x},${anchor!.y},${anchor!.z}` : `no anchor (${anchor ? "far" : "none"}) — using the bot's position`);
+	const anchorD = anchor ? distance(bot.entity.position, offset(anchor, 0.5, 0, 0.5)) : Number.POSITIVE_INFINITY;
+	if (anchor && anchorD > 16) {
+		logEvent("cast", "anchor_unreached", `anchor ${anchor.x},${anchor.y},${anchor.z} still ${anchorD.toFixed(1)} away — not starting a second frame`, bot.entity.position);
+		return { success: false, message: `Could not reach the cast anchor (${anchorD.toFixed(0)} away) — retry` };
+	}
+	const onAnchor = !!anchor;
+	logEvent("cast", "frame_origin", onAnchor ? `anchor ${anchor!.x},${anchor!.y},${anchor!.z} (bot ${anchorD.toFixed(1)} off)` : "no anchor (none) — using the bot's position");
 	for (let tries = 0; !onAnchor && tries < 8 && findFluidSource(bot, "lava", 6); tries++) {
 		const p = bot.entity.position;
 		const near = findFluidSource(bot, "lava", 12);
@@ -2475,6 +2516,7 @@ export const buildPortalByCasting = async (bot: Bot): Promise<StepResult> => {
 	}
 
 	logEvent("cast", "portal_start", `frame at ${bx},${by},${bz}`);
+	ownFrames.set(`${bx},${by},${bz}`, vec3(bx, by, bz));
 	setPhase("portal_start");
 	armDeathWatch(bot);
 	await buildBacking(bot, bx, by, bz);
