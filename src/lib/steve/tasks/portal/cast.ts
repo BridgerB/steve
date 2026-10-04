@@ -2490,8 +2490,11 @@ export const buildPortalByCasting = async (bot: Bot): Promise<StepResult> => {
 			message: `Need ~30 dirt/cobble to pillar + mould the cast (have ${buildStock})`,
 		};
 	}
-	if (count(bot, "lava_bucket") < 1) {
-		return { success: false, message: "Need a lava bucket to cast obsidian" };
+	// An empty bucket is enough: castObsidianAt fills lava per block. Requiring lava in
+	// hand failed every resumed site (s1n-3: "Need a lava bucket" ×4 after the frame-
+	// identity change stopped site reuse from falling through to a new anchor).
+	if (count(bot, "lava_bucket") < 1 && count(bot, "bucket") < 1) {
+		return { success: false, message: "Need a lava bucket or an empty bucket to cast obsidian" };
 	}
 	if (count(bot, "water_bucket") + count(bot, "bucket") < 1) {
 		return { success: false, message: "Need a water bucket to cast obsidian" };
