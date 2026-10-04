@@ -569,6 +569,32 @@ const runRace = async (count: number, timeoutMs: number) => {
 		spawns.push({ x: baseX + ((i % 5) - 2) * 24, z: baseZ + Math.floor(i / 5) * 26 });
 	}
 
+	// Cycle 5: pregenerate the race region (±PREGEN_R blocks around the base) before any
+	// bot joins, so no bot waits on world generation and tick time stays flat. Forceload
+	// one 128×128 slice at a time, wait until its far corner is loaded, release it.
+	{
+		const R = Number(process.env.PREGEN_R ?? 256);
+		const t0 = Date.now();
+		let slices = 0;
+		for (let x0 = baseX - R; x0 < baseX + R; x0 += 128)
+			for (let z0 = baseZ - R; z0 < baseZ + R; z0 += 128) {
+				const x1 = x0 + 127;
+				const z1 = z0 + 127;
+				await rcon(`forceload add ${x0} ${z0} ${x1} ${z1}`).catch(() => "");
+				for (let w = 0; w < 120; w++) {
+					const a = await rcon(`execute if loaded ${x0} 0 ${z0}`).catch(() => "");
+					const b = await rcon(`execute if loaded ${x1} 0 ${z1}`).catch(() => "");
+					if (/passed/i.test(a) && /passed/i.test(b)) break;
+					await sleep(1000);
+				}
+				await rcon(`forceload remove ${x0} ${z0} ${x1} ${z1}`).catch(() => "");
+				slices++;
+			}
+		const fl = await rcon("forceload query").catch(() => "");
+		console.log(`  pregenerated ±${R} around (${baseX},${baseZ}): ${slices} slices in ${Math.round((Date.now() - t0) / 1000)} s; ${fl.slice(0, 80)}`);
+		logEvent("race", "pregen", `±${R} around ${baseX},${baseZ}: ${slices} slices, ${Math.round((Date.now() - t0) / 1000)} s`);
+	}
+
 	// Spawn all bot processes first, then teleport them
 	const botProcs: { proc: ChildProcess; username: string; exited: boolean; respawns: number }[] =
 		[];
@@ -649,15 +675,19 @@ const runRace = async (count: number, timeoutMs: number) => {
 				// spawns on the surface, so re-place it a few blocks over until it does.
 				let sx = x;
 				let sz = z;
+				let sy = 200;
 				for (let t = 0; t < 4; t++) {
-					await rcon(`tp ${name} ${sx} 200 ${sz}`);
-					await sleep(8000); // fall + chunk settle
+					// Cycle 5: onto the motion-blocking heightmap (the region is pregenerated),
+					// not a drop from y200.
+					await rcon(`execute positioned ${sx} 0 ${sz} positioned over motion_blocking_no_leaves run tp ${name} ~0.5 ~ ~0.5`);
+					await sleep(3000);
 					let landedY = 200;
 					try {
 						const m = /\[(-?[\d.]+)d, (-?[\d.]+)d, (-?[\d.]+)d\]/.exec(
 							await rcon(`data get entity ${name} Pos`),
 						);
 						if (m) landedY = parseFloat(m[2]!);
+						sy = Math.floor(landedY);
 					} catch {}
 					// Lava under the column: race37 705 dropped from y200 straight into a
 					// lava pool ("tried to swim in lava", death 1). Treat as a bad landing.
@@ -682,7 +712,7 @@ const runRace = async (count: number, timeoutMs: number) => {
 				// The race cell IS this bot's world spawn: without this, a death sends
 				// it back to the real world spawn thousands of blocks from its mine,
 				// furnace and table (race 604 drowned and respawned 4000 blocks away).
-				await rcon(`spawnpoint ${name} ${sx} 200 ${sz}`);
+				await rcon(`spawnpoint ${name} ${sx} ${sy} ${sz}`);
 				// Stagger: the box has only 4 cores, so let each bot's fresh chunk
 				// generation settle before teleporting the next — otherwise 10
 				// simultaneous gens saturate the CPU and the server misses keepalives,
