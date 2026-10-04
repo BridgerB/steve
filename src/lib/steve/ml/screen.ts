@@ -41,6 +41,7 @@ export const COUNTED = [
 	"site_off_level",
 	"site_level",
 	"station_scoop",
+	"station_here",
 	"front_load",
 	"station_none",
 	"station_walk_fail",

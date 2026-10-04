@@ -152,9 +152,47 @@ const seal = async (deps: StationDeps, st: Stand): Promise<number> => {
 	return n;
 };
 
+// One block above the stand still reaches its targets (s5n-1: 9 walk "failures" were the
+// bot standing on its own frame 1 above the stand).
 const atStand = (bot: Bot, S: Vec3): boolean => {
 	const p = bot.entity.position;
-	return Math.floor(p.y) === S.y && Math.hypot(p.x - (S.x + 0.5), p.z - (S.z + 0.5)) <= 0.7;
+	const dy = Math.floor(p.y) - S.y;
+	return dy >= 0 && dy <= 1 && Math.hypot(p.x - (S.x + 0.5), p.z - (S.z + 0.5)) <= 0.7;
+};
+
+/**
+ * Scoop from where the bot already stands: exposed sources within bucket reach of the
+ * eye, no lava in the body ring, sneaking. Returns buckets filled.
+ */
+const scoopFromHere = async (bot: Bot, deps: StationDeps, enough: () => boolean): Promise<number> => {
+	const p = bot.entity.position;
+	const fx = Math.floor(p.x);
+	const fy = Math.floor(p.y);
+	const fz = Math.floor(p.z);
+	for (const dy of [0, 1])
+		for (let dx = -1; dx <= 1; dx++)
+			for (let dz = -1; dz <= 1; dz++) if (deps.isLava(deps.name(vec3(fx + dx, fy + dy, fz + dz)))) return 0;
+	const eye = vec3(p.x, p.y + EYE_SNEAK, p.z);
+	const near = visibleSources(bot, deps, 6)
+		.filter((t) => t.y < fy && Math.hypot(t.x + 0.5 - eye.x, t.y + 0.9 - eye.y, t.z + 0.5 - eye.z) <= REACH)
+		.sort((a, b) => Math.hypot(a.x - p.x, a.z - p.z) - Math.hypot(b.x - p.x, b.z - p.z))
+		.slice(0, 4);
+	if (!near.length) return 0;
+	let got = 0;
+	bot.setControlState("sneak", true);
+	for (const t of near) {
+		if (enough() || deps.count("bucket") < 1) break;
+		if (!(await deps.equip("bucket"))) break;
+		const before = deps.count("lava_bucket");
+		for (const dyy of [0.95, 0.5]) {
+			await deps.use(vec3(t.x + 0.5, t.y + dyy, t.z + 0.5));
+			if (deps.count("lava_bucket") > before) break;
+		}
+		if (deps.count("lava_bucket") > before) got++;
+	}
+	bot.setControlState("sneak", false);
+	if (got) logEvent("cast", "station_here", `filled ${got} from ${fx},${fy},${fz}`, bot.entity.position);
+	return got;
 };
 
 /**
@@ -168,6 +206,7 @@ export const stationRefill = async (
 ): Promise<number> => {
 	let got = 0;
 	const excluded: Vec3[] = [];
+	got += await scoopFromHere(bot, deps, opts.enough);
 	for (let site = 0; site < 3 && !opts.enough(); site++) {
 		const st = candidateStands(bot, deps, opts.frame, excluded)[0];
 		if (!st) {
@@ -177,7 +216,11 @@ export const stationRefill = async (
 		const { S, d } = st;
 		bot.setControlState("sneak", false);
 		await goTo(bot, S, { range: 0, timeout: 20000 }).catch(() => false);
-		await walkToXZ(bot, S.x + 0.5, S.z + 0.5, { targetDist: 0.25, maxTime: 2500 }).catch(() => {});
+		{
+			const q = bot.entity.position;
+			if (Math.hypot(q.x - (S.x + 0.5), q.z - (S.z + 0.5)) <= 1.5)
+				await walkToXZ(bot, S.x + 0.5, S.z + 0.5, { targetDist: 0.25, maxTime: 2500 }).catch(() => {});
+		}
 		if (!atStand(bot, S)) {
 			const p = bot.entity.position;
 			logEvent("cast", "station_walk_fail", `stand ${key(S)} bot ${p.x.toFixed(1)},${p.y.toFixed(1)},${p.z.toFixed(1)}`, p);
