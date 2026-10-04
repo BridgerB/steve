@@ -19,6 +19,11 @@ export const castAttempt = async (
 	bot: Bot,
 	opts: { budgetMs: number; source: "gym" | "race" },
 ): Promise<StepResult & { outcome: string }> => {
+	// A spare pickaxe before the attempt, while there is still cobble for one.
+	try {
+		const { ensureSparePickaxe } = await import("../mining/main.ts");
+		await ensureSparePickaxe(bot);
+	} catch {}
 	const params = drawParams();
 	useParams(params);
 	const startMs = Date.now();

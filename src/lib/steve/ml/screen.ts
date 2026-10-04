@@ -44,6 +44,7 @@ export const COUNTED = [
 	"station_none",
 	"station_walk_fail",
 	"obsidian_lost",
+	"spare_pick",
 	"site_anchor",
 	"site_return",
 ];
