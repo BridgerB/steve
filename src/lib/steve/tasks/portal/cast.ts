@@ -2286,6 +2286,16 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 
 	// 4. Top up a lava bucket from the pool (refilled again every cast).
 	setPhase("lava_fill");
+	// The sealed station first, as in the cast: its walk is a plain goTo, while
+	// fillBucket's lavaSafeMove refuses the lava-adjacent stance (s13n-3: 4 dispatches of
+	// "fill_lava not arrived" 2.7-6.9 from the stance → site_no_lava ×4).
+	if (count(bot, "lava_bucket") < 1 && count(bot, "bucket") >= 1) {
+		const got = await stationRefill(bot, stationDeps(bot), {
+			frame: vec3(bx, by, bz),
+			enough: () => count(bot, "bucket") <= (count(bot, "water_bucket") < 1 ? 1 : 0),
+		});
+		if (got) logEvent("cast", "site_station", `filled ${got} at site prep`, bot.entity.position);
+	}
 	if (count(bot, "lava_bucket") < 1 && count(bot, "bucket") >= 1)
 		await fillBucket(bot, "lava");
 
