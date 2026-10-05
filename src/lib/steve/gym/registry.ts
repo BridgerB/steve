@@ -92,6 +92,11 @@ export const GYM_STEPS: GymStep[] = [
 		},
 		run: async (b) => {
 			const res = await bedDragon(b, 900_000);
+			// Server's view of the bot for the placement diagnosis (client vs server desync).
+			if (endRcon)
+				for (const q of ["Pos", "SelectedItem", "Dimension"])
+					console.error(`[DRAGON] server ${q}: ${await endRcon(`data get entity ${b.username} ${q}`).catch((e) => String(e))}`);
+			if (endRcon) console.error(`[DRAGON] server beds: ${await endRcon(`clear ${b.username} #minecraft:beds 0`).catch((e) => String(e))}`);
 			const alive = endRcon
 				? /passed/i.test(await endRcon("execute in minecraft:the_end if entity @e[type=minecraft:ender_dragon]").catch(() => "passed"))
 				: true;
