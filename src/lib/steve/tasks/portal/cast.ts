@@ -488,12 +488,10 @@ const findFluidSource = (
  * chamber for 5 min beside one ("src0=1"), fill_fail, then re-anchored at the
  * same trickle. Returns the pool size too, for logging.
  */
-// Pools a site attempt already failed at (anchor in water, pool unreachable). s9n-4/-5
-// re-sited at the same pool on every dispatch and failed identically ×4 until escalation
-// ended the run; the next dispatch now picks a different pool. Excluded on the SECOND
-// failure only: excluding on the first (e40bc35) sent s10n-1/-2 to pools 43-68 away they
-// could not reach, and dropped the arena from 6/6 to 0/4 — one retry at the same pool
-// often succeeds.
+// Pools the cast could no longer refill from (refillFromOtherPool). Site-level exclusion
+// (after site_wet / site_no_lava, e40bc35 / 62e8aed) was tried and removed: s10n and s11n
+// then chased pools 18-68 blocks away they could not reach (site_out_of_range ×4); a
+// retry at the same pool does better.
 const nearPool = (a: Vec3, p: Vec3) => Math.abs(a.x - p.x) <= 12 && Math.abs(a.z - p.z) <= 12 && Math.abs(a.y - p.y) <= 4;
 const failedPools = new WeakMap<Bot, { p: Vec3; n: number }[]>();
 const excludePool = (bot: Bot, p: Vec3, why: string, hard = false): void => {
@@ -2070,7 +2068,6 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 	// there, and the escape/portal steps ping-ponged at the bank.
 	if (bot.entity.isInWater) {
 		logEvent("cast", "site_wet", "anchor spot is in water — abandon this attempt");
-		excludePool(bot, lava, "site_wet");
 		return { success: false, message: "Cast anchor is in water — retry from dry land" };
 	}
 
@@ -2293,10 +2290,6 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 	}
 	const lavaOk = count(bot, "lava_bucket") >= 1;
 	logEvent("cast", lavaOk ? "site_ready" : "site_no_lava", `${bx},${by},${bz}`);
-	if (!lavaOk) {
-		excludePool(bot, lava, "site_no_lava");
-		siteAnchor.delete(bot);
-	}
 	return {
 		success: lavaOk,
 		message: lavaOk
