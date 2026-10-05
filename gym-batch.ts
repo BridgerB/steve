@@ -84,6 +84,9 @@ const rcon = await connect({ timeout: 30_000 });
 const mobReply = await rcon.command(`gamerule spawn_mobs ${MOBS === "on" ? "true" : "false"}`);
 if (/Incorrect/i.test(mobReply)) console.log(`WARN gamerule: ${mobReply}`);
 console.log(`batch ${BATCH} slug=${SLUG} runs=${RUNS} commit=${commit} mobs=${MOBS}`);
+// A killed batch never reaches the per-run release below, so its landing stays
+// forceloaded; this runner owns server A's forceloads — clear leftovers up front.
+console.log(`startup ${await rcon.command("forceload remove all").catch(() => "forceload remove failed")}`);
 
 const memAvailMb = (): number | null => {
 	try {
