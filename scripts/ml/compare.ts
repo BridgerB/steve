@@ -13,7 +13,7 @@
  *
  *   node --import ./typecraft-resolve.mjs scripts/ml/compare.ts --means <A[@cap_s]> <B[@cap_s]>
  *
- * e.g. --means base3@1800 s5a. Higher is better for best_frame and obsidian; lower is
+ * e.g. --means base3@1800 s5a; pool batches with commas: s5n,s8n@1800. Higher is better for best_frame and obsidian; lower is
  * better for deaths, lava_deaths and the per-block gap.
  */
 import { readFileSync } from "node:fs";
@@ -31,10 +31,13 @@ if (process.argv[2] === "--means") {
 	const tel = new DatabaseSync(process.env.STEVE_D1_FILE ?? "data/gym/telemetry.sqlite");
 	const q = tel.prepare("SELECT ts, category, event, detail FROM events WHERE race_id = ? AND category IN ('cast','death') ORDER BY ts");
 	const load = (spec: string): RunMetrics[] => {
-		const [batch, capS] = spec.split("@");
-		const runs = runsDb
-			.prepare("SELECT run_id, slug FROM runs WHERE batch = ? AND outcome NOT IN ('harness','disconnect') ORDER BY started_at")
-			.all(batch!) as { run_id: string; slug: string }[];
+		const [batches, capS] = spec.split("@");
+		const runs = batches!.split(",").flatMap(
+			(batch) =>
+				runsDb
+					.prepare("SELECT run_id, slug FROM runs WHERE batch = ? AND outcome NOT IN ('harness','disconnect') ORDER BY started_at")
+					.all(batch) as { run_id: string; slug: string }[],
+		);
 		return runs.map((r) => runMetrics(q.all(`gym-${r.slug}-${r.run_id}`) as unknown as TelemetryEvent[], capS ? Number(capS) : undefined));
 	};
 	const ma = load(A);
