@@ -247,6 +247,14 @@ const buildBlockName = (bot: Bot): string => BUILD_BLOCKS.find((n) => count(bot,
 const buildStockOf = (bot: Bot): number => BUILD_BLOCKS.reduce((a, n) => a + count(bot, n), 0);
 /** Dig nearby solid ground (outside the frame box, never next to lava) until the
  *  pack holds WANT build blocks or nothing diggable is in reach. */
+const FACES = [
+	[1, 0, 0],
+	[-1, 0, 0],
+	[0, 1, 0],
+	[0, -1, 0],
+	[0, 0, 1],
+	[0, 0, -1],
+] as const;
 const topUpBuildBlocks = async (bot: Bot, want: number, frame: Vec3 | null): Promise<number> => {
 	const DIGGABLE = new Set(["dirt", "grass_block", "coarse_dirt", "stone", "cobblestone", "deepslate", "cobbled_deepslate", "andesite", "granite", "diorite", "tuff"]);
 	const inFrame = (p: Vec3) =>
@@ -258,13 +266,16 @@ const topUpBuildBlocks = async (bot: Bot, want: number, frame: Vec3 | null): Pro
 			.findBlocks({ matching: (n: string) => DIGGABLE.has(n), maxDistance: 5, count: 80, exposed: false } as never)
 			.map((p: { x: number; y: number; z: number }) => vec3(p.x, p.y, p.z))
 			.filter((p: Vec3) => !inFrame(p) && !touchesLava(bot, p) && !(p.x === Math.floor(feet.x) && p.z === Math.floor(feet.z) && p.y < feet.y))
+			// Only cells with an air face: a buried cell still breaks (the server checks reach,
+			// not sight) but its drop lands in a sealed pocket — s11n-1 "dug 44 → 22" ×4.
+			.filter((p: Vec3) => FACES.some(([ax, ay, az]) => isAir(getBlock(bot, vec3(p.x + ax, p.y + ay, p.z + az))?.name)))
 			.filter((p: Vec3) => distance(offset(bot.entity.position, 0, 1.62, 0), offset(p, 0.5, 0.5, 0.5)) <= 4.5)
 			.slice(0, want - buildStockOf(bot) + 4);
 		if (!cells.length) break;
 		for (const c of cells) {
 			if (buildStockOf(bot) >= want) break;
 			await digAt(bot, c);
-			dug++;
+			if (isAir(getBlock(bot, c)?.name)) dug++;
 		}
 		try {
 			await bot.collectDrops(6, 4000, async (p) => {
