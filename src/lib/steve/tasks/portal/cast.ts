@@ -488,6 +488,16 @@ const findFluidSource = (
  * chamber for 5 min beside one ("src0=1"), fill_fail, then re-anchored at the
  * same trickle. Returns the pool size too, for logging.
  */
+// Pools a site attempt already failed at (anchor in water, pool unreachable). s9n-4/-5
+// re-sited at the same pool on every dispatch and failed identically ×4 until escalation
+// ended the run; the next dispatch now picks a different pool.
+const failedPools = new WeakMap<Bot, Vec3[]>();
+const excludePool = (bot: Bot, p: Vec3, why: string): void => {
+	const list = failedPools.get(bot) ?? [];
+	list.push(p);
+	failedPools.set(bot, list);
+	logEvent("cast", "pool_excluded", `${p.x},${p.y},${p.z} ${why} (${list.length} excluded)`);
+};
 const findLavaPool = (
 	bot: Bot,
 	maxDistance: number,
@@ -502,7 +512,10 @@ const findLavaPool = (
 			?.properties?.level;
 		return lv == null || String(lv) === "0";
 	};
-	const srcs = exposedFluidSources(bot, "lava", maxDistance).filter(isSrc);
+	const avoid = failedPools.get(bot) ?? [];
+	const srcs = exposedFluidSources(bot, "lava", maxDistance)
+		.filter(isSrc)
+		.filter((p) => !avoid.some((a) => Math.abs(a.x - p.x) <= 12 && Math.abs(a.z - p.z) <= 12 && Math.abs(a.y - p.y) <= 4));
 	if (!srcs.length) return null;
 	const o = bot.entity.position;
 	const byDist = srcs
@@ -2016,6 +2029,7 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 	// there, and the escape/portal steps ping-ponged at the bank.
 	if (bot.entity.isInWater) {
 		logEvent("cast", "site_wet", "anchor spot is in water — abandon this attempt");
+		excludePool(bot, lava, "site_wet");
 		return { success: false, message: "Cast anchor is in water — retry from dry land" };
 	}
 
@@ -2238,6 +2252,10 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 	}
 	const lavaOk = count(bot, "lava_bucket") >= 1;
 	logEvent("cast", lavaOk ? "site_ready" : "site_no_lava", `${bx},${by},${bz}`);
+	if (!lavaOk) {
+		excludePool(bot, lava, "site_no_lava");
+		siteAnchor.delete(bot);
+	}
 	return {
 		success: lavaOk,
 		message: lavaOk
