@@ -57,6 +57,7 @@ export const COUNTED = [
 	"ghost_cleared",
 	"cup_capped",
 	"site_station",
+	"topup_walk",
 	"site_anchor",
 	"site_tunnel",
 	"site_return",

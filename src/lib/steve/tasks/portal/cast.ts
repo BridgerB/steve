@@ -287,7 +287,20 @@ const topUpBuildBlocks = async (bot: Bot, want: number, frame: Vec3 | null): Pro
 			.filter((p: Vec3) => FACES.some(([ax, ay, az]) => isAir(getBlock(bot, vec3(p.x + ax, p.y + ay, p.z + az))?.name)))
 			.filter((p: Vec3) => distance(offset(bot.entity.position, 0, 1.62, 0), offset(p, 0.5, 0.5, 0.5)) <= 4.5)
 			.slice(0, want - buildStockOf(bot) + 4);
-		if (!cells.length) break;
+		if (!cells.length) {
+			// Nothing in reach (s13n-6: "dug 0 → 0" ×4 at 8/10): walk to the nearest exposed
+			// diggable cell within 24, outside the frame and away from lava, and dig there.
+			const far = bot
+				.findBlocks({ matching: (n: string) => DIGGABLE.has(n), maxDistance: 24, count: 200, exposed: false } as never)
+				.map((p: { x: number; y: number; z: number }) => vec3(p.x, p.y, p.z))
+				.filter((p: Vec3) => !inFrame(p) && !touchesLava(bot, p))
+				.filter((p: Vec3) => FACES.some(([ax, ay, az]) => isAir(getBlock(bot, vec3(p.x + ax, p.y + ay, p.z + az))?.name)))
+				.sort((a: Vec3, b: Vec3) => distance(a, feet) - distance(b, feet))[0];
+			if (!far || round > 0) break;
+			logEvent("cast", "topup_walk", `to ${far.x},${far.y},${far.z} ${distance(far, feet).toFixed(1)} away`, feet);
+			await goTo(bot, far, { range: 3, timeout: 20000 }).catch(() => false);
+			continue;
+		}
 		for (const c of cells) {
 			if (buildStockOf(bot) >= want) break;
 			await digAt(bot, c);
@@ -2352,15 +2365,20 @@ export const buildPortalByCasting = async (bot: Bot): Promise<StepResult> => {
 		if (n >= 10 && own < 10) logEvent("cast", "frame_present_blocked", `${n} obsidian within 8, ${own}/10 own at the anchor`);
 	}
 
-	if (buildStockOf(bot) < 30) {
-		const dug = await topUpBuildBlocks(bot, 34, siteAnchor.get(bot) ?? null);
-		logEvent("cast", "block_topup", `dug ${dug} → ${buildStockOf(bot)} build blocks`, bot.entity.position);
+	// Scale the need to the cells still to cast (~4 blocks each: cup walls + pillar):
+	// s13n-6 stood at 8/10 with 0 blocks and a flat "need 30" — 2 cells need ~12.
+	const anc = siteAnchor.get(bot);
+	const remaining = anc ? FRAME_DXY.filter(([dx, dy]) => getBlock(bot, vec3(anc.x + dx, anc.y + dy, anc.z))?.name !== "obsidian").length : 10;
+	const need = Math.min(30, 4 * remaining + 4);
+	if (buildStockOf(bot) < need) {
+		const dug = await topUpBuildBlocks(bot, need + 4, anc ?? null);
+		logEvent("cast", "block_topup", `dug ${dug} → ${buildStockOf(bot)} build blocks (need ${need}, ${remaining} cells left)`, bot.entity.position);
 	}
 	const buildStock = buildStockOf(bot);
-	if (buildStock < 30) {
+	if (buildStock < need) {
 		return {
 			success: false,
-			message: `Need ~30 dirt/cobble to pillar + mould the cast (have ${buildStock})`,
+			message: `Need ~${need} dirt/cobble to pillar + mould the cast (have ${buildStock})`,
 		};
 	}
 	// An empty bucket is enough: castObsidianAt fills lava per block. Requiring lava in
