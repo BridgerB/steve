@@ -989,7 +989,10 @@ export const castObsidianAt = async (
 		// bowl's +Z wall, one above the next cup — the previous bowl walls ARE the next cup's
 		// walls. With lava and water in hand, stay up and cast the block above instead of
 		// pathing to the floor and pillaring again (s8n: the mold phase was 43 of 123 minutes).
+		// First attempt only: s9m-1 stayed up 3× at a spot whose aim kept failing
+		// (aim_fail ×3 → block_fail); a retry takes the normal stance instead.
 		const stayUp =
+			attempt === 0 &&
 			count(bot, "lava_bucket") >= 1 &&
 			count(bot, "water_bucket") >= 1 &&
 			off() <= 0.6 &&
