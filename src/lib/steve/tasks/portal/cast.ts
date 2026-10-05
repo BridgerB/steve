@@ -490,13 +490,20 @@ const findFluidSource = (
  */
 // Pools a site attempt already failed at (anchor in water, pool unreachable). s9n-4/-5
 // re-sited at the same pool on every dispatch and failed identically ×4 until escalation
-// ended the run; the next dispatch now picks a different pool.
-const failedPools = new WeakMap<Bot, Vec3[]>();
-const excludePool = (bot: Bot, p: Vec3, why: string): void => {
+// ended the run; the next dispatch now picks a different pool. Excluded on the SECOND
+// failure only: excluding on the first (e40bc35) sent s10n-1/-2 to pools 43-68 away they
+// could not reach, and dropped the arena from 6/6 to 0/4 — one retry at the same pool
+// often succeeds.
+const nearPool = (a: Vec3, p: Vec3) => Math.abs(a.x - p.x) <= 12 && Math.abs(a.z - p.z) <= 12 && Math.abs(a.y - p.y) <= 4;
+const failedPools = new WeakMap<Bot, { p: Vec3; n: number }[]>();
+const excludePool = (bot: Bot, p: Vec3, why: string, hard = false): void => {
 	const list = failedPools.get(bot) ?? [];
-	list.push(p);
+	const hit = list.find((e) => nearPool(e.p, p));
+	if (hit) hit.n = hard ? Math.max(2, hit.n + 1) : hit.n + 1;
+	else list.push({ p, n: hard ? 2 : 1 });
 	failedPools.set(bot, list);
-	logEvent("cast", "pool_excluded", `${p.x},${p.y},${p.z} ${why} (${list.length} excluded)`);
+	const n = hit?.n ?? (hard ? 2 : 1);
+	logEvent("cast", n >= 2 ? "pool_excluded" : "pool_failed", `${p.x},${p.y},${p.z} ${why} (failure ${n}, ${list.filter((e) => e.n >= 2).length} excluded)`);
 };
 /**
  * Last-resort refill: the frame's pool can no longer be scooped (s9m-4: water spread over
@@ -507,7 +514,7 @@ const excludePool = (bot: Bot, p: Vec3, why: string): void => {
  */
 const refillFromOtherPool = async (bot: Bot): Promise<boolean> => {
 	const dead = findFluidSource(bot, "lava", 20) ?? bot.entity.position.floored();
-	excludePool(bot, dead, "refill_fail");
+	excludePool(bot, dead, "refill_fail", true);
 	const pool = findLavaPool(bot, 64, 3);
 	if (!pool) {
 		logEvent("cast", "refill_hop_none", `no other pool within 64`, bot.entity.position);
@@ -543,10 +550,10 @@ const findLavaPool = (
 			?.properties?.level;
 		return lv == null || String(lv) === "0";
 	};
-	const avoid = failedPools.get(bot) ?? [];
+	const avoid = (failedPools.get(bot) ?? []).filter((e) => e.n >= 2).map((e) => e.p);
 	const srcs = exposedFluidSources(bot, "lava", maxDistance)
 		.filter(isSrc)
-		.filter((p) => !avoid.some((a) => Math.abs(a.x - p.x) <= 12 && Math.abs(a.z - p.z) <= 12 && Math.abs(a.y - p.y) <= 4));
+		.filter((p) => !avoid.some((a) => nearPool(a, p)));
 	if (!srcs.length) return null;
 	const o = bot.entity.position;
 	const byDist = srcs

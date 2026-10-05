@@ -50,6 +50,7 @@ export const COUNTED = [
 	"station_walk_fail",
 	"obsidian_lost",
 	"spare_pick",
+	"pool_failed",
 	"pool_excluded",
 	"refill_hop",
 	"refill_hop_none",
