@@ -51,6 +51,8 @@ export const COUNTED = [
 	"obsidian_lost",
 	"spare_pick",
 	"pool_excluded",
+	"refill_hop",
+	"refill_hop_none",
 	"site_anchor",
 	"site_tunnel",
 	"site_return",

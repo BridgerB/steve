@@ -498,6 +498,37 @@ const excludePool = (bot: Bot, p: Vec3, why: string): void => {
 	failedPools.set(bot, list);
 	logEvent("cast", "pool_excluded", `${p.x},${p.y},${p.z} ${why} (${list.length} excluded)`);
 };
+/**
+ * Last-resort refill: the frame's pool can no longer be scooped (s9m-4: water spread over
+ * it and turned most sources to obsidian; the client still showed 8 open sources and the
+ * station walked to the same dead stand on every dispatch until the run ended at 7/10).
+ * Exclude this pool, walk to another one with a few sources within 64, refill there. The
+ * next mold stance (or the site_return on re-dispatch) brings the bot back to the frame.
+ */
+const refillFromOtherPool = async (bot: Bot): Promise<boolean> => {
+	const dead = findFluidSource(bot, "lava", 20) ?? bot.entity.position.floored();
+	excludePool(bot, dead, "refill_fail");
+	const pool = findLavaPool(bot, 64, 3);
+	if (!pool) {
+		logEvent("cast", "refill_hop_none", `no other pool within 64`, bot.entity.position);
+		return false;
+	}
+	const from = bot.entity.position.clone();
+	await goTo(bot, pool.pos, { range: 4, timeout: 45000 }).catch(() => false);
+	await stationRefill(bot, stationDeps(bot), {
+		frame: siteAnchor.get(bot) ?? null,
+		enough: () => count(bot, "bucket") <= (count(bot, "water_bucket") < 1 ? 1 : 0),
+	});
+	if (count(bot, "lava_bucket") < 1) await fillBucket(bot, "lava");
+	const ok = count(bot, "lava_bucket") >= 1;
+	logEvent(
+		"cast",
+		"refill_hop",
+		`${pool.sources} sources at ${pool.pos.x},${pool.pos.y},${pool.pos.z}, ${Math.round(distance(from, pool.pos))} from the frame → lava ${count(bot, "lava_bucket")} ok=${ok}`,
+		bot.entity.position,
+	);
+	return ok;
+};
 const findLavaPool = (
 	bot: Bot,
 	maxDistance: number,
@@ -932,7 +963,7 @@ export const castObsidianAt = async (
 			// §7.2 front-load: fill every spare empty bucket at the station (one empty kept
 			// while the water bucket is missing), so a trip pays for two blocks.
 			await stationRefill(bot, stationDeps(bot), { frame: siteAnchor.get(bot) ?? null, enough: () => count(bot, "bucket") <= (count(bot, "water_bucket") < 1 ? 1 : 0) });
-			if (count(bot, "lava_bucket") < 1 && !(await fillBucket(bot, "lava"))) return false;
+			if (count(bot, "lava_bucket") < 1 && !(await fillBucket(bot, "lava")) && !(await refillFromOtherPool(bot))) return false;
 			logEvent("cast", "front_load", `lava ${count(bot, "lava_bucket")} water ${count(bot, "water_bucket")} empty ${count(bot, "bucket")}`);
 		}
 		if (count(bot, "water_bucket") < 1 && !(await fillBucket(bot, "water")))
