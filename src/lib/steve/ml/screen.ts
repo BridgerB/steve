@@ -54,6 +54,8 @@ export const COUNTED = [
 	"pool_excluded",
 	"refill_hop",
 	"refill_hop_none",
+	"ghost_cleared",
+	"cup_capped",
 	"site_anchor",
 	"site_tunnel",
 	"site_return",

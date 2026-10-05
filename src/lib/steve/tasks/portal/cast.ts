@@ -11,7 +11,7 @@
  */
 
 import type { Bot } from "typecraft";
-import { distance, offset, raycast, vec3, type Vec3 } from "typecraft";
+import { distance, offset, raycast, vec3, worldSetBlockStateId, type Vec3 } from "typecraft";
 import {
 	digExposesLava,
 	digExposesWater,
@@ -114,7 +114,23 @@ const reliableUse = async (bot: Bot, look: Vec3, expect?: Vec3): Promise<boolean
 	await bot.lookAt(look, true);
 	await sleep(150);
 	if (expect) {
-		const cell = useTargetCell(bot, look);
+		let cell = useTargetCell(bot, look);
+		// The ray stopping in the bot's OWN feet/head cell is a client ghost (a rejected
+		// placement the client kept): the bot occupies that cell, so the server has air
+		// there (s9m-1, RCON-confirmed). s12n-2: aim_fail ×3 on it → block_fail with lava
+		// left in the cup → 5 lava deaths walking back to the frame. Clear it locally, re-aim.
+		const p0 = bot.entity.position;
+		if (
+			cell &&
+			bot.world &&
+			cell.x === Math.floor(p0.x) &&
+			cell.z === Math.floor(p0.z) &&
+			(cell.y === Math.floor(p0.y) || cell.y === Math.floor(p0.y) + 1)
+		) {
+			logEvent("cast", "ghost_cleared", `${cell.x},${cell.y},${cell.z} was ${getBlock(bot, cell)?.name} in the bot's own cell`, p0);
+			worldSetBlockStateId(bot.world, vec3(cell.x, cell.y, cell.z), 0);
+			cell = useTargetCell(bot, look);
+		}
 		if (!cell || cell.x !== expect.x || cell.y !== expect.y || cell.z !== expect.z) {
 			const p = bot.entity.position;
 			logEvent(
@@ -2421,6 +2437,13 @@ export const buildPortalByCasting = async (bot: Bot): Promise<StepResult> => {
 			return null;
 		}
 		logEvent("cast", "block_fail", `${pos.x},${pos.y},${pos.z} (${cast}/10)`);
+		// Lava left in the failed cup kills the bot when the next dispatch walks back
+		// (s12n-2: 5 lava deaths 2 s after portal_start). Cap it with cobble; the recast
+		// digs a solid cell before pouring.
+		if (isLava(getBlock(bot, pos)?.name)) {
+			const capped = await placeCobble(bot, pos);
+			logEvent("cast", "cup_capped", `${pos.x},${pos.y},${pos.z} ok=${capped}`, bot.entity.position);
+		}
 		return {
 			success: false,
 			message: `Cast ${cast}/10 obsidian — stuck at ${pos.x},${pos.y},${pos.z}`,
