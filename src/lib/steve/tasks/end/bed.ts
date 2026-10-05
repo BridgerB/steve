@@ -100,7 +100,7 @@ export const bedDragon = async (bot: Bot, budgetMs: number): Promise<StepResult>
 		const placed = await placeOn(bot, "bed", foot);
 		const hp0 = bot.health ?? 0;
 		if (!placed) {
-			logEvent("end", "bed_place_fail", `foot ${foot.x},${foot.y},${foot.z} floor=${blockName(bot, vec3(foot.x, foot.y - 1, foot.z))}`, p);
+			logEvent("end", "bed_place_fail", `foot ${foot.x},${foot.y},${foot.z} floor=${blockName(bot, vec3(foot.x, foot.y - 1, foot.z))} held=${bot.heldItem?.name ?? "none"} slot=${bot.quickBarSlot} bot=${p.x.toFixed(2)},${p.y.toFixed(2)},${p.z.toFixed(2)}`, p);
 			await sleep(800);
 			continue;
 		}
