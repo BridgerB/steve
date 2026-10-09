@@ -320,7 +320,7 @@ const topUpBuildBlocks = async (bot: Bot, want: number, frame: Vec3 | null): Pro
  * non-obsidian block directly in the way. Bounded to a few blocks — never
  * wanders off across the arena like the A* pathfinder does in a cluttered frame.
  */
-const shuffleTo = async (bot: Bot, tx: number, tz: number): Promise<void> => {
+const shuffleTo = async (bot: Bot, tx: number, tz: number, opts: { lavaSafe?: boolean } = {}): Promise<void> => {
 	bot.setControlState("sneak", false);
 	bot.setControlState("jump", false);
 	const s = bot.entity.position;
@@ -337,7 +337,7 @@ const shuffleTo = async (bot: Bot, tx: number, tz: number): Promise<void> => {
 		const fy = Math.floor(p.y);
 		for (const dy of [0, 1]) {
 			const b = getBlock(bot, vec3(fx, fy + dy, fz));
-			if (b && isSolid(b.name) && b.name !== "obsidian") {
+			if (b && isSolid(b.name) && b.name !== "obsidian" && !(opts.lavaSafe && touchesLava(bot, vec3(fx, fy + dy, fz)))) {
 				await digAt(bot, vec3(fx, fy + dy, fz));
 			}
 		}
@@ -951,6 +951,7 @@ const stationDeps = (bot: Bot): StationDeps => ({
 	equip: (n) => equip(bot, n),
 	placeCobble: (p) => placeCobble(bot, p),
 	use: (look) => reliableUse(bot, look),
+	shuffle: (x, z) => shuffleTo(bot, x, z, { lavaSafe: true }),
 });
 
 // Cells this process has cast (the bot's own obsidian; also the obsidian_lost diagnostic).
