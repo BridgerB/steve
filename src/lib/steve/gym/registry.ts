@@ -28,6 +28,7 @@ import { bedDragon } from "../tasks/end/bed.ts";
 
 // Dragon gym (cycle 4 Part 8): the setup's RCON, kept for the run's truth check.
 let endRcon: ((cmd: string) => Promise<string>) | null = null;
+const DRAGON_KIT = ["white_bed 6", "obsidian 32", "iron_sword 1", "cooked_beef 16", "cobblestone 64", "cobblestone 64", "water_bucket 1"];
 let dragonDead = false;
 const inEnd = (cmd: string) => `execute in minecraft:the_end run ${cmd}`;
 import { enterPortal } from "../tasks/portal/enter.ts";
@@ -115,8 +116,10 @@ export const GYM_STEPS: GymStep[] = [
 		slug: "dragon",
 		label: "Kill the Dragon (beds)",
 		order: 40,
-		// Skill 12 starts with the crystals gone. Kit per Part 8.
-		prereq: ["white_bed 6", "obsidian 32", "iron_sword 1", "cooked_beef 16", "cobblestone 64", "cobblestone 64", "water_bucket 1"],
+		// Skill 12 starts with the crystals gone. Kit per Part 8, given in the End by setup
+		// (cycle 6, decision 3): d1–d6 gave it in the overworld before the teleport and the
+		// server held no beds once the bot was in the End.
+		prereq: [],
 		setup: async (b, rcon) => {
 			endRcon = rcon;
 			dragonDead = false;
@@ -132,6 +135,36 @@ export const GYM_STEPS: GymStep[] = [
 			await rcon(`execute in minecraft:the_end positioned 0 0 8 positioned over motion_blocking_no_leaves run tp ${b.username} ~0.5 ~ ~0.5 180 0`);
 			await rcon(`effect clear ${b.username}`).catch(() => "");
 			await new Promise((r) => setTimeout(r, 3000));
+			// Decision 3 order: the server says the bot is in the End and the client agrees,
+			// then give, then confirm the kit from the server's view before the attempt.
+			const name = b.username;
+			const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+			const serverInEnd = async () => /passed/i.test(await rcon(`execute as ${name} at @s if dimension minecraft:the_end`).catch(() => ""));
+			const clientInEnd = () => /the_end/.test(String(b.game?.dimension ?? ""));
+			for (let i = 0; i < 30 && !((await serverInEnd()) && clientInEnd()); i++) await sleep(1000);
+			logEvent("end", "kit_order", `server_in_end=${await serverInEnd()} client_dim=${b.game?.dimension}`);
+			const beds = async () => Number(/Found (\d+)/.exec(await rcon(`clear ${name} #minecraft:beds 0`).catch(() => ""))?.[1] ?? 0);
+			const giveKit = async () => {
+				await rcon(`clear ${name}`).catch(() => "");
+				for (const item of DRAGON_KIT) await rcon(`give ${name} ${item}`).catch(() => "");
+				await sleep(1500);
+			};
+			await giveKit();
+			let n = await beds();
+			const inv = await rcon(`data get entity ${name} Inventory`).catch((e) => String(e));
+			logEvent("end", "kit_order", `gave in End: server beds=${n}; Inventory ${inv.slice(0, 160)}`);
+			if (n < 6) {
+				// Fallback: give in the overworld, confirm, teleport, confirm again.
+				await rcon(`execute in minecraft:overworld run tp ${name} 0 200 0`).catch(() => "");
+				for (let i = 0; i < 30 && /passed/i.test(await rcon(`execute as ${name} at @s if dimension minecraft:the_end`).catch(() => "")); i++) await sleep(1000);
+				await giveKit();
+				const before = await beds();
+				await rcon(`execute in minecraft:the_end positioned 0 0 8 positioned over motion_blocking_no_leaves run tp ${name} ~0.5 ~ ~0.5 180 0`);
+				for (let i = 0; i < 30 && !((await serverInEnd()) && clientInEnd()); i++) await sleep(1000);
+				n = await beds();
+				logEvent("end", "kit_order", `fallback: overworld beds=${before}, after tp beds=${n}`);
+			}
+			await sleep(1000);
 		},
 		run: async (b) => {
 			const res = await bedDragon(b, 900_000);
