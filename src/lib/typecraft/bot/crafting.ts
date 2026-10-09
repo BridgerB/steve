@@ -31,6 +31,8 @@ const findIngredientSlot = (
 	return null;
 };
 
+const craftChain = new WeakMap<Bot, Promise<void>>();
+
 export const initCrafting = (bot: Bot, _options: BotOptions): void => {
 	bot.recipesFor = (
 		itemType: number,
@@ -137,9 +139,26 @@ export const initCrafting = (bot: Bot, _options: BotOptions): void => {
 						w = 3;
 						h = 3;
 					} else {
+						// A 2×2 craft clicks the player's own grid (window 0). The server ignores
+						// clicks for any window but the one it has open, so a table or furnace
+						// still open (a timed-out step's, or one the bot walked away from) must be
+						// closed first; its 3×3 slot numbers would also map to other cells.
+						if (bot.currentWindow && bot.currentWindow !== bot.inventory) {
+							bot.emit("debug", "craft", { event: "close_before_2x2", windowId: bot.currentWindow.id });
+							bot.closeWindow(bot.currentWindow);
+						}
 						window = bot.inventory;
 						w = 2;
 						h = 2;
+					}
+
+					// Reclaim anything the server still holds in the grid (an interrupted
+					// craft) before placing: stray items change the recipe's result.
+					for (let s = w * h; s >= 1; s--) {
+						if (window.slots[s]) {
+							check();
+							await bot.clickWindow(s, 0, 1, window);
+						}
 					}
 
 					// Convert grid x,y to slot index (slot 0 is result, 1+ is grid)
@@ -204,11 +223,11 @@ export const initCrafting = (bot: Bot, _options: BotOptions): void => {
 									if (originalSourceSlot === null)
 										originalSourceSlot = sourceSlot;
 									check();
-									await bot.clickWindow(sourceSlot, 0, 0);
+									await bot.clickWindow(sourceSlot, 0, 0, window);
 								}
 
 								check();
-								await bot.clickWindow(slot(x, y), 1, 0);
+								await bot.clickWindow(slot(x, y), 1, 0, window);
 							}
 						}
 					}
@@ -243,11 +262,11 @@ export const initCrafting = (bot: Bot, _options: BotOptions): void => {
 								if (originalSourceSlot === null)
 									originalSourceSlot = sourceSlot;
 								check();
-								await bot.clickWindow(sourceSlot, 0, 0);
+								await bot.clickWindow(sourceSlot, 0, 0, window);
 							}
 
 							check();
-							await bot.clickWindow(destSlot, 1, 0);
+							await bot.clickWindow(destSlot, 1, 0, window);
 						}
 					}
 
@@ -301,19 +320,19 @@ export const initCrafting = (bot: Bot, _options: BotOptions): void => {
 					if (got && got.type !== recipe.result.id) {
 						bot.emit("debug", "craft", { event: "wrong_result", got: got.name, want: recipe.result.id });
 						for (let s = 1; s <= w * h; s++) {
-							if (window.slots[s]) await bot.putAway(s);
+							if (window.slots[s]) await bot.putAway(s, window);
 						}
 						throw new Error(`Wrong craft result: ${got.name}`);
 					}
 					if (!got) {
 						for (let s = 1; s <= w * h; s++) {
-							if (window.slots[s]) await bot.putAway(s);
+							if (window.slots[s]) await bot.putAway(s, window);
 						}
 						throw new Error("No craft result");
 					}
 
 					// Take the result from slot 0
-					await bot.putAway(0);
+					await bot.putAway(0, window);
 
 					// Handle outShape leftovers (e.g. buckets from cake recipe)
 					if (recipe.outShape) {
@@ -321,7 +340,7 @@ export const initCrafting = (bot: Bot, _options: BotOptions): void => {
 							const row = recipe.outShape[y]!;
 							for (let x = 0; x < row.length; x++) {
 								if (row[x]!.id !== -1) {
-									await bot.putAway(slot(x, y));
+									await bot.putAway(slot(x, y), window);
 								}
 							}
 						}
@@ -333,11 +352,11 @@ export const initCrafting = (bot: Bot, _options: BotOptions): void => {
 					// oak_buttons after the result check — from this sweep, not the take).
 					for (let s = w * h; s >= 1; s--) {
 						if (window.slots[s]) {
-							await bot.putAway(s);
+							await bot.putAway(s, window);
 						}
 					}
 					if (window.slots[0] && window.slots[0].type === recipe.result.id) {
-						await bot.putAway(0);
+						await bot.putAway(0, window);
 					}
 				}
 			} finally {
@@ -357,12 +376,21 @@ export const initCrafting = (bot: Bot, _options: BotOptions): void => {
 			}
 		};
 
+		// One craft at a time per bot: two crafts interleaving clicks on the same grid mint
+		// junk (race c5 808 at 12:51:22: a preempted plank craft still clicking while the next
+		// one placed → oak_button, then the grid desync behind 100 "No craft result").
+		const prev = craftChain.get(bot) ?? Promise.resolve();
+		let release!: () => void;
+		const mine = new Promise<void>((r) => (release = r));
+		craftChain.set(bot, prev.then(() => mine));
 		try {
+			await withTimeout(prev, 30000).catch(() => {});
 			await withTimeout(doCraft(), 30000);
 		} finally {
 			if (windowCraftingTable) {
 				bot.closeWindow(windowCraftingTable);
 			}
+			release();
 		}
 	};
 };
