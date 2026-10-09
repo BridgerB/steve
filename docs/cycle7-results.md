@@ -90,3 +90,9 @@ compare.ts keyed rows by landing only, so the f10/f12 "nat + nat2" pools used 12
 - natural (24 pairs): 0/24 vs 1/24 (base nat-5, landing 5, 653 s); **best frame 3.92 vs 3.25, P = 0.803** (highest natural mean this cycle); deaths 1.79 vs 2.21, P = 0.821; lava deaths equal. Kept.
 - arena: 11/12 vs 11/12.
 - Landing 5 has entered the Nether 5 times (f1, f5, f7, f13, f15), and no other landing ever has: the others fail upstream (anchor, find_lava, refill).
+
+## RACE c7: FIRST RACE NETHER ENTRY (f4 worker 1, run 37890750601, build 303cc21, 5 bots, 240 min, base -20000,20000)
+- **steve-race-005 entered the Nether at ~90 min** from a cold start, zero human input. Server: "steve-race-005 has made the advancement [We Need to Go Deeper]" at 07:24:20 UTC (race start 05:54). Its path on the server: Stone Age 06:02, Getting an Upgrade 06:04, Acquire Hardware 06:15, Hot Stuff 06:48, Nether 07:24. Bot log: `[LIGHT] lit@-19,4,15 fireCell=nether_portal`. It took 29 portal dispatches (deaths at anchor, lava_fill, water, find_lava; "pool unreachable"; "site 2 from its lava" ×8) before the frame closed.
+- Funnel (race-funnel.ts, data/runs/37890750601/fleet-w1/race-funnel.txt): stone pick 5/5 (3–12 min); bucket 4/5; water 4/5; flint & steel 3/5 (35, 77, 38 min); site anchor 2/5; obsidian ≥ 1 2/5; portal lit 1/5; in Nether 1/5 [4%, 62%].
+- Two bots never got flint and steel (002: no bucket kit; 004: no water). Race c5 (old code): 0/3 past the iron deadlock. Deaths: 26 rows (6 inWall, 4 lava, 3 mob, 13 uncaused). 26 water re-placements at the start, 5 process exits.
+- This ran on 303cc21, before the iron fuel fixes (9d145cf, f9 log fuel), the lid, walkway, lava guards. Races c8a–d (f11) run the current code.
