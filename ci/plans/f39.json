@@ -1,0 +1,44 @@
+{
+	"label": "f39",
+	"workers": 20,
+	"experiments": [
+		{
+			"name": "race",
+			"slug": "portal-natural",
+			"runs": 12,
+			"est_s": 2800,
+			"env": {
+				"GYM_TOTAL_S": "2700",
+				"GYM_KIT": "stone_pickaxe 1,bucket 2,water_bucket 1,flint_and_steel 1,cobblestone 24,oak_log 3"
+			},
+			"arms": [
+				{
+					"name": "picks3"
+				},
+				{
+					"name": "base",
+					"ref": "exp/picks3-base"
+				}
+			]
+		},
+		{
+			"name": "race2",
+			"slug": "portal-natural",
+			"runs": 12,
+			"est_s": 2800,
+			"env": {
+				"GYM_TOTAL_S": "2700",
+				"GYM_KIT": "stone_pickaxe 1,bucket 2,water_bucket 1,flint_and_steel 1,cobblestone 24,oak_log 3"
+			},
+			"arms": [
+				{
+					"name": "picks3"
+				},
+				{
+					"name": "base",
+					"ref": "exp/picks3-base"
+				}
+			]
+		}
+	]
+}
