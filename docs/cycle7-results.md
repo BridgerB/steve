@@ -177,3 +177,7 @@ compare.ts keyed rows by landing only, so the f10/f12 "nat + nat2" pools used 12
 ## f34, run 37989680907: HEAD (champion + tunnel), natural ×4 at 2700 s + blaze ×4
 - set A 3/12 + 3/12 = 6/24 = 25% [12%, 45%]; set B 5/12 + 5/12 = 10/24 = 42% [24%, 61%]; pooled 16/48 = 33% [22%, 48%].
 - blaze 0/4: no blaze_kill events; deaths early (lava 20:56, fireball 20:55, slain by blaze 20:58) with up to 15 breakoffs per run; after a death the fight loop runs out the budget (no death check). The bot takes ranged fire and rarely closes to reach — needs combat design (shield/bow/cover), not tuning.
+
+## f35, run 37990150894: race-like lean kit vs gym kit (HEAD), natural ×2 at 2700 s
+- lean (stone_pickaxe 1, bucket 2, water_bucket 1, flint_and_steel 1, cobblestone 12): **1/25 = 4% [1%, 20%]**; gym kit (2 stone pickaxes, 64 cobble, 16 planks): **6/24 = 25% [12%, 45%]**.
+- Lean failures: 5 × "Pickaxe worn out during site prep" (chamber_no_pick, held=nothing), plus the usual portal_start/lava_fill stalls. The kit explains much of the race cast gap (race funnel c10–c12: 33 bots cast obsidian, 5 lit). Fix: ensureSparePickaxe aims for 3 stone pickaxes and crafts planks from logs (f39, race-like kit with 3 logs and 24 cobble).
