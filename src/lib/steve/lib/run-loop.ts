@@ -340,7 +340,16 @@ export const reduce = (
 
 			// Deadlock recovery — nothing runnable → clear the gather chain and retry.
 			if (!nextStep && phase !== "VICTORY") {
-				cmds.push({ type: "event", category: "step", event: "deadlock", detail: "no executable step — forcing gather_wood" });
+				// The synced state that blocked every step (cycle 7: the iron-deadlock slug reproduced
+				// race c5 809 with gates that pass on a hand-written copy of its inventory).
+				const iv = state.inventory;
+				const eq = state.equipment;
+				cmds.push({
+					type: "event",
+					category: "step",
+					event: "deadlock",
+					detail: `no executable step — forcing gather_wood | ore=${iv.ironOre} ingots=${iv.ironIngots} buckets=${iv.buckets}/${iv.waterBuckets}w/${iv.lavaBuckets}l planks=${iv.planks} logs=${iv.logs} coal=${iv.coal} cobble=${iv.cobblestone} flint=${iv.flint} gravel=${iv.gravel} fns=${iv.flintAndSteel} furnace=${eq.hasFurnace} table=${eq.hasCraftingTable} pick=${eq.pickaxe} done=${[...completed].join(",")}`,
+				});
 				completed = new Set(completed);
 				for (const id of DEADLOCK_IDS) completed.delete(id);
 				nextStep = getNextStep(state, completed);

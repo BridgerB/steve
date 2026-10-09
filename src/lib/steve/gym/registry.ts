@@ -103,7 +103,97 @@ const craftStaleTable = async (b: Bot): Promise<StepResult> => {
 	return craftSticks(b);
 };
 
+// Cycle 7: race c5's steve-race-809 deadlocked 98 minutes ("no executable step", 169,773
+// events) holding 1 raw iron, 3 buckets and 0 ingots: smelting wanted 3 ore, flint and steel
+// wanted an ingot. The kit is its last inventory before the deadlock (snapshot 13:07:16,
+// telemetry on the box); the real step machine runs from it. Pass is flint and steel from the
+// server's view. Measures the smelt gate (d27933a), never raced.
+let ironRcon: ((cmd: string) => Promise<string>) | null = null;
+const IRON_DEADLOCK_BUDGET_MS = 600_000;
+
+// Cycle 7 Part 6.6: blaze rods, never measured. The harness finds a fortress by RCON locate,
+// generates its area and puts the kitted bot on a nether-brick floor with headroom; the bot
+// then runs tasks/nether findFortress + killBlazes. Pass is a blaze rod from the server's
+// view. The baseline is the point.
+let blazeRcon: ((cmd: string) => Promise<string>) | null = null;
+const BLAZE_BUDGET_MS = 600_000;
+const inNether = (cmd: string) => `execute in minecraft:the_nether run ${cmd}`;
+
 export const GYM_STEPS: GymStep[] = [
+	{
+		slug: "blaze-rod",
+		label: "Kitted bot at a Nether fortress to a blaze rod",
+		order: 30,
+		prereq: ["iron_sword 1", "iron_helmet 1", "iron_chestplate 1", "iron_leggings 1", "iron_boots 1", "cooked_beef 16", "cobblestone 64", "iron_pickaxe 1"],
+		setup: async (b, rcon) => {
+			blazeRcon = rcon;
+			const loc = await rcon("execute in minecraft:the_nether positioned 0 64 0 run locate structure minecraft:fortress");
+			const m = /\[(-?\d+), (?:~|-?\d+), (-?\d+)\]/.exec(loc);
+			if (!m) throw new Error(`HARNESS no fortress: ${loc}`);
+			const fx = Number(m[1]);
+			const fz = Number(m[2]);
+			await rcon(inNether(`forceload add ${fx - 48} ${fz - 48} ${fx + 48} ${fz + 48}`));
+			for (let i = 0; i < 120; i++) {
+				if (/passed/i.test(await rcon(`execute in minecraft:the_nether if loaded ${fx} 64 ${fz}`).catch(() => ""))) break;
+				await new Promise((r) => setTimeout(r, 500));
+			}
+			// A nether-brick floor with two air blocks above, searched around the located start.
+			let spot: [number, number, number] | null = null;
+			search: for (const [dx, dz] of [[0, 0], [4, 0], [-4, 0], [0, 4], [0, -4], [8, 0], [-8, 0], [0, 8], [0, -8], [12, 0], [-12, 0], [0, 12], [0, -12]] as const)
+				for (let y = 90; y >= 40; y--) {
+					const x = fx + dx;
+					const z = fz + dz;
+					if (
+						/passed/i.test(await rcon(`execute in minecraft:the_nether if block ${x} ${y} ${z} minecraft:nether_bricks`).catch(() => "")) &&
+						/passed/i.test(await rcon(`execute in minecraft:the_nether if block ${x} ${y + 1} ${z} minecraft:air`).catch(() => "")) &&
+						/passed/i.test(await rcon(`execute in minecraft:the_nether if block ${x} ${y + 2} ${z} minecraft:air`).catch(() => ""))
+					) {
+						spot = [x, y + 1, z];
+						break search;
+					}
+				}
+			if (!spot) throw new Error(`HARNESS no brick floor near fortress ${fx},${fz}`);
+			await rcon(`execute in minecraft:the_nether run tp ${b.username} ${spot[0] + 0.5} ${spot[1]} ${spot[2] + 0.5}`);
+			logEvent("gym", "blaze_setup", `fortress ${fx},${fz} spot ${spot.join(",")}`);
+			await new Promise((r) => setTimeout(r, 4000));
+		},
+		run: async (b) => {
+			const { findFortress, killBlazes } = await import("../tasks/nether/main.ts");
+			const t0 = Date.now();
+			const f = await findFortress(b);
+			logEvent("gym", "blaze_fortress", f.message);
+			const left = BLAZE_BUDGET_MS - (Date.now() - t0);
+			const k = await Promise.race([killBlazes(b, 1), new Promise<StepResult>((r) => setTimeout(() => r({ success: false, message: "blaze budget spent" }), Math.max(0, left)))]);
+			return k;
+		},
+		pass: (b) => has(b, "blaze_rod", 1),
+		truthPass: async (rcon, name) => (await serverCount(rcon, name, "minecraft:blaze_rod")) >= 1,
+		teardown: async (rcon) => {
+			await rcon(inNether("forceload remove all")).catch(() => "");
+		},
+		timeoutMs: BLAZE_BUDGET_MS + 120_000,
+	},
+	{
+		slug: "iron-deadlock",
+		label: "From race c5 809's deadlock inventory to flint and steel",
+		order: 16.5,
+		prereq: ["raw_iron 1", "bucket 2", "water_bucket 1", "furnace 1", "oak_planks 12", "stick 10", "cobblestone 64", "cobblestone 18", "stone_pickaxe 1", "wooden_pickaxe 1"],
+		setup: async (_b, rcon) => {
+			ironRcon = rcon;
+		},
+		run: async (b) => {
+			const { runStepMachine } = await import("./step-machine.ts");
+			const r = await runStepMachine(
+				b,
+				async () => (ironRcon ? (await serverCount(ironRcon, b.username, "minecraft:flint_and_steel")) >= 1 : has(b, "flint_and_steel", 1)),
+				IRON_DEADLOCK_BUDGET_MS,
+			);
+			return { success: r.ok, message: r.ok ? `flint and steel in ${r.seconds} s` : `no flint and steel after ${r.seconds} s` };
+		},
+		pass: (b) => has(b, "flint_and_steel", 1),
+		truthPass: async (rcon, name) => (await serverCount(rcon, name, "minecraft:flint_and_steel")) >= 1,
+		timeoutMs: IRON_DEADLOCK_BUDGET_MS + 60_000,
+	},
 	{
 		slug: "craft-stale-table",
 		label: "Craft sticks after an open table and a death",
