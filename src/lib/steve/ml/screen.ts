@@ -31,7 +31,10 @@ export interface RunMetrics {
 // Diagnostic events counted per run (cycle 5 per-fix counters).
 export const COUNTED = [
 	"anchor_unreached",
+	"reanchor_near_frame",
 	"reanchor_prevented",
+	"frame_present_false",
+	"frame_present_blocked",
 	"move_vetoed",
 	"lava_ring_sealed",
 	"pre_pour_unsafe",
