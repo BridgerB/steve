@@ -157,7 +157,8 @@ const runOne = (raceId: string): Promise<{ code: number | null; out: string }> =
 for (let i = 1; i <= RUNS; i++) {
 	// GYM_LANDING_OFFSET: a shard of a sharded screen replays its own slice of the set.
 	slotLanding = LANDINGS[Number(process.env.GYM_LANDING_OFFSET ?? 0) + i - 1];
-	const runId = `${BATCH}-${i}`;
+	// Run ids follow the landing index, so runs of one batch spread over many runners never collide.
+	const runId = `${BATCH}-${Number(process.env.GYM_LANDING_OFFSET ?? 0) + i}`;
 	const raceId = `gym-${SLUG}-${runId}`;
 	// Pre-run check: RCON must answer. A dead link makes every run a harness loss
 	// that teaches nothing (b14: 6 runs). Pause up to 30 min, then record harness.
