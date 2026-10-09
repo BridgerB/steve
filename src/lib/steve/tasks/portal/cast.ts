@@ -354,17 +354,6 @@ const shuffleTo = async (bot: Bot, tx: number, tz: number, opts: { lavaSafe?: bo
 			(feetN ?? "").includes("water") || (headN ?? "").includes("water");
 		const stuck = dist > prevDist - 0.05;
 		prevDist = dist;
-		// A step up needs a jump, and a jump needs the cell over the head clear. Landing 11
-		// walk_grid: the bot in a 2-high pocket at y16, the stand one up beside it, y18 over
-		// the bot solid — every walk ended "near_not_on_stand" for 20-46 s.
-		if (stuck) {
-			const lid = vec3(px, Math.floor(p.y) + 2, pz);
-			const n = getBlock(bot, lid)?.name;
-			if (isSolid(n) && n !== "obsidian" && !(opts.lavaSafe && touchesLava(bot, lid))) {
-				await digAt(bot, lid);
-				logEvent("cast", "shuffle_headroom", `${lid.x},${lid.y},${lid.z} was ${n}`, p);
-			}
-		}
 		await bot.lookAt(vec3(tx, p.y, tz));
 		bot.setControlState("forward", true);
 		if (stuck || inWater) bot.setControlState("jump", true);
