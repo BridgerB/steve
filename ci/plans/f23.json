@@ -1,0 +1,25 @@
+{
+	"label": "f23",
+	"workers": 20,
+	"experiments": [
+		{
+			"name": "natb",
+			"slug": "portal-natural",
+			"landing_set": "B",
+			"runs": 12,
+			"est_s": 2800,
+			"env": {
+				"GYM_TOTAL_S": "2700"
+			},
+			"arms": [
+				{
+					"name": "light"
+				},
+				{
+					"name": "base",
+					"ref": "exp/light-base"
+				}
+			]
+		}
+	]
+}

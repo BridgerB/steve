@@ -115,3 +115,6 @@ compare.ts keyed rows by landing only, so the f10/f12 "nat + nat2" pools used 12
 - **1/48 = 2% [0.4%, 11%]** (landing 5, 523 s). Mean best frame 4.79; histogram 0:16, 1:1, 3:1, 4:1, 5:2, 6:5, 7:7, 8:6, 9:5, **10:4** — four trials had a complete frame, one entered.
 - The last step is now the wall. f20-nat-a-8 read in full: frame 1 checked 10/10, then the bot lit it from the approach row with its hitbox inside the fire cell and burned to death in 11 s (inFire); after respawn on the surface 31 away it could not path back down (anchor_unreached) and built a second frame 80 blocks away; frame 2 checked 10/10, portal_unlit, and the next dispatch "resumed" it by walking to the pool to refill lava and died in it. Fix 7332567 (site_complete skips the refill; light only with the hitbox clear of the frame plane; step out of fire; light_interior logged), measured in f22.
 - Open: a complete frame abandoned after a far respawn (site return fails underground).
+
+## f21, run 37921265690: landing set B (new terrain), HEAD vs 303cc21 at 2700 s, 12 paired
+- both 0/12; **best frame 5.18 vs 3.64, +1.55, P(better) = 0.847**; lava deaths 0.64 vs 1.27, P = 0.864; deaths 2.09 vs 2.27. The cycle-7 gain carries to new landings (direction; not separated at n = 11). Head trials 2, 4, 5, 6 cast 10–11 obsidian with no portal: the last-step wall again. f23 = the light fix on set B.
