@@ -698,7 +698,7 @@ const runRace = async (count: number, timeoutMs: number) => {
 				let sx = x;
 				let sz = z;
 				let sy = 200;
-				for (let t = 0; t < 4; t++) {
+				for (let t = 0; t < 8; t++) {
 					// Cycle 5: onto the motion-blocking heightmap (the region is pregenerated),
 					// not a drop from y200.
 					// The heightmap tp needs the landing chunk loaded (pregeneration released its
@@ -747,7 +747,7 @@ const runRace = async (count: number, timeoutMs: number) => {
 					// Cycle 6 shore check (from ruststeve: 10/10 bots on dry land against 6/10):
 					// no water within 8 blocks, probed every 2 blocks at the feet and the block below.
 					let shore = false;
-					if (landedY >= 55 && landedY < 200 && !inLava && !inWater && t < 3) {
+					if (landedY >= 55 && landedY < 200 && !inLava && !inWater && t < 7) {
 						scan: for (let dx = -8; dx <= 8; dx += 2)
 							for (let dz = -8; dz <= 8; dz += 2)
 								for (const dy of [0, -1]) {
@@ -760,8 +760,12 @@ const runRace = async (count: number, timeoutMs: number) => {
 					}
 					if (landedY >= 55 && landedY < 200 && !inLava && !inWater && !shore) break;
 					console.log(`  ${name} landed at y=${landedY} (${sx},${sz})${inLava ? " IN LAVA" : inWater ? " IN WATER" : shore ? " ON A SHORE" : " — underground"}, re-placing`);
-					sx = x + (t + 1) * 9;
-					sz = z + (t % 2 === 0 ? 7 : -7);
+					// A growing ring, 13 to 104 blocks out at a different bearing each try. The old
+					// 9-block steps walked along one lake (dev1 race: 4 of 4 landings in water).
+					const ringR = 13 * (t + 1);
+					const ringA = t * 2.4;
+					sx = x + Math.round(ringR * Math.cos(ringA));
+					sz = z + Math.round(ringR * Math.sin(ringA));
 				}
 				// The race cell IS this bot's world spawn: without this, a death sends
 				// it back to the real world spawn thousands of blocks from its mine,
