@@ -21,6 +21,49 @@ import { DatabaseSync } from "node:sqlite";
 import { bootstrapMeanDiff } from "../../src/lib/steve/ml/stats.ts";
 import { runMetrics, type RunMetrics, type TelemetryEvent } from "../../src/lib/steve/ml/screen.ts";
 
+// Paired mode (cycle 6, decision 1): two batches run on the same ordered landing set
+// (GYM_LANDINGS). Runs pair by landing; per pair d = B − A for each metric; sign test and
+// a bootstrap of the paired mean. Pass and best_frame/obsidian: higher is better; deaths
+// and seconds: lower is better (reported as A − B so a positive mean favours B).
+//   node --import ./typecraft-resolve.mjs scripts/ml/compare.ts --paired <A> <B>
+if (process.argv[2] === "--paired") {
+	const { bootstrapPairedMean, signTest } = await import("../../src/lib/steve/ml/stats.ts");
+	const [, , , A, B] = process.argv;
+	if (!A || !B) {
+		console.error("usage: compare.ts --paired <batchA> <batchB>");
+		process.exit(1);
+	}
+	type Row = { run_id: string; outcome: string; seconds: number; best_frame: number | null; obsidian: number | null; deaths: number | null; landing_x: number | null; landing_z: number | null };
+	const runsDb = new DatabaseSync("data/gym/batches.db");
+	const load = (batch: string): Map<string, Row> => {
+		const rows = runsDb
+			.prepare("SELECT run_id, outcome, seconds, best_frame, obsidian, deaths, landing_x, landing_z FROM runs WHERE batch = ? AND outcome NOT IN ('harness','disconnect','aborted') ORDER BY started_at")
+			.all(batch) as Row[];
+		return new Map(rows.filter((r) => r.landing_x !== null).map((r) => [`${r.landing_x},${r.landing_z}`, r]));
+	};
+	const a = load(A);
+	const b = load(B);
+	const keys = [...a.keys()].filter((k) => b.has(k));
+	console.log(`A ${A}: n=${a.size}   B ${B}: n=${b.size}   paired landings: ${keys.length}`);
+	const metrics: [string, (r: Row) => number, "up" | "down"][] = [
+		["pass", (r) => (r.outcome === "pass" ? 1 : 0), "up"],
+		["best_frame", (r) => Number(r.best_frame ?? 0), "up"],
+		["obsidian", (r) => Number(r.obsidian ?? 0), "up"],
+		["deaths", (r) => Number(r.deaths ?? 0), "down"],
+		["seconds", (r) => Number(r.seconds), "down"],
+	];
+	for (const [name, get, dir] of metrics) {
+		const diffs = keys.map((k) => (dir === "up" ? get(b.get(k)!) - get(a.get(k)!) : get(a.get(k)!) - get(b.get(k)!)));
+		const s = signTest(diffs);
+		const bs = bootstrapPairedMean(diffs);
+		const mean = (m: Map<string, Row>) => keys.reduce((t, k) => t + get(m.get(k)!), 0) / Math.max(1, keys.length);
+		console.log(
+			`${name.padEnd(11)} A ${mean(a).toFixed(2)}  B ${mean(b).toFixed(2)}  B better on ${s.pos}, worse on ${s.neg}, tied ${s.ties}  sign p=${s.p.toFixed(3)}  paired mean ${dir === "up" ? "B−A" : "A−B"} ${bs.mean.toFixed(2)} 95% [${bs.lo.toFixed(2)}, ${bs.hi.toFixed(2)}]  P(B better)=${bs.pPositive.toFixed(3)}`,
+		);
+	}
+	process.exit(0);
+}
+
 if (process.argv[2] === "--means") {
 	const [, , , A, B] = process.argv;
 	if (!A || !B) {

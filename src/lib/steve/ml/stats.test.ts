@@ -33,3 +33,18 @@ describe("bootstrapMeanDiff", () => {
 		expect(same.pBGreater).toBe(0.5);
 	});
 });
+
+describe("paired statistics (cycle 6)", () => {
+	it("sign test: 10 of 10 positive is p = 2/1024", async () => {
+		const { signTest } = await import("./stats.ts");
+		expect(signTest(Array(10).fill(1)).p).toBeCloseTo(2 / 1024, 6);
+		expect(signTest([1, -1, 0]).p).toBe(1);
+	});
+	it("paired bootstrap centres on the mean difference", async () => {
+		const { bootstrapPairedMean } = await import("./stats.ts");
+		const r = bootstrapPairedMean([2, 3, 1, 2, 2, 3, 1, 2]);
+		expect(r.mean).toBeCloseTo(2, 6);
+		expect(r.pPositive).toBe(1);
+		expect(r.lo).toBeGreaterThan(1);
+	});
+});

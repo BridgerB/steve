@@ -159,3 +159,45 @@ export const bootstrapMeanDiff = (
 	}
 	return { pBGreater: greater / iters, lo: quantile(diffs, 0.025), hi: quantile(diffs, 0.975) };
 };
+
+/**
+ * Paired comparison (cycle 6, decision 1): per-landing differences d = B − A on the same
+ * ordered landing set. Sign test: exact two-sided binomial p on the non-zero differences.
+ * Bootstrap of the paired mean: resample the differences, P(mean d > 0) (ties half) and
+ * the 95% interval of the mean difference.
+ */
+export const signTest = (diffs: number[]): { pos: number; neg: number; ties: number; p: number } => {
+	const pos = diffs.filter((d) => d > 0).length;
+	const neg = diffs.filter((d) => d < 0).length;
+	const n = pos + neg;
+	if (n === 0) return { pos, neg, ties: diffs.length, p: 1 };
+	const k = Math.min(pos, neg);
+	// P(X <= k) for X ~ Bin(n, 1/2), doubled, capped at 1.
+	let c = 1;
+	let tail = 0;
+	for (let i = 0; i <= k; i++) {
+		if (i > 0) c = (c * (n - i + 1)) / i;
+		tail += c;
+	}
+	return { pos, neg, ties: diffs.length - n, p: Math.min(1, (2 * tail) / 2 ** n) };
+};
+
+export const bootstrapPairedMean = (
+	diffs: number[],
+	iters = 10_000,
+	rng: Rng = rngFrom(4),
+): { mean: number; pPositive: number; lo: number; hi: number } => {
+	if (!diffs.length) return { mean: Number.NaN, pPositive: Number.NaN, lo: Number.NaN, hi: Number.NaN };
+	const mean = diffs.reduce((s, d) => s + d, 0) / diffs.length;
+	const means: number[] = [];
+	let pos = 0;
+	for (let i = 0; i < iters; i++) {
+		let s = 0;
+		for (let j = 0; j < diffs.length; j++) s += diffs[Math.floor(rng() * diffs.length)]!;
+		const m = s / diffs.length;
+		means.push(m);
+		if (m > 0) pos++;
+		else if (m === 0) pos += 0.5;
+	}
+	return { mean, pPositive: pos / iters, lo: quantile(means, 0.025), hi: quantile(means, 0.975) };
+};
