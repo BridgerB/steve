@@ -17,8 +17,10 @@ on:
     branches: [feat/portal-loop-7]
     paths:
       - .github/workflows/prepare-env.yml
-      - ci/**
-      - scripts/ci/**
+      - ci/env.json
+      - ci/typecraft-data.tar.zst
+      - scripts/ci/prepare-world.ts
+      - scripts/ci/server.sh
 
 permissions:
   contents: read
