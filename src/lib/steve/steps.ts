@@ -16,6 +16,17 @@ export const IRON_NEED = KIT_BUCKETS * 3 + 1;
 const kitBuckets = (s: GameState): number =>
 	s.inventory.buckets + s.inventory.waterBuckets + s.inventory.lavaBuckets;
 
+// Raw iron the kit still needs, with nothing to smelt it with: no coal, fewer than 4 planks,
+// no logs (cycle 7, f4 iron-deadlock gate arm: 10 of 12 trials deadlocked at ore=1 ingots=0
+// planks=0 logs=0 coal=0 — the planks had gone into a table and the furnace, gather_wood
+// counted itself done because the bucket kit was in hand, and nothing fetched fuel).
+export const needsSmeltFuel = (s: GameState): boolean =>
+	s.inventory.ironOre >= 1 &&
+	s.inventory.ironIngots + kitBuckets(s) * 3 + (s.inventory.flintAndSteel >= 1 ? 1 : 0) < IRON_NEED &&
+	s.inventory.coal < 1 &&
+	s.inventory.planks < 4 &&
+	s.inventory.logs < 1;
+
 // Re-export types for convenience
 export type { Step, StepResult };
 
@@ -66,6 +77,9 @@ export const steps: readonly Step[] = [
 		// portal) needs wood — stop forcing pointless re-gathering, which deadlocks
 		// in tree-poor terrain.
 		isComplete: (s) =>
+			// Never done while raw iron the kit needs cannot be smelted for lack of fuel.
+			!needsSmeltFuel(s) &&
+			(
 			// Iron kit done (2 buckets in hand): nothing left on the critical path needs
 			// wood, so never climb 80 levels out of the mine for logs again (race41 723:
 			// 2 buckets + 2 ingots, spent 4+ min on Gather Wood from y28).
@@ -122,7 +136,7 @@ export const steps: readonly Step[] = [
 					s.inventory.logs >= 2) &&
 				(s.equipment.hasCraftingTable ||
 					s.inventory.logs >= 1 ||
-					s.inventory.planks >= 4)),
+					s.inventory.planks >= 4))),
 		execute: async (bot, _state) => {
 			const { gatherWood } = await import("./tasks/gather-wood/main.ts");
 			return gatherWood(bot, 5);
