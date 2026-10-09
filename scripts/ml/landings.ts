@@ -67,12 +67,30 @@ const out: Meta[] = [];
 const side = Math.ceil(Math.sqrt(N));
 const t0 = Date.now();
 for (let i = 0; out.length < N && i < N * 3; i++) {
-	const gx = CX + ((i % side) - Math.floor(side / 2)) * SPACING;
-	const gz = CZ + (Math.floor(i / side) - Math.floor(side / 2)) * SPACING;
+	const cx = CX + ((i % side) - Math.floor(side / 2)) * SPACING;
+	const cz = CZ + (Math.floor(i / side) - Math.floor(side / 2)) * SPACING;
+	// Snap the grid cell to the nearest forest or plains (an ocean cell rejected 34 of 36
+	// candidates on the first runner build). The biome search is harness setup; the bot
+	// never sees it. A snapped point must stay within half a spacing of its cell and at
+	// least 400 from every accepted landing, so frames never come within 200 of each other.
+	let snap: [number, number] | null = null;
+	for (const biome of ["#minecraft:is_forest", "minecraft:plains"]) {
+		const m = /\[(-?\d+), (?:~|-?\d+), (-?\d+)\]/.exec(await cmd(`execute positioned ${cx} 64 ${cz} run locate biome ${biome}`));
+		if (!m) continue;
+		const p: [number, number] = [Number(m[1]), Number(m[2])];
+		if (Math.hypot(p[0] - cx, p[1] - cz) > SPACING / 2) continue;
+		if (out.some((o) => Math.hypot(o.x - p[0], o.z - p[1]) < 400)) continue;
+		if (!snap || Math.hypot(p[0] - cx, p[1] - cz) < Math.hypot(snap[0] - cx, snap[1] - cz)) snap = p;
+	}
+	if (!snap) {
+		console.log(`cell ${i} ${cx},${cz}: no forest or plains within ${SPACING / 2}`);
+		continue;
+	}
+	const [gx, gz] = snap;
 	let ok: Meta | null = null;
 	for (let t = 0; t < 6 && !ok; t++) {
-		const x = gx + t * 48;
-		const z = gz + (t % 2 ? 32 : 0);
+		const x = gx + [0, 24, -24, 0, 0, 48][t]!;
+		const z = gz + [0, 0, 0, 24, -24, 48][t]!;
 		// Check on a small loaded patch first; only an accepted landing gets its ±PREGEN_R square.
 		await cmd(`forceload add ${x - 8} ${z - 8} ${x + 8} ${z + 8}`);
 		for (let w = 0; w < 240; w++) {

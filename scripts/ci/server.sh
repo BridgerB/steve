@@ -50,6 +50,9 @@ enable-rcon=true
 rcon.password=$RUNNER_RCON_PASS
 rcon.port=$RCON_PORT
 broadcast-rcon-to-ops=true
+# 26.x pauses an empty server after 60 s; forceloaded chunks then barely load (a 4-chunk
+# patch took 153 s). Gyms and pregeneration run with no player for long stretches.
+pause-when-empty-seconds=0
 PROPS
 	nohup "$ENV_DIR/jre/bin/java" -Xms1G -Xmx${HEAP_MB:-6144}M -XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 \
 		-XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:G1NewSizePercent=30 -XX:G1MaxNewSizePercent=40 \

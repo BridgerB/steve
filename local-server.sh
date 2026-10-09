@@ -60,6 +60,9 @@ enable-rcon=true
 rcon.password=${RCON_PASS:-minecraft-test-rcon}
 rcon.port=$RCON_PORT
 broadcast-rcon-to-ops=true
+# 26.x pauses an empty server after 60 s; forceloaded chunks then barely load (a 4-chunk
+# patch took 153 s). Gyms and pregeneration run with no player for long stretches.
+pause-when-empty-seconds=0
 PROPS
 
 # Op the gym names with their offline-mode UUIDs (RCON `op` before a first join records the
