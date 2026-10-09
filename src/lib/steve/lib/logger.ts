@@ -363,6 +363,13 @@ export const attachDiagnostics = (bot: Bot): void => {
 	let lastDeathMsg: string | null = null;
 	let lastHealth = bot.health ?? 20;
 
+	// Cycle 6 pathfinder audit: every finished search longer than 1 s, with the time spent
+	// searching against the wall time it took (the slices' share of the budget).
+	(bot as unknown as { on: (e: string, f: (r: Record<string, unknown>) => void) => void }).on("path_update", (r) => {
+		if (r.status === "partial" || Number(r.time) < 1000) return;
+		logEvent("pf", "search", `${r.status} wall=${Math.round(Number(r.time))} search=${Math.round(Number(r.searchTime ?? 0))} visited=${r.visitedNodes} budget=${process.env.TYPECRAFT_PF_SEARCH_BUDGET === "1" ? "search" : "wall"}`);
+	});
+
 	const posOf = () => {
 		const p = bot.entity?.position;
 		return p ? { x: p.x, y: p.y, z: p.z } : undefined;

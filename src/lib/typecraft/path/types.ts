@@ -38,6 +38,8 @@ export type PathResult = {
 	readonly visitedNodes: number;
 	readonly generatedNodes: number;
 	readonly time: number;
+	/** Search time inside the slices; `time` is wall time including the gaps between slices. */
+	readonly searchTime: number;
 };
 
 /** Configuration for the pathfinder. */
@@ -127,6 +129,8 @@ export type AStarContext = {
 	bestNode: PathNode;
 	readonly startTime: number;
 	readonly maxCost: number;
+	/** Milliseconds actually spent searching (sum of the slices), vs wall time since startTime. */
+	searchMs: number;
 };
 
 /** A block placement action to execute during path following. */

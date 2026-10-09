@@ -46,6 +46,7 @@ export const createAStarContext = (
 		bestNode: startNode,
 		startTime: performance.now(),
 		maxCost: searchRadius < 0 ? -1 : h + searchRadius,
+		searchMs: 0,
 	};
 };
 
@@ -69,10 +70,14 @@ const makeResult = (
 	status,
 	cost: node.g,
 	time: performance.now() - ctx.startTime,
+	searchTime: ctx.searchMs,
 	visitedNodes: ctx.closedSet.size,
 	generatedNodes: ctx.closedSet.size + ctx.openMap.size,
 	path: reconstructPath(node),
 });
+
+// Read once per process: a switch, so both sides can be measured on the same landings.
+const SEARCH_BUDGET = typeof process !== "undefined" && process.env?.TYPECRAFT_PF_SEARCH_BUDGET === "1";
 
 /** Run one tick of A* computation. Returns PathResult with status. */
 export const computeAStar = (
@@ -82,15 +87,26 @@ export const computeAStar = (
 	totalTimeout: number,
 ): PathResult => {
 	const tickStart = performance.now();
+	// The search runs in slices of tickTimeout per physics tick. By default the total
+	// budget is wall time since the search began, so the gaps between slices (physics,
+	// packets, other work on the event loop) count against it. With
+	// TYPECRAFT_PF_SEARCH_BUDGET=1 only time spent searching counts (cycle 6, from
+	// ruststeve: its sliced A* searched about 45% of its budget).
+	const spent = (): number =>
+		SEARCH_BUDGET ? ctx.searchMs + (performance.now() - tickStart) : performance.now() - ctx.startTime;
+	const done = (status: PathResult["status"], node: PathNode): PathResult => {
+		ctx.searchMs += performance.now() - tickStart;
+		return makeResult(ctx, status, node);
+	};
 
 	while (!heapIsEmpty(ctx.openHeap)) {
 		if (performance.now() - tickStart > tickTimeout)
-			return makeResult(ctx, "partial", ctx.bestNode);
-		if (performance.now() - ctx.startTime > totalTimeout)
-			return makeResult(ctx, "timeout", ctx.bestNode);
+			return done("partial", ctx.bestNode);
+		if (spent() > totalTimeout)
+			return done("timeout", ctx.bestNode);
 
 		const node = heapPop(ctx.openHeap);
-		if (ctx.goal.isEnd(node.data)) return makeResult(ctx, "success", node);
+		if (ctx.goal.isEnd(node.data)) return done("success", node);
 
 		ctx.openMap.delete(node.data.hash);
 		ctx.closedSet.add(node.data.hash);
@@ -133,5 +149,5 @@ export const computeAStar = (
 		}
 	}
 
-	return makeResult(ctx, "noPath", ctx.bestNode);
+	return done("noPath", ctx.bestNode);
 };
