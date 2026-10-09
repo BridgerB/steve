@@ -105,3 +105,8 @@ compare.ts keyed rows by landing only, so the f10/f12 "nat + nat2" pools used 12
 - natural (23 pairs): head 2/23 (landing 5: 564 s and 1622 s) vs champ 0/24; **best frame 3.17 vs 2.00, +1.17, 95% [0.35, 2.26], P(better) = 0.999, sign p = 0.022** (noise floor between identical trees: P = 0.163); deaths 1.52 vs 1.96, P = 0.825; lava deaths equal.
 - arena: 8/12 vs 9/12, P = 0.278, not separated; seconds equal.
 - champion.json → 2e8a574 (the f17 head arm).
+
+## f18, run 37915476688, pickaxe for lid/walkway/shuffle digs vs base, 2 replicates — PROMOTED
+- natural (21 pairs): 0/21 vs 1/24 (base nat-5, 1355 s); **best frame 4.71 vs 3.52, +1.19, 95% [−0.19, 2.43], P(better) = 0.954** (highest natural mean this cycle); deaths equal; lava deaths 0.57 vs 0.76, P = 0.797. Lid digs now work 17/17 (base 3/21); walkway arrivals 11/32 (base 3/64).
+- arena: 11/12 vs 10/12, P = 0.708.
+- Five digpick trials reached 9/10 obsidian (landings 1, 7, 8) and ran out of the 1800 s natural budget; the race gives the portal step 2700 s. f20 measures HEAD at GYM_TOTAL_S = 2700 (4 replicates × 12).
