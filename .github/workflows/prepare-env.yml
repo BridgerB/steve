@@ -1,7 +1,7 @@
 # Cold path (cycle 7, Part 4.1): build the gym environment once and save it as one cache
 # entry, gym-env-<hash>. Hot workflows (gym.yml, race.yml) restore it and never build it.
 # The hash covers the lockfile, ci/env.json (server jar sha1, seed, node version, jlink
-# modules, landing sets, race region), the typecraft data manifest and flake.lock.
+# modules, landing sets, race region), and the typecraft data tarball.
 name: prepare-env
 
 on:
@@ -17,7 +17,7 @@ on:
     branches: [feat/portal-loop-7]
     paths:
       - .github/workflows/prepare-env.yml
-      - ci/env.json
+      - ci/**
       - scripts/ci/**
 
 permissions:
@@ -39,7 +39,7 @@ jobs:
       - name: Cache key
         id: key
         run: |
-          echo "key=gym-env-${{ hashFiles('package-lock.json', 'ci/env.json', 'ci/typecraft-data.sha256', 'flake.lock') }}" >> "$GITHUB_OUTPUT"
+          echo "key=gym-env-${{ hashFiles('package-lock.json', 'ci/env.json', 'ci/typecraft-data.tar.zst') }}" >> "$GITHUB_OUTPUT"
           echo "T0=$(date +%s)" >> "$GITHUB_ENV"
 
       - name: Restore existing entry (keeps it warm)
@@ -103,22 +103,15 @@ jobs:
           mv node_modules env/node_modules
           du -sh env/node_modules
 
-      - name: Nix (datagen only)
-        if: env.BUILD == 'true'
-        uses: cachix/install-nix-action@v31
-
-      - name: typecraft data (datagen)
+      - name: typecraft data (from ci/typecraft-data.tar.zst)
         if: env.BUILD == 'true'
         run: |
-          nix run .#datagen
-          cd src/lib/typecraft/data
-          TOTAL=$(wc -l < ../../../../ci/typecraft-data.sha256)
-          BAD=$(sha256sum -c ../../../../ci/typecraft-data.sha256 2>/dev/null | grep -vc ': OK$' || true)
-          echo "typecraft data: $BAD of $TOTAL files differ from ci/typecraft-data.sha256" | tee -a "$GITHUB_STEP_SUMMARY"
-          sha256sum -c ../../../../ci/typecraft-data.sha256 2>/dev/null | grep -v ': OK$' | head -40 || true
-          cd -
-          mkdir -p env/typecraft-data
-          rsync -a --exclude assets src/lib/typecraft/data/ env/typecraft-data/
+          # The registry/protocol data the bot loads (src/lib/typecraft/data, gitignored), minus
+          # the viewer textures. The Fabric datagen mod does not build for 26.1.2 (Loom 1.10 /
+          # Java 21), so the data generated on the dev machine ships in the repo, 227 KB.
+          mkdir -p env/typecraft-data src/lib/typecraft/data
+          zstd -dc ci/typecraft-data.tar.zst | tar -xf - -C env/typecraft-data
+          cp -r env/typecraft-data/. src/lib/typecraft/data/
           du -sh env/typecraft-data
 
       - name: Worlds

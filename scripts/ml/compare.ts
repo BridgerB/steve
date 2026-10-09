@@ -33,12 +33,32 @@ if (process.argv[2] === "--paired") {
 		console.error("usage: compare.ts --paired <batchA> <batchB>");
 		process.exit(1);
 	}
-	type Row = { run_id: string; outcome: string; seconds: number; best_frame: number | null; obsidian: number | null; deaths: number | null; landing_x: number | null; landing_z: number | null };
-	const runsDb = new DatabaseSync("data/gym/batches.db");
-	const load = (batch: string): Map<string, Row> => {
-		const rows = runsDb
-			.prepare("SELECT run_id, outcome, seconds, best_frame, obsidian, deaths, landing_x, landing_z FROM runs WHERE batch = ? AND outcome NOT IN ('harness','disconnect','aborted') ORDER BY started_at")
-			.all(batch) as Row[];
+	type Row = { run_id: string; batch: string; slug: string; outcome: string; seconds: number; best_frame: number | null; obsidian: number | null; deaths: number | null; landing_x: number | null; landing_z: number | null; lava_deaths: number; gap: number | null };
+	const runsDb = new DatabaseSync(process.env.BATCHES_DB ?? "data/gym/batches.db");
+	// Per-run screening context from the event log (lava deaths, block-gap median), keyed by run.
+	const ctx = new Map<string, Record<string, unknown>>();
+	try {
+		for (const line of readFileSync(process.env.STEVE_ATTEMPTS_FILE ?? "data/gym/attempts.jsonl", "utf8").split("\n")) {
+			if (!line) continue;
+			try {
+				const r = JSON.parse(line) as { run_id: string; source: string; context?: Record<string, unknown> };
+				if (r.source === "gym" && r.context && "best_frame" in r.context) ctx.set(r.run_id, r.context);
+			} catch {}
+		}
+	} catch {}
+	// A side may pool batches with commas (the shards of one arm).
+	const load = (spec: string): Map<string, Row> => {
+		const rows = spec.split(",").flatMap(
+			(batch) =>
+				runsDb
+					.prepare("SELECT run_id, batch, slug, outcome, seconds, best_frame, obsidian, deaths, landing_x, landing_z FROM runs WHERE batch = ? AND outcome NOT IN ('harness','disconnect','aborted') ORDER BY started_at")
+					.all(batch) as Row[],
+		);
+		for (const r of rows) {
+			const c = ctx.get(`gym-${r.slug}-${r.run_id}`) ?? {};
+			r.lava_deaths = Number(c.lava_deaths ?? 0);
+			r.gap = typeof c.block_gap_med_s === "number" ? c.block_gap_med_s : null;
+		}
 		return new Map(rows.filter((r) => r.landing_x !== null).map((r) => [`${r.landing_x},${r.landing_z}`, r]));
 	};
 	const a = load(A);
@@ -50,13 +70,18 @@ if (process.argv[2] === "--paired") {
 		["best_frame", (r) => Number(r.best_frame ?? 0), "up"],
 		["obsidian", (r) => Number(r.obsidian ?? 0), "up"],
 		["deaths", (r) => Number(r.deaths ?? 0), "down"],
+		["lava_deaths", (r) => r.lava_deaths, "down"],
+		["block_gap_s", (r) => r.gap ?? Number.NaN, "down"],
 		["seconds", (r) => Number(r.seconds), "down"],
 	];
 	for (const [name, get, dir] of metrics) {
-		const diffs = keys.map((k) => (dir === "up" ? get(b.get(k)!) - get(a.get(k)!) : get(a.get(k)!) - get(b.get(k)!)));
+		const diffs = keys.map((k) => (dir === "up" ? get(b.get(k)!) - get(a.get(k)!) : get(a.get(k)!) - get(b.get(k)!))).filter((d) => !Number.isNaN(d));
 		const s = signTest(diffs);
 		const bs = bootstrapPairedMean(diffs);
-		const mean = (m: Map<string, Row>) => keys.reduce((t, k) => t + get(m.get(k)!), 0) / Math.max(1, keys.length);
+		const mean = (m: Map<string, Row>) => {
+			const xs = keys.map((k) => get(m.get(k)!)).filter((x) => !Number.isNaN(x));
+			return xs.reduce((t, x) => t + x, 0) / Math.max(1, xs.length);
+		};
 		console.log(
 			`${name.padEnd(11)} A ${mean(a).toFixed(2)}  B ${mean(b).toFixed(2)}  B better on ${s.pos}, worse on ${s.neg}, tied ${s.ties}  sign p=${s.p.toFixed(3)}  paired mean ${dir === "up" ? "B−A" : "A−B"} ${bs.mean.toFixed(2)} 95% [${bs.lo.toFixed(2)}, ${bs.hi.toFixed(2)}]  P(B better)=${bs.pPositive.toFixed(3)}`,
 		);
