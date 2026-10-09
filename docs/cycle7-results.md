@@ -110,3 +110,8 @@ compare.ts keyed rows by landing only, so the f10/f12 "nat + nat2" pools used 12
 - natural (21 pairs): 0/21 vs 1/24 (base nat-5, 1355 s); **best frame 4.71 vs 3.52, +1.19, 95% [−0.19, 2.43], P(better) = 0.954** (highest natural mean this cycle); deaths equal; lava deaths 0.57 vs 0.76, P = 0.797. Lid digs now work 17/17 (base 3/21); walkway arrivals 11/32 (base 3/64).
 - arena: 11/12 vs 10/12, P = 0.708.
 - Five digpick trials reached 9/10 obsidian (landings 1, 7, 8) and ran out of the 1800 s natural budget; the race gives the portal step 2700 s. f20 measures HEAD at GYM_TOTAL_S = 2700 (4 replicates × 12).
+
+## f20, run 37919767363: HEAD (champion + digpick) at the race budget (GYM_TOTAL_S = 2700), 4 replicates × 12, set A
+- **1/48 = 2% [0.4%, 11%]** (landing 5, 523 s). Mean best frame 4.79; histogram 0:16, 1:1, 3:1, 4:1, 5:2, 6:5, 7:7, 8:6, 9:5, **10:4** — four trials had a complete frame, one entered.
+- The last step is now the wall. f20-nat-a-8 read in full: frame 1 checked 10/10, then the bot lit it from the approach row with its hitbox inside the fire cell and burned to death in 11 s (inFire); after respawn on the surface 31 away it could not path back down (anchor_unreached) and built a second frame 80 blocks away; frame 2 checked 10/10, portal_unlit, and the next dispatch "resumed" it by walking to the pool to refill lava and died in it. Fix 7332567 (site_complete skips the refill; light only with the hitbox clear of the frame plane; step out of fire; light_interior logged), measured in f22.
+- Open: a complete frame abandoned after a far respawn (site return fails underground).
