@@ -76,3 +76,8 @@ Fortress found in ~5 s; the bot burns to death from blaze fireballs and wither s
 compare.ts keyed rows by landing only, so the f10/f12 "nat + nat2" pools used 12 of 24 trials. Fixed (occurrence-keyed); recomputed with 22 pairs:
 - f10 lid vs base: 0/24 vs 0/23; best frame 3.23 vs 2.41, P = 0.856; deaths 2.32 vs 2.18, P = 0.363. Kept.
 - f12 headroom vs base: 0/23 vs 0/23; best frame 2.23 vs 2.59, P = 0.335; **deaths 2.50 vs 1.82, P(better) = 0.037; lava deaths 1.00 vs 0.64, P = 0.034** — worse. The headroom commit also makes the shuffle fire whenever off the stand, before the shuffle had a lava step-guard (ed61b58, f13). Decision deferred to f13 (lava stop vs base, base = headroom without the guard): revert headroom if the guard does not bring deaths back to the f12 base level.
+
+## f13, run 37903558057, shuffle lava stop (ed61b58) vs base, 2 replicates
+- natural (23 pairs): 0/23 vs 1/24 (base nat2-5, landing 5, 1518 s); best frame 3.35 vs 3.30, P = 0.528; deaths 1.35 vs 1.96 (better on 16, worse on 6; P = 0.912); **lava deaths 0.57 vs 1.13, P(better) = 0.986**, 95% [0.04, 1.09]. Kept. Caveat: the f4 noise floor produced a lava-death P of 0.015 between identical trees, so this is at the edge of that floor; the direction matches the mechanism read in f10.
+- arena: 9/12 vs 10/12, P = 0.283, not separated.
+- Headroom decision (deferred from f12): with the guard, deaths 1.35 sit below f12's no-headroom base (1.82): headroom stays.
