@@ -2579,7 +2579,7 @@ export const buildPortalByCasting = async (bot: Bot): Promise<StepResult> => {
 	// fails (measured: cast inner-fill/cup dirt left 3 of 6 interior cells solid).
 	await descendToY(bot, by);
 	const digIfNotObsidian = async (p: Vec3) => {
-		if (getBlock(bot, p)?.name !== "obsidian") await digWithPick(bot, p);
+		if (getBlock(bot, p)?.name !== "obsidian") await digAt(bot, p);
 	};
 	// Clear the +Z approach FIRST so we can stand in front and reach the whole interior.
 	for (let dy = 0; dy <= 4; dy++)
