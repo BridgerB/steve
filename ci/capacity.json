@@ -1,0 +1,10 @@
+{
+	"k": 8,
+	"heap_mb": 6144,
+	"natural_k": 6,
+	"trials_per_runner_hour": 65.8,
+	"single_bot_trials_per_runner_hour": 9.5,
+	"source": "cap1, GitHub run 37887151110 (arena, 19 of 20 workers at decision time)",
+	"decided": "2026-10-09T05:55Z",
+	"evidence": "8 bots/server healthy at 4, 6 and 10 GB: typical tick p99 15-22 ms, machine CPU p95 14-34%, pass 10-11/12 vs 1 bot 11/12, median time 385-389 s vs 380 s. 12 bots: 83-87 trials/runner-hour but typical tick p99 45 ms and CPU p95 82-84%. Natural trials capped at 6 until a natural capacity check."
+}
