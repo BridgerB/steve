@@ -1880,6 +1880,12 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 				logEvent("cast", "site_reuse", `${prev.x},${prev.y},${prev.z} has ${obs} obsidian — resuming the same frame`);
 				setPhase("lava_fill");
 				await goTo(bot, prev, { range: 1, timeout: 20000 }).catch(() => {});
+				// A complete frame needs no lava: go straight to lighting. f20-nat-a-8: a 10/10
+				// frame was "resumed", the bot walked to the pool to refill and died in it.
+				if (obs >= 10) {
+					logEvent("cast", "site_complete", `${prev.x},${prev.y},${prev.z} frame complete — lighting, no refill`);
+					return { success: true, message: "Resumed a complete frame" };
+				}
 				if (count(bot, "lava_bucket") < 1 && count(bot, "bucket") >= 1) await fillBucket(bot, "lava");
 				if (count(bot, "lava_bucket") < 1) logEvent("cast", "site_reuse_no_lava", `${prev.x},${prev.y},${prev.z} — resuming anyway; the cast refills per block`);
 				logEvent("cast", "site_ready", `${prev.x},${prev.y},${prev.z} (reused)`);
@@ -2595,12 +2601,27 @@ export const buildPortalByCasting = async (bot: Bot): Promise<StepResult> => {
 	console.error(
 		`[LIGHT] fas=${count(bot, "flint_and_steel")} interior=${innerGap.map((g) => getBlock(bot, g)?.name ?? "?").join(",")}`,
 	);
+	logEvent("cast", "light_interior", innerGap.map((g) => getBlock(bot, g)?.name ?? "?").join(","), bot.entity.position);
+	// The fire lands at (lit.x, by+1, bz), the interior. f20-nat-a-8 lit from the approach
+	// row pressed against the frame, its hitbox inside the fire cell, and burned to death in
+	// 11 s (inFire) with the frame complete. Light only with the hitbox clear of z = bz+1,
+	// and step back out of any fire after.
+	const clearOfFrame = () => bot.entity.position.z - 0.3 > bz + 1.05;
+	const stepBack = async (x: number) => {
+		await walkToXZ(bot, x + 0.5, bz + 3.5, { targetDist: 0.4, maxTime: 2500 }).catch(() => {});
+	};
 	if (count(bot, "flint_and_steel") >= 1) {
 		for (const lit of [at(1, 0), at(2, 0)]) {
 			await goTo(bot, vec3(lit.x, by, bz + 2), {
 				range: 1,
 				timeout: 8000,
 			}).catch(() => {});
+			if (!clearOfFrame()) await walkToXZ(bot, lit.x + 0.5, bz + 2.5, { targetDist: 0.3, maxTime: 2500 }).catch(() => {});
+			if (!clearOfFrame()) {
+				const q = bot.entity.position;
+				logEvent("cast", "light_stance_bad", `bot ${q.x.toFixed(2)},${q.y.toFixed(2)},${q.z.toFixed(2)} too close to the frame plane z=${bz}`, q);
+				continue;
+			}
 			await equip(bot, "flint_and_steel");
 			try {
 				await bot.activateBlock(vec3(lit.x, lit.y, lit.z), vec3(0, 1, 0));
@@ -2608,6 +2629,14 @@ export const buildPortalByCasting = async (bot: Bot): Promise<StepResult> => {
 				/* ignore */
 			}
 			await sleep(1200);
+			{
+				const q = bot.entity.position;
+				const feet = getBlock(bot, vec3(Math.floor(q.x), Math.floor(q.y), Math.floor(q.z)))?.name;
+				if (feet === "fire") {
+					logEvent("cast", "light_fire_escape", `feet=${feet} hp ${(bot.health ?? 0).toFixed(1)}`, q);
+					await stepBack(lit.x);
+				}
+			}
 			const fireCell = getBlock(bot, vec3(lit.x, lit.y + 1, lit.z))?.name ?? "?";
 			const inner = at(1, 1);
 			console.error(
