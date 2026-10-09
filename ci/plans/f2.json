@@ -1,0 +1,8 @@
+{
+	"label": "f2",
+	"workers": 12,
+	"experiments": [
+		{ "name": "arena", "slug": "build-nether-portal", "lava_d": 6, "runs": 12, "est_s": 420,
+			"arms": [ { "name": "base", "ref": "a390916" }, { "name": "topup" } ] }
+	]
+}
