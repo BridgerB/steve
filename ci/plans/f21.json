@@ -1,0 +1,25 @@
+{
+	"label": "f21",
+	"workers": 20,
+	"experiments": [
+		{
+			"name": "natb",
+			"slug": "portal-natural",
+			"landing_set": "B",
+			"runs": 12,
+			"est_s": 2800,
+			"env": {
+				"GYM_TOTAL_S": "2700"
+			},
+			"arms": [
+				{
+					"name": "head"
+				},
+				{
+					"name": "champ",
+					"ref": "303cc214b8f083003d120e1c38ee92991011beb2"
+				}
+			]
+		}
+	]
+}
