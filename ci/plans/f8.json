@@ -1,0 +1,36 @@
+{
+	"label": "f8",
+	"workers": 20,
+	"experiments": [
+		{
+			"name": "nat",
+			"slug": "portal-natural",
+			"runs": 12,
+			"est_s": 1900,
+			"env": { "GYM_TOTAL_S": "1800" },
+			"arms": [
+				{ "name": "shuffle" },
+				{ "name": "base", "ref": "exp/shuffle-base" }
+			]
+		},
+		{
+			"name": "arena",
+			"slug": "build-nether-portal",
+			"lava_d": 6,
+			"runs": 12,
+			"est_s": 450,
+			"arms": [
+				{ "name": "shuffle" },
+				{ "name": "base", "ref": "exp/shuffle-base" }
+			]
+		},
+		{
+			"name": "dragon",
+			"slug": "dragon",
+			"runs": 6,
+			"est_s": 1000,
+			"bot": "Gym_dragon",
+			"per_server": 1
+		}
+	]
+}
