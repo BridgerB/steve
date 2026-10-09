@@ -2460,6 +2460,15 @@ export const buildPortalByCasting = async (bot: Bot): Promise<StepResult> => {
 	let cast = 0;
 	const castOne = async (pos: Vec3): Promise<StepResult | null> => {
 		if (diedInCast.get(bot)) return { success: false, message: `Died mid-cast at ${cast}/10 — aborting` };
+		// Enough blocks to pillar to this cell and mould its cup (height above the frame
+		// base + 6); top up between cells, not only at the start. f1-smoke 2-2 and 2-4 ran
+		// out with the lintel left (8 dirt for a 5-step pillar plus its cup) on a stone
+		// floor the pickaxe could have turned into cobblestone.
+		const cellNeed = pos.y - by + 6;
+		if (getBlock(bot, pos)?.name !== "obsidian" && buildStockOf(bot) < cellNeed) {
+			const dug = await topUpBuildBlocks(bot, cellNeed + 4, vec3(bx, by, bz));
+			logEvent("cast", "cell_topup", `dug ${dug} → ${buildStockOf(bot)} for ${pos.x},${pos.y},${pos.z} (need ${cellNeed})`, bot.entity.position);
+		}
 		if (await castObsidianAt(bot, pos, by)) {
 			cast++;
 			return null;
