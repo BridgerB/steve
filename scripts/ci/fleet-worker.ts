@@ -103,6 +103,17 @@ const runUnit = async (unit: Unit): Promise<void> => {
 	const linux = existsSync("/proc/stat");
 	let prev = linux ? readProc() : null;
 	let n = 0;
+	// CPU over a tree counts only processes present in both samples: a child that exited
+	// between samples dropped out of the sum and made the delta negative (cap1 per-bot column).
+	const treeDelta = (root: number, a: NonNullable<typeof prev>, b: NonNullable<typeof prev>): number => {
+		let d = 0;
+		for (const p of treeOf(root, b.ppid)) {
+			const j0 = a.st.get(p)?.jiffies;
+			const j1 = b.st.get(p)?.jiffies;
+			if (j0 !== undefined && j1 !== undefined && j1 >= j0) d += j1 - j0;
+		}
+		return d;
+	};
 	const tree = (root: number, snap: NonNullable<typeof prev>) => {
 		const pids = treeOf(root, snap.ppid);
 		return { jiffies: pids.reduce((a, p) => a + (snap.st.get(p)?.jiffies ?? 0), 0), rssMb: Math.round(pids.reduce((a, p) => a + (snap.st.get(p)?.rssPages ?? 0), 0) * 4 / 1024) };
@@ -116,11 +127,11 @@ const runUnit = async (unit: Unit): Promise<void> => {
 			row.mem_avail_mb = cur.mem;
 			const s0 = tree(Number(serverPid), prev);
 			const s1 = tree(Number(serverPid), cur);
-			row.server = { cpu: cpuPct(s0.jiffies, s1.jiffies, dt), rss_mb: s1.rssMb };
+			row.server = { cpu: cpuPct(0, treeDelta(Number(serverPid), prev, cur), dt), rss_mb: s1.rssMb };
 			row.trials = [...roots].map(([id, pid]) => {
 				const a0 = tree(pid, prev!);
 				const a1 = tree(pid, cur);
-				return { id, cpu: cpuPct(a0.jiffies, a1.jiffies, dt), rss_mb: a1.rssMb };
+				return { id, cpu: cpuPct(0, treeDelta(pid, prev!, cur), dt), rss_mb: a1.rssMb };
 			});
 			prev = cur;
 		}
