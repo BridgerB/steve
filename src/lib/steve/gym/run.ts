@@ -47,7 +47,10 @@ export const runGymStep = async (
 	await rcon(`gamemode survival ${name}`).catch(() => {});
 	await rcon(`clear ${name}`).catch(() => {});
 	await sleep(400);
-	for (const item of step.prereq) await rcon(`give ${name} ${item}`).catch(() => {});
+	// GYM_KIT="item n,item n,…" replaces the slug's kit (cycle 7 H16: race bots finish 5 of 33
+	// started casts while the gym, with 2 stone pickaxes and 64 cobble, finishes ~44%).
+	const kit = process.env.GYM_KIT ? process.env.GYM_KIT.split(",").map((s) => s.trim()).filter(Boolean) : step.prereq;
+	for (const item of kit) await rcon(`give ${name} ${item}`).catch(() => {});
 	await sleep(400);
 
 	// Surface placement WITHOUT spreadplayers (cycle 4, Part 5.4: spreadplayers into
