@@ -18,10 +18,6 @@ on:
         default: "{}"
       label:
         required: true
-  push:
-    # Smoke trigger before the workflow is on main; removed before the workflows-only PR.
-    branches: [feat/portal-loop-7]
-    paths: [.github/workflows/race.yml]
 
 permissions:
   contents: read

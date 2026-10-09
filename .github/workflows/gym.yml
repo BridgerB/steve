@@ -33,11 +33,6 @@ on:
       label:
         description: Batch label (the batch id in batches.db)
         required: true
-  push:
-    # Smoke trigger before the workflow is on main (workflow_dispatch needs it there).
-    # Removed before the workflows-only pull request.
-    branches: [feat/portal-loop-7]
-    paths: [.github/workflows/gym.yml]
 
 permissions:
   contents: read
