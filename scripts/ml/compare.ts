@@ -7,8 +7,61 @@
  * build's rate with its Wilson interval, P(B > A) under Beta posteriors and the
  * sequential decision (stop > 0.95 / < 0.05, cap 30 each), the bootstrap probability
  * that B's median time-to-portal is lower, and landing-paired differences.
+ *
+ * Screening mode (cycle 5, decision 3): compare two gym batches on per-run continuous
+ * metrics with a bootstrap of the difference in means. Run in the box gym clone:
+ *
+ *   node --import ./typecraft-resolve.mjs scripts/ml/compare.ts --means <A[@cap_s]> <B[@cap_s]>
+ *
+ * e.g. --means base3@1800 s5a; pool batches with commas: s5n,s8n@1800. Higher is better for best_frame and obsidian; lower is
+ * better for deaths, lava_deaths and the per-block gap.
  */
 import { readFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
+import { bootstrapMeanDiff } from "../../src/lib/steve/ml/stats.ts";
+import { runMetrics, type RunMetrics, type TelemetryEvent } from "../../src/lib/steve/ml/screen.ts";
+
+if (process.argv[2] === "--means") {
+	const [, , , A, B] = process.argv;
+	if (!A || !B) {
+		console.error("usage: compare.ts --means <A[@cap_s]> <B[@cap_s]>");
+		process.exit(1);
+	}
+	const runsDb = new DatabaseSync("data/gym/batches.db");
+	const tel = new DatabaseSync(process.env.STEVE_D1_FILE ?? "data/gym/telemetry.sqlite");
+	const q = tel.prepare("SELECT ts, category, event, detail FROM events WHERE race_id = ? AND category IN ('cast','death') ORDER BY ts");
+	const load = (spec: string): RunMetrics[] => {
+		const [batches, capS] = spec.split("@");
+		const runs = batches!.split(",").flatMap(
+			(batch) =>
+				runsDb
+					.prepare("SELECT run_id, slug FROM runs WHERE batch = ? AND outcome NOT IN ('harness','disconnect') ORDER BY started_at")
+					.all(batch) as { run_id: string; slug: string }[],
+		);
+		return runs.map((r) => runMetrics(q.all(`gym-${r.slug}-${r.run_id}`) as unknown as TelemetryEvent[], capS ? Number(capS) : undefined));
+	};
+	const ma = load(A);
+	const mb = load(B);
+	console.log(`A ${A}: n=${ma.length}   B ${B}: n=${mb.length}`);
+	const metrics: [string, (m: RunMetrics) => number | null, "up" | "down"][] = [
+		["best_frame", (m) => m.best_frame, "up"],
+		["obsidian", (m) => m.obsidian, "up"],
+		["deaths", (m) => m.deaths, "down"],
+		["lava_deaths", (m) => m.lava_deaths, "down"],
+		["block_gap_med_s", (m) => m.block_gap_med_s, "down"],
+	];
+	for (const [name, get, dir] of metrics) {
+		const xa = ma.map(get).filter((x): x is number => x !== null);
+		const xb = mb.map(get).filter((x): x is number => x !== null);
+		const mean = (xs: number[]) => (xs.length ? xs.reduce((p, c) => p + c, 0) / xs.length : Number.NaN);
+		const r = bootstrapMeanDiff(xa, xb);
+		const pBetter = dir === "up" ? r.pBGreater : 1 - r.pBGreater;
+		console.log(
+			`${name.padEnd(16)} A ${mean(xa).toFixed(2)} (n=${xa.length})  B ${mean(xb).toFixed(2)} (n=${xb.length})  B−A 95% [${r.lo.toFixed(2)}, ${r.hi.toFixed(2)}]  P(B better) = ${pBetter.toFixed(3)}`,
+		);
+	}
+	process.exit(0);
+}
 import { bootstrapMedianFaster, fmtRate, quantile, sequentialDecision } from "../../src/lib/steve/ml/stats.ts";
 import type { AttemptRow } from "../../src/lib/steve/lib/attempts.ts";
 

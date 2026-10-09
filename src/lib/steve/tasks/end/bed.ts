@@ -50,6 +50,13 @@ const placeOn = async (bot: Bot, name: string, cell: Vec3): Promise<boolean> => 
 };
 
 export const bedDragon = async (bot: Bot, budgetMs: number): Promise<StepResult> => {
+	// The harness teleports the bot into the End; the client inventory view is reset on
+	// the dimension change (d1-1: "out of beds after 0" with 6 beds given). Resync first.
+	try {
+		await (bot as Bot & { resyncInventory?: () => Promise<void> }).resyncInventory?.();
+	} catch {}
+	await sleep(1000);
+	logEvent("end", "dragon_start", `beds ${windowItems(bot.inventory).filter((i) => i.name.endsWith("_bed")).reduce((a, i) => a + i.count, 0)} obsidian ${windowItems(bot.inventory).filter((i) => i.name === "obsidian").reduce((a, i) => a + i.count, 0)} dim ${String(bot.game?.dimension ?? "?")}`, bot.entity.position);
 	const t0 = Date.now();
 	let beds = 0;
 	let gone = 0;
@@ -93,7 +100,7 @@ export const bedDragon = async (bot: Bot, budgetMs: number): Promise<StepResult>
 		const placed = await placeOn(bot, "bed", foot);
 		const hp0 = bot.health ?? 0;
 		if (!placed) {
-			logEvent("end", "bed_place_fail", `foot ${foot.x},${foot.y},${foot.z} floor=${blockName(bot, vec3(foot.x, foot.y - 1, foot.z))}`, p);
+			logEvent("end", "bed_place_fail", `foot ${foot.x},${foot.y},${foot.z} floor=${blockName(bot, vec3(foot.x, foot.y - 1, foot.z))} held=${bot.heldItem?.name ?? "none"} slot=${bot.quickBarSlot} bot=${p.x.toFixed(2)},${p.y.toFixed(2)},${p.z.toFixed(2)}`, p);
 			await sleep(800);
 			continue;
 		}

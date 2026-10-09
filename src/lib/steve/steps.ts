@@ -320,9 +320,13 @@ export const steps: readonly Step[] = [
 		id: "smelt_iron",
 		name: "Smelt Iron",
 		priority: 12,
+		// Smelt as soon as the raw iron covers what the kit still needs (min 3). Race c5:
+		// steve-race-809 held 3 buckets + 1 raw_iron + 0 ingots — mine_iron counted the ore as
+		// done, smelting needed 3 ore, flint needed an ingot: 98 minutes of "no executable step".
 		canExecute: (s) =>
 			s.equipment.hasFurnace &&
-			s.inventory.ironOre >= 3 &&
+			s.inventory.ironOre >=
+				Math.min(3, Math.max(1, IRON_NEED - s.inventory.ironIngots - kitBuckets(s) * 3 - (s.inventory.flintAndSteel >= 1 ? 1 : 0))) &&
 			(s.inventory.coal >= 2 || s.inventory.planks >= 4),
 		// Count iron already invested in buckets (3 each) so a bot that smelted, then
 		// spent ingots on buckets, doesn't loop back to re-smelt iron it no longer has.

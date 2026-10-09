@@ -175,6 +175,10 @@ export const initGame = (bot: Bot, options: BotOptions): void => {
 	// Respawn packet
 	bot.client.on("respawn", (packet: Record<string, unknown>) => {
 		handleRespawnData((packet.worldState as Record<string, unknown>) ?? packet);
+		// The vanilla client acknowledges every respawn (death or dimension change) with
+		// player_loaded, not only the login; until then the server can ignore block use
+		// (dragon gym d2-d4: every bed placement in the End was rejected).
+		if (bot.protocolVersion >= 769) bot.client.write("player_loaded", {});
 		bot.emit("game");
 	});
 

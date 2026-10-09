@@ -180,6 +180,11 @@ export const createMovements = (
 		toPlace: readonly PlaceAction[] = [],
 		parkour = false,
 	): void => {
+		for (const area of cfg.exclusionAreasStep) {
+			const extra = area(x, y, z);
+			if (!Number.isFinite(extra) || extra < 0) return;
+			cost += extra;
+		}
 		neighbors[neighborCount++] = {
 			x,
 			y,

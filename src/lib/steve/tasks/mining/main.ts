@@ -222,6 +222,31 @@ export const ensurePickaxe = async (bot: Bot): Promise<boolean> => {
 	return false;
 };
 
+/**
+ * Craft a spare stone pickaxe while the bot still holds one and has the cobble for it
+ * (cycle 5: s1n-1 ended "Pickaxe worn out during site prep" ×4 — the last pickaxe broke
+ * mid-prep after the cobble had gone into molds, so ensurePickaxe could not craft one).
+ * Logs spare_pick. Returns true when the bot holds at least two stone+ pickaxes.
+ */
+export const ensureSparePickaxe = async (bot: Bot): Promise<boolean> => {
+	const picks = () => bot.inventory.slots.filter((s) => s && STONE_PLUS_PICKS.has(s.name)).length;
+	if (picks() >= 2) return true;
+	if (invCount(bot, "cobblestone") < 3) return false;
+	if (invCount(bot, "stick") < 2 && invCount(bot, "planks") >= 2) await craftItem(bot, "stick", 1);
+	if (invCount(bot, "stick") < 2) return false;
+	const table = await getCraftingTable(bot);
+	if (!table) return false;
+	const before = picks();
+	await craftItem(bot, "stone_pickaxe", 1, table);
+	if (bot.currentWindow) {
+		try {
+			bot.closeWindow(bot.currentWindow);
+		} catch {}
+	}
+	logEvent("cast", "spare_pick", `stone pickaxes ${before} → ${picks()}`, bot.entity.position);
+	return picks() >= 2;
+};
+
 const HORIZ_DIRS: [number, number][] = [
 	[1, 0],
 	[-1, 0],

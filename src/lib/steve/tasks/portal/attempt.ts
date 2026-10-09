@@ -9,7 +9,7 @@ import type { Bot } from "typecraft";
 import { buildId, senseContext, writeAttempt } from "../../lib/attempts.ts";
 import { getRaceId } from "../../lib/logger.ts";
 import { guardedAttempt, progressSnapshot } from "../../lib/progress.ts";
-import { drawParams, num, useParams } from "../../ml/bandit.ts";
+import { drawParams, num, updateParams, useParams } from "../../ml/bandit.ts";
 import type { StepResult } from "../../types.ts";
 import { buildPortalByCasting, prepareCastSite } from "./cast.ts";
 
@@ -19,6 +19,12 @@ export const castAttempt = async (
 	bot: Bot,
 	opts: { budgetMs: number; source: "gym" | "race" },
 ): Promise<StepResult & { outcome: string }> => {
+	// A spare pickaxe before the attempt, while there is still cobble for one.
+	try {
+		const { ensureSparePickaxe } = await import("../mining/main.ts");
+		// Capped: s4n-1 hung 22 min in a table craft here, outside the attempt guard.
+		await Promise.race([ensureSparePickaxe(bot), new Promise((r) => setTimeout(r, 30_000))]);
+	} catch {}
 	const params = drawParams();
 	useParams(params);
 	const startMs = Date.now();
@@ -58,5 +64,10 @@ export const castAttempt = async (
 		params,
 		context,
 	});
+	// Credit the drawn arms (cycle 5 decision 6: live on anchor_dy_max and stall_s; pinned
+	// params are never updated). Reward: the attempt placed obsidian or finished.
+	try {
+		updateParams(params, g.success || snap.obsidian > 0);
+	} catch {}
 	return { success: g.success, message: g.message, outcome };
 };

@@ -32,7 +32,7 @@ let dragonDead = false;
 const inEnd = (cmd: string) => `execute in minecraft:the_end run ${cmd}`;
 import { enterPortal } from "../tasks/portal/enter.ts";
 import { countInventoryItems } from "../lib/test-utils.ts";
-import { setPhase } from "../lib/logger.ts";
+import { logEvent, setPhase } from "../lib/logger.ts";
 import type { StepResult } from "../types.ts";
 
 export interface GymStep {
@@ -55,6 +55,8 @@ export interface GymStep {
 		rcon: (cmd: string) => Promise<string>,
 		at: { x: number; y: number; z: number },
 	) => Promise<void>;
+	/** Optional pass decided from server truth by RCON (overrides `pass`). */
+	truthPass?: (rcon: (cmd: string) => Promise<string>, name: string) => Promise<boolean>;
 	/** Optional RCON cleanup after the run (e.g. release forceloads the setup added). */
 	teardown?: (rcon: (cmd: string) => Promise<string>) => Promise<void>;
 	timeoutMs: number;
@@ -62,6 +64,8 @@ export interface GymStep {
 
 const has = (bot: Bot, pat: string, n: number): boolean =>
 	countInventoryItems(bot, pat) >= n;
+
+const NATURAL_TOTAL_MS = Number(process.env.GYM_TOTAL_S ?? 2700) * 1000;
 
 export const GYM_STEPS: GymStep[] = [
 	{
@@ -88,6 +92,11 @@ export const GYM_STEPS: GymStep[] = [
 		},
 		run: async (b) => {
 			const res = await bedDragon(b, 900_000);
+			// Server's view of the bot for the placement diagnosis (client vs server desync).
+			if (endRcon)
+				for (const q of ["Pos", "SelectedItem", "SelectedItemSlot", "Dimension", "playerGameType"])
+					logEvent("end", "server_view", `${q}: ${await endRcon(`data get entity ${b.username} ${q}`).catch((e) => String(e))}`);
+			if (endRcon) logEvent("end", "server_view", `beds: ${await endRcon(`clear ${b.username} #minecraft:beds 0`).catch((e) => String(e))}`);
 			const alive = endRcon
 				? /passed/i.test(await endRcon("execute in minecraft:the_end if entity @e[type=minecraft:ender_dragon]").catch(() => "passed"))
 				: true;
@@ -221,8 +230,13 @@ export const GYM_STEPS: GymStep[] = [
 		// → standing in the Nether). A run that dies 5 times is over.
 		run: async (b) => {
 			const t0 = Date.now();
-			const total = 2_700_000;
+			// Cycle 5: screening batches cap a run at 1800 s (GYM_TOTAL_S), confirmation at 2700.
+			const total = NATURAL_TOTAL_MS;
 			const perDispatch = 900_000;
+			// Cycle 5: the same failed(reason) 4 times in one run ends the run (base2-1 burned
+			// 102 dispatches on "Pickaxe worn out" — the gym loop has no planner to escalate to).
+			let lastKey = "";
+			let sameN = 0;
 			let res: StepResult = { success: false, message: "Build Nether Portal never dispatched" };
 			let dispatches = 0;
 			let deaths = 0;
@@ -250,6 +264,13 @@ export const GYM_STEPS: GymStep[] = [
 					const cap = Math.min(perDispatch, total - (Date.now() - t0));
 					res = await castAttempt(b, { budgetMs: cap, source: "gym" });
 					if (res.success) break;
+					const key = res.message.replace(/-?\d+(\.\d+)?/g, "#");
+					sameN = key === lastKey ? sameN + 1 : 1;
+					lastKey = key;
+					if (sameN >= 4) {
+						logEvent("step", "escalate", `4× ${res.message}`);
+						return { success: false, message: `escalated: ${res.message} ×4 [${dispatches} dispatches]`, extra: extra() } as StepResult;
+					}
 					await new Promise((r) => setTimeout(r, 1000));
 				}
 				if (!res.success) {
@@ -276,7 +297,10 @@ export const GYM_STEPS: GymStep[] = [
 			}
 		},
 		pass: (b) => String(b.game?.dimension ?? "").includes("nether"),
-		timeoutMs: 2_800_000,
+		// Cycle 5: "in the Nether" from server truth, not the client's dimension.
+		truthPass: async (rcon, name) =>
+			/passed/i.test(await rcon(`execute as ${name} at @s if dimension minecraft:the_nether`).catch(() => "")),
+		timeoutMs: NATURAL_TOTAL_MS + 100_000,
 	},
 	{
 		slug: "enter-nether",
