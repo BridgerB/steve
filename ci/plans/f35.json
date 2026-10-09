@@ -1,0 +1,44 @@
+{
+	"label": "f35",
+	"workers": 20,
+	"experiments": [
+		{
+			"name": "lean",
+			"slug": "portal-natural",
+			"runs": 12,
+			"est_s": 2800,
+			"env": {
+				"GYM_TOTAL_S": "2700",
+				"GYM_KIT": "stone_pickaxe 1,bucket 2,water_bucket 1,flint_and_steel 1,cobblestone 12"
+			}
+		},
+		{
+			"name": "lean2",
+			"slug": "portal-natural",
+			"runs": 12,
+			"est_s": 2800,
+			"env": {
+				"GYM_TOTAL_S": "2700",
+				"GYM_KIT": "stone_pickaxe 1,bucket 2,water_bucket 1,flint_and_steel 1,cobblestone 12"
+			}
+		},
+		{
+			"name": "gym",
+			"slug": "portal-natural",
+			"runs": 12,
+			"est_s": 2800,
+			"env": {
+				"GYM_TOTAL_S": "2700"
+			}
+		},
+		{
+			"name": "gym2",
+			"slug": "portal-natural",
+			"runs": 12,
+			"est_s": 2800,
+			"env": {
+				"GYM_TOTAL_S": "2700"
+			}
+		}
+	]
+}
