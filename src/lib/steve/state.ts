@@ -24,6 +24,9 @@ export type { Equipment, GameState, Inventory, Phase, WorldState };
 // INITIAL STATE
 // ============================================
 
+/** The last lit nether portal each bot saw (see portalBuilt below). */
+const litPortal = new WeakMap<object, { x: number; y: number; z: number }>();
+
 export const createInitialState = (): GameState => ({
 	inventory: {
 		logs: 0,
@@ -257,6 +260,17 @@ export const syncFromBot = (bot: Bot): GameState => {
 			maxDistance: 6,
 			exposed: false,
 		} as never) ?? null;
+	// Remember the lit portal: race c8b steve-race-004 lit one at 89 min, stepped more than
+	// 6 away, portalBuilt went false and the iron steps it had regressed on took over; it
+	// never entered. The portal counts as built until its block is loaded and not a portal.
+	const seen = netherPortal ? (netherPortal as { position: { x: number; y: number; z: number } }).position : null;
+	if (seen) litPortal.set(bot, { x: seen.x, y: seen.y, z: seen.z });
+	const remembered = litPortal.get(bot) ?? null;
+	if (remembered && !seen) {
+		const b = (bot.blockAt?.({ x: remembered.x, y: remembered.y, z: remembered.z } as never) as { name?: string } | null) ?? null;
+		if (b && b.name !== "nether_portal") litPortal.delete(bot);
+	}
+	const portalAt = seen ?? litPortal.get(bot) ?? null;
 
 	return {
 		inventory: {
@@ -319,14 +333,8 @@ export const syncFromBot = (bot: Bot): GameState => {
 		world: {
 			dimension: getDimension(),
 			// Detect a lit nether portal nearby (the cast/build steps light one).
-			portalBuilt: !!netherPortal,
-			portalLocation: netherPortal
-				? {
-						x: netherPortal.position.x,
-						y: netherPortal.position.y,
-						z: netherPortal.position.z,
-					}
-				: null,
+			portalBuilt: !!portalAt,
+			portalLocation: portalAt ? { x: portalAt.x, y: portalAt.y, z: portalAt.z } : null,
 			fortressFound: false,
 			fortressLocation: null,
 			strongholdFound: false,

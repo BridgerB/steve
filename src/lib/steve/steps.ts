@@ -633,6 +633,13 @@ export const getNextStep = (
 	completed?: Set<string>,
 ): Step | null => {
 	const sortedSteps = [...steps].sort((a, b) => a.priority - b.priority);
+	// A lit portal in the overworld: enter it before anything but escaping water. Any kit
+	// step that regressed (a bucket lost in the cast) has a lower priority number than
+	// enter_nether and used to take over (race c8b steve-race-004, lit at 89 min, never entered).
+	if (state.world.portalBuilt && state.world.dimension === "overworld") {
+		const first = sortedSteps.find((s) => (s.id === "escape_water" || s.id === "enter_nether") && s.canExecute(state) && !s.isComplete(state));
+		if (first) return first;
+	}
 	return (
 		sortedSteps.find(
 			(step) =>

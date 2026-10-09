@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { steps } from "./steps.ts";
+import { getNextStep, steps } from "./steps.ts";
 
 const step = (id: string) => steps.find((s) => s.id === id)!;
 const state = (inv: Record<string, number>) =>
@@ -42,5 +42,18 @@ describe("smelt fuel (cycle 7 f4 iron-deadlock gate arm)", () => {
 	it("smelt_iron burns logs: f6 fuel arm held 5 logs, 0 planks and 0 coal for 600 s", () => {
 		const s = { ...(deadlock as object), inventory: { ...(deadlock as { inventory: object }).inventory, logs: 5 } } as never;
 		expect(step("smelt_iron").canExecute(s)).toBe(true);
+	});
+});
+
+describe("a lit portal comes first (race c8b steve-race-004)", () => {
+	it("enter_nether beats a regressed iron step once a portal is built", () => {
+		const s = {
+			equipment: { hasFurnace: true, hasCraftingTable: true, pickaxe: "stone" },
+			world: { dimension: "overworld", portalBuilt: true, portalLocation: { x: 0, y: 64, z: 0 } },
+			alive: true,
+			inventory: { ironOre: 3, ironIngots: 0, buckets: 1, waterBuckets: 0, lavaBuckets: 0, flintAndSteel: 1, coal: 4, planks: 8, logs: 2 },
+		} as never;
+		expect(step("smelt_iron").canExecute(s)).toBe(true);
+		expect(getNextStep(s)?.id).toBe("enter_nether");
 	});
 });
