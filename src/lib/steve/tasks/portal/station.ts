@@ -32,7 +32,108 @@ export interface StationDeps {
 	use: (look: Vec3) => Promise<boolean>;
 	/** Straight-line walk toward (x, z), digging non-obsidian blocks that do not touch lava. */
 	shuffle?: (x: number, z: number) => Promise<void>;
+	/** Dig one block (the walkway clears feet/head cells with it). */
+	dig?: (p: Vec3) => Promise<void>;
 }
+
+const touchesLavaD = (deps: StationDeps, p: Vec3): boolean =>
+	[
+		[1, 0, 0],
+		[-1, 0, 0],
+		[0, 1, 0],
+		[0, -1, 0],
+		[0, 0, 1],
+		[0, 0, -1],
+	].some(([x, y, z]) => deps.isLava(deps.name(vec3(p.x + x, p.y + y, p.z + z))));
+
+/**
+ * A fixed walkway to the stand (ruststeve refill-design §4): an L at the stand's level from
+ * the bot's cell, floored with placed cobble, feet and head dug clear, lava beside it capped;
+ * then a sneaking cell-by-cell walk. The pathfinder could not get through the cast clutter
+ * (f5/f7/f8/f10: most refill walks pf_no_progress / pf_partial; landing 11 walk_grid: boxed
+ * pockets one step from the stand). Returns true when the bot reached the stand's cell.
+ */
+const walkway = async (bot: Bot, deps: StationDeps, S: Vec3): Promise<boolean> => {
+	if (!deps.dig) return false;
+	const p = bot.entity.position;
+	const sx = Math.floor(p.x);
+	const sz = Math.floor(p.z);
+	if (Math.abs(Math.floor(p.y) - S.y) > 1) return false;
+	const legs = (xFirst: boolean): Vec3[] => {
+		const cells: Vec3[] = [];
+		let x = sx;
+		let z = sz;
+		const stepX = () => {
+			while (x !== S.x) {
+				x += Math.sign(S.x - x);
+				cells.push(vec3(x, S.y, z));
+			}
+		};
+		const stepZ = () => {
+			while (z !== S.z) {
+				z += Math.sign(S.z - z);
+				cells.push(vec3(x, S.y, z));
+			}
+		};
+		if (xFirst) {
+			stepX();
+			stepZ();
+		} else {
+			stepZ();
+			stepX();
+		}
+		return cells;
+	};
+	// A leg is usable when no cell it must dig touches lava and none is obsidian.
+	const usable = (cells: Vec3[]): boolean =>
+		cells.every((c) =>
+			[c, vec3(c.x, c.y + 1, c.z)].every((q) => {
+				const n = deps.name(q);
+				if (deps.isLava(n)) return false;
+				if (!deps.isSolid(n)) return true;
+				return n !== "obsidian" && !touchesLavaD(deps, q);
+			}),
+		);
+	const path = [legs(true), legs(false)].find((c) => c.length > 0 && c.length <= 10 && usable(c));
+	if (!path) {
+		logEvent("cast", "walkway_none", `to ${key(S)} from ${sx},${Math.floor(p.y)},${sz}`, p);
+		return false;
+	}
+	let placed = 0;
+	let dug = 0;
+	// One cell at a time — prepare it from the cell before (within reach), then step on.
+	for (const c of path) {
+		// Head first: the step up from a 2-high pocket needs the cell over the bot's head too.
+		const here = bot.entity.position;
+		const over = vec3(Math.floor(here.x), Math.floor(here.y) + 2, Math.floor(here.z));
+		if (c.y > Math.floor(here.y) && deps.isSolid(deps.name(over)) && deps.name(over) !== "obsidian" && !touchesLavaD(deps, over)) {
+			await deps.dig(over);
+			dug++;
+		}
+		const floor = vec3(c.x, c.y - 1, c.z);
+		if (!deps.isSolid(deps.name(floor)) && (await deps.placeCobble(floor))) placed++;
+		for (const q of [vec3(c.x, c.y + 1, c.z), c]) {
+			if (deps.isSolid(deps.name(q))) {
+				await deps.dig(q);
+				dug++;
+			}
+		}
+		// Lava beside the walkway at feet or head height: cap it by placing.
+		for (const [dx, dz] of DIRS)
+			for (const dy of [0, 1]) {
+				const s = vec3(c.x + dx, c.y + dy, c.z + dz);
+				if (deps.isLava(deps.name(s)) && (await deps.placeCobble(s))) placed++;
+			}
+		if (deps.isLava(deps.name(floor)) || deps.isLava(deps.name(c)) || deps.isSolid(deps.name(c))) break;
+		bot.setControlState("sneak", true);
+		await walkToXZ(bot, c.x + 0.5, c.z + 0.5, { targetDist: 0.3, maxTime: 2500 }).catch(() => {});
+		bot.setControlState("sneak", false);
+		if (Math.floor(bot.entity.position.x) !== c.x || Math.floor(bot.entity.position.z) !== c.z) break;
+	}
+	const ok = atStand(bot, S);
+	logEvent("cast", "walkway", `to ${key(S)} cells ${path.length} placed ${placed} dug ${dug} arrived=${ok}`, bot.entity.position);
+	return ok;
+};
 
 type Stand = { S: Vec3; d: [number, number]; targets: Vec3[] };
 
@@ -227,7 +328,9 @@ export const stationRefill = async (
 		// the one walk that started on the floor arrived in 1.7 s. Fall back to a straight
 		// shuffle that digs its way down and across.
 		let shuffled = false;
-		{
+		let walked = false;
+		if (!atStand(bot, S)) walked = await walkway(bot, deps, S);
+		if (!walked) {
 			const q = bot.entity.position;
 			const dq = Math.hypot(q.x - (S.x + 0.5), q.z - (S.z + 0.5));
 			if (deps.shuffle && !atStand(bot, S) && dq <= 8) {
@@ -248,7 +351,7 @@ export const stationRefill = async (
 			logEvent(
 				"cast",
 				"refill_walk",
-				JSON.stringify({ stand: key(S), site, d0: +d0.toFixed(1), d1: +d1.toFixed(1), dy: +(S.y - p0.y).toFixed(1), pf_ok: pfOk === true, shuffled, arrived, reason, ms: Date.now() - tWalk, targets: st.targets.length }),
+				JSON.stringify({ stand: key(S), site, d0: +d0.toFixed(1), d1: +d1.toFixed(1), dy: +(S.y - p0.y).toFixed(1), pf_ok: pfOk === true, walkway: walked, shuffled, arrived, reason, ms: Date.now() - tWalk, targets: st.targets.length }),
 				q,
 			);
 		}
