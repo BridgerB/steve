@@ -42,7 +42,13 @@ export const saveParams = (p: ParamsFile, path = paramsPath()): void => {
 };
 
 /** One Thompson draw per parameter: the arm with the largest Beta sample (or the pin). */
-export const drawParams = (p: ParamsFile = loadParams(), rng: Rng = rngFrom(Date.now() & 0xffffffff)): Record<string, string> => {
+// The default seed mixes a per-process counter and Math.random: draws in the same
+// millisecond (race c6 drew five kits in one loop) all got the same arm from Date.now().
+let drawN = 0;
+export const drawParams = (
+	p: ParamsFile = loadParams(),
+	rng: Rng = rngFrom((Date.now() ^ Math.imul(++drawN, 0x9e3779b1) ^ Math.floor(Math.random() * 0x7fffffff)) >>> 0),
+): Record<string, string> => {
 	const chosen: Record<string, string> = {};
 	for (const [name, spec] of Object.entries(p)) {
 		if (spec.pin !== undefined) {
