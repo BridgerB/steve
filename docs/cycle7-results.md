@@ -53,3 +53,16 @@ Fortress found in ~5 s; the bot burns to death from blaze fireballs and wither s
 
 ## Iron, f6 run 37894072875 (fuel fix 9d145cf vs base)
 - fuel 1/10 vs base 1/11 so far: no effect. The fuel arm gathered 5 logs, then sat 600 s at ore=1 logs=5 planks=0 coal=0: smelt_iron's fuel gate counted only coal and planks. Fix: logs count (f9).
+
+## Iron log fuel, f9 run 37897574738, 12 paired (iron-deadlock slug)
+- logfuel 10/12 = 83% [55%, 95%] vs base (exp/logfuel-base) 3/12 = 25% [9%, 53%]; better on 8, worse on 1; P(better) = 0.997, sign p = 0.039. **Promoted.** With 9d145cf (gather wood when ore has no fuel) the c5 809 deadlock is resolved; f6's fuel arm alone was 1/12 vs 1/12.
+
+## f7 head vs champion, run 37895016008, set A, 12 paired
+- natural: head 1/12 (landing 5, 772 s) vs champ 0/12; best frame 2.92 vs 2.17, P = 0.845. arena: head 11/12 = 92% [65%, 99%] vs champ 8/12 = 67% [39%, 86%], P = 0.926; head slower 27 s (95% [−53.0, −4.4]). Neither reaches 0.95: champion unchanged.
+- Always-stuck cells, every arm, every fleet: landing 8 (20030,38,21334) and landing 4 (20717,8,20168) are **lidded cups** — aim_fail with the ray stopping in the bot's own cell. RCON on local-1 after a local repro: 20030,39,21334 is copper_ore (natural rock the chamber skipped: "cleared 55 skipped 18 of 84"). Fix: dig a lid before the pour (f10). Landing 11 (20037,17,22129) is the refill-walk lock.
+
+## f8 natural, run 37897412661, shuffle vs base, 12 paired
+- both 0/12; best frame 2.83 vs 2.17, P = 0.778; deaths P = 0.620. Kept (not worse). When the shuffle fires it arrives 3 of 43 times: the lava guard refuses the digs it needs, and some walks end in death. The refill-walk lock remains the main natural wall; station walk_grid logging added to read it.
+
+## f10 arena, run 37900099447, lid vs base, 12 paired
+- lid 10/12 vs base 11/12, P(better) = 0.175, not separated; the lid dig never fired in the arena (no natural rock over arena cups). Natural arms pending.
