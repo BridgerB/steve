@@ -24,7 +24,7 @@ export const castAttempt = async (
 	try {
 		const { ensureSparePickaxe } = await import("../mining/main.ts");
 		// Capped: s4n-1 hung 22 min in a table craft here, outside the attempt guard.
-		await Promise.race([ensureSparePickaxe(bot), new Promise((r) => setTimeout(r, 30_000))]);
+		await Promise.race([ensureSparePickaxe(bot), new Promise((r) => setTimeout(r, 60_000))]);
 	} catch {}
 	const params = drawParams();
 	// The bucket arm is the kit this bot was built with (drawn once per bot), not a fresh draw.

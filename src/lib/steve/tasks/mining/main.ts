@@ -228,22 +228,34 @@ export const ensurePickaxe = async (bot: Bot): Promise<boolean> => {
  * mid-prep after the cobble had gone into molds, so ensurePickaxe could not craft one).
  * Logs spare_pick. Returns true when the bot holds at least two stone+ pickaxes.
  */
+// Three, not two: since every cast dig equips the pickaxe (3aac1ae) a frame can wear out
+// two stone picks (131 uses each; the chamber alone is up to 84 cells). f35: a race-like
+// one-pickaxe kit went 1/25 vs the gym kit's 6/24, five ending "Pickaxe worn out during site prep".
+const SPARE_PICKS = 3;
 export const ensureSparePickaxe = async (bot: Bot): Promise<boolean> => {
 	const picks = () => bot.inventory.slots.filter((s) => s && STONE_PLUS_PICKS.has(s.name)).length;
-	if (picks() >= 2) return true;
-	if (invCount(bot, "cobblestone") < 3) return false;
-	if (invCount(bot, "stick") < 2 && invCount(bot, "planks") >= 2) await craftItem(bot, "stick", 1);
-	if (invCount(bot, "stick") < 2) return false;
-	const table = await getCraftingTable(bot);
-	if (!table) return false;
 	const before = picks();
-	await craftItem(bot, "stone_pickaxe", 1, table);
-	if (bot.currentWindow) {
-		try {
-			bot.closeWindow(bot.currentWindow);
-		} catch {}
+	for (let i = 0; i < SPARE_PICKS && picks() < SPARE_PICKS; i++) {
+		if (invCount(bot, "cobblestone") < 3) break;
+		// Sticks from planks, planks from logs (no table needed for either).
+		if (invCount(bot, "stick") < 2 && invCount(bot, "planks") < 2 && invCount(bot, "_log") >= 1) {
+			const { craftPlanks } = await import("../craft/main.ts");
+			await craftPlanks(bot).catch(() => {});
+		}
+		if (invCount(bot, "stick") < 2 && invCount(bot, "planks") >= 2) await craftItem(bot, "stick", 1);
+		if (invCount(bot, "stick") < 2) break;
+		const table = await getCraftingTable(bot);
+		if (!table) break;
+		const n = picks();
+		await craftItem(bot, "stone_pickaxe", 1, table);
+		if (bot.currentWindow) {
+			try {
+				bot.closeWindow(bot.currentWindow);
+			} catch {}
+		}
+		if (picks() <= n) break;
 	}
-	logEvent("cast", "spare_pick", `stone pickaxes ${before} → ${picks()}`, bot.entity.position);
+	if (picks() !== before) logEvent("cast", "spare_pick", `stone pickaxes ${before} → ${picks()}`, bot.entity.position);
 	return picks() >= 2;
 };
 
