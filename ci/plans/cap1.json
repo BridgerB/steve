@@ -1,0 +1,195 @@
+{
+	"label": "cap1",
+	"workers": 20,
+	"experiments": [
+		{
+			"name": "k1h4",
+			"slug": "build-nether-portal",
+			"lava_d": 6,
+			"runs": 12,
+			"est_s": 450,
+			"per_server": 1,
+			"heap_mb": 4096
+		},
+		{
+			"name": "k2h4",
+			"slug": "build-nether-portal",
+			"lava_d": 6,
+			"runs": 12,
+			"est_s": 450,
+			"per_server": 2,
+			"heap_mb": 4096
+		},
+		{
+			"name": "k3h4",
+			"slug": "build-nether-portal",
+			"lava_d": 6,
+			"runs": 12,
+			"est_s": 450,
+			"per_server": 3,
+			"heap_mb": 4096
+		},
+		{
+			"name": "k4h4",
+			"slug": "build-nether-portal",
+			"lava_d": 6,
+			"runs": 12,
+			"est_s": 450,
+			"per_server": 4,
+			"heap_mb": 4096
+		},
+		{
+			"name": "k6h4",
+			"slug": "build-nether-portal",
+			"lava_d": 6,
+			"runs": 12,
+			"est_s": 450,
+			"per_server": 6,
+			"heap_mb": 4096
+		},
+		{
+			"name": "k8h4",
+			"slug": "build-nether-portal",
+			"lava_d": 6,
+			"runs": 12,
+			"est_s": 450,
+			"per_server": 8,
+			"heap_mb": 4096
+		},
+		{
+			"name": "k12h4",
+			"slug": "build-nether-portal",
+			"lava_d": 6,
+			"runs": 12,
+			"est_s": 450,
+			"per_server": 12,
+			"heap_mb": 4096
+		},
+		{
+			"name": "k1h6",
+			"slug": "build-nether-portal",
+			"lava_d": 6,
+			"runs": 12,
+			"est_s": 450,
+			"per_server": 1,
+			"heap_mb": 6144
+		},
+		{
+			"name": "k2h6",
+			"slug": "build-nether-portal",
+			"lava_d": 6,
+			"runs": 12,
+			"est_s": 450,
+			"per_server": 2,
+			"heap_mb": 6144
+		},
+		{
+			"name": "k3h6",
+			"slug": "build-nether-portal",
+			"lava_d": 6,
+			"runs": 12,
+			"est_s": 450,
+			"per_server": 3,
+			"heap_mb": 6144
+		},
+		{
+			"name": "k4h6",
+			"slug": "build-nether-portal",
+			"lava_d": 6,
+			"runs": 12,
+			"est_s": 450,
+			"per_server": 4,
+			"heap_mb": 6144
+		},
+		{
+			"name": "k6h6",
+			"slug": "build-nether-portal",
+			"lava_d": 6,
+			"runs": 12,
+			"est_s": 450,
+			"per_server": 6,
+			"heap_mb": 6144
+		},
+		{
+			"name": "k8h6",
+			"slug": "build-nether-portal",
+			"lava_d": 6,
+			"runs": 12,
+			"est_s": 450,
+			"per_server": 8,
+			"heap_mb": 6144
+		},
+		{
+			"name": "k12h6",
+			"slug": "build-nether-portal",
+			"lava_d": 6,
+			"runs": 12,
+			"est_s": 450,
+			"per_server": 12,
+			"heap_mb": 6144
+		},
+		{
+			"name": "k1h10",
+			"slug": "build-nether-portal",
+			"lava_d": 6,
+			"runs": 12,
+			"est_s": 450,
+			"per_server": 1,
+			"heap_mb": 10240
+		},
+		{
+			"name": "k2h10",
+			"slug": "build-nether-portal",
+			"lava_d": 6,
+			"runs": 12,
+			"est_s": 450,
+			"per_server": 2,
+			"heap_mb": 10240
+		},
+		{
+			"name": "k3h10",
+			"slug": "build-nether-portal",
+			"lava_d": 6,
+			"runs": 12,
+			"est_s": 450,
+			"per_server": 3,
+			"heap_mb": 10240
+		},
+		{
+			"name": "k4h10",
+			"slug": "build-nether-portal",
+			"lava_d": 6,
+			"runs": 12,
+			"est_s": 450,
+			"per_server": 4,
+			"heap_mb": 10240
+		},
+		{
+			"name": "k6h10",
+			"slug": "build-nether-portal",
+			"lava_d": 6,
+			"runs": 12,
+			"est_s": 450,
+			"per_server": 6,
+			"heap_mb": 10240
+		},
+		{
+			"name": "k8h10",
+			"slug": "build-nether-portal",
+			"lava_d": 6,
+			"runs": 12,
+			"est_s": 450,
+			"per_server": 8,
+			"heap_mb": 10240
+		},
+		{
+			"name": "k12h10",
+			"slug": "build-nether-portal",
+			"lava_d": 6,
+			"runs": 12,
+			"est_s": 450,
+			"per_server": 12,
+			"heap_mb": 10240
+		}
+	]
+}
