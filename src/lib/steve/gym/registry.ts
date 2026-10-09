@@ -67,7 +67,50 @@ const has = (bot: Bot, pat: string, n: number): boolean =>
 
 const NATURAL_TOTAL_MS = Number(process.env.GYM_TOTAL_S ?? 2700) * 1000;
 
+// Cycle 6, decision 6: the craft-window slug. The bot places a table, opens it, walks away
+// from it with the window open, dies once (RCON kill, keep_inventory), then crafts sticks in
+// its 2×2 grid. Pass is the server's count of sticks, not the client's.
+let craftRcon: ((cmd: string) => Promise<string>) | null = null;
+const serverCount = async (rcon: (cmd: string) => Promise<string>, name: string, item: string): Promise<number> =>
+	Number(/Found (\d+)/.exec(await rcon(`clear ${name} ${item} 0`).catch(() => ""))?.[1] ?? 0);
+const craftStaleTable = async (b: Bot): Promise<StepResult> => {
+	const { getCraftingTable, goTo } = await import("../lib/bot-utils.ts");
+	const table = await getCraftingTable(b);
+	if (!table) return { success: false, message: "HARNESS no table placed" };
+	try {
+		await b.openBlock(table.position);
+	} catch (e) {
+		logEvent("gym", "craft_stale", `table did not open: ${e instanceof Error ? e.message : e}`);
+	}
+	logEvent("gym", "craft_stale", `open window=${b.currentWindow?.id ?? "none"}`);
+	const p = b.entity.position;
+	const away = { x: Math.floor(p.x) + 12, y: Math.floor(p.y), z: Math.floor(p.z) };
+	await goTo(b, away as never, { range: 2, timeout: 20_000 }).catch(() => false);
+	logEvent("gym", "craft_stale", `walked ${Math.round(Math.hypot(b.entity.position.x - table.position.x, b.entity.position.z - table.position.z))} away, window=${b.currentWindow?.id ?? "none"}`);
+	if (craftRcon) {
+		const respawned = new Promise<void>((r) => (b as unknown as { once: (e: string, f: () => void) => void }).once("respawn", () => r()));
+		await craftRcon(`kill ${b.username}`).catch(() => "");
+		await Promise.race([respawned, new Promise((r) => setTimeout(r, 15_000))]);
+		await new Promise((r) => setTimeout(r, 2000));
+		logEvent("gym", "craft_stale", `respawned, window=${b.currentWindow?.id ?? "none"}`);
+	}
+	return craftSticks(b);
+};
+
 export const GYM_STEPS: GymStep[] = [
+	{
+		slug: "craft-stale-table",
+		label: "Craft sticks after an open table and a death",
+		order: 4.5,
+		prereq: ["oak_planks 16", "crafting_table 1"],
+		setup: async (_b, rcon) => {
+			craftRcon = rcon;
+		},
+		run: (b) => craftStaleTable(b),
+		pass: (b) => has(b, "stick", 4),
+		truthPass: async (rcon, name) => (await serverCount(rcon, name, "minecraft:stick")) >= 4,
+		timeoutMs: 120_000,
+	},
 	{
 		slug: "dragon",
 		label: "Kill the Dragon (beds)",
