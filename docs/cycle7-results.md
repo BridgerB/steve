@@ -173,3 +173,7 @@ compare.ts keyed rows by landing only, so the f10/f12 "nat + nat2" pools used 12
 - **f32: first steve blaze rod** — killBlazes rewrite 1/8 vs base 0/8; new arms survive the full 600 s budget (7 of 8), base dies at 34–265 s. Kept.
 - f33 falling-block-safe tunnel: pass 6/21 vs 8/24, best frame 7.19 vs 6.62 (P = 0.750), deaths 1.90 vs 2.00. Not separated; kept.
 - Races c10 3/20, c11 3/20, c12 1/20 into the Nether (server-confirmed). Race total c7–c12: 14/105 = 13% [8%, 21%]. Pooled c10–c12 funnel (55 bots): flint & steel 44, site anchor 34, obsidian ≥ 1 33, portal lit 5, Nether 6 — the race wall is the cast. Portal-step time by reason: cast stuck 225 min, lava not exposed 197, in water 188, died at verify 152, site too close 146, portal_start no progress 144, complete frame unlit 99, pickaxe worn out 42.
+
+## f34, run 37989680907: HEAD (champion + tunnel), natural ×4 at 2700 s + blaze ×4
+- set A 3/12 + 3/12 = 6/24 = 25% [12%, 45%]; set B 5/12 + 5/12 = 10/24 = 42% [24%, 61%]; pooled 16/48 = 33% [22%, 48%].
+- blaze 0/4: no blaze_kill events; deaths early (lava 20:56, fireball 20:55, slain by blaze 20:58) with up to 15 breakoffs per run; after a death the fight loop runs out the budget (no death check). The bot takes ranged fire and rarely closes to reach — needs combat design (shield/bow/cover), not tuning.
