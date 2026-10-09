@@ -35,3 +35,21 @@ Fortress found in ~5 s; the bot burns to death from blaze fireballs and wither s
 - 26.x attack packet: bot.attack was undecodable, kicked on first swing (f99fd3f).
 - Bandit not live on runners (pinned defaults) until ci/params.json (f683719).
 - Arena dirt shortfall at the lintel (1b61d5c per-cell top-up).
+
+## f5 natural, run 37892960524, set A, 12 paired
+- natk1 (1 bot per server) 1/12 = 8% [1%, 35%] vs refill (6 per server) 0/12 [0%, 24%]; best frame 2.58 vs 2.42, P = 0.588; deaths 1.50 vs 2.33, P = 0.943. Not separated: natural stays at 6 per server. The pass was landing 5 again (715 s; f1's pass was also landing 5).
+- **The "portal_start" stall is a refill-walk lock** (f5-natk1-a-7, full telemetry): perched one block above the floor beside the frame, every pathfinder walk to a station stand 3–6 blocks away failed (pf_no_progress / pf_partial, 20 s each; 265 vetoed fill_lava moves in ~15 min). The one walk that started on the floor arrived in 1.7 s. The phase label stays "portal_start" because castObsidianAt's pillar/refill runs before its own setPhase. Fix efa9d77 (lava-safe shuffle fallback); measured in f8.
+
+## f7 water, run 37895016008, set W, 12 paired, fixed slug (ca5840e)
+- The f5 "both arms fail" landings were the harness: one escapeWater call where the race re-dispatches, and a dry-land check on the block under the bot's centre (overhangs the water on a bank lip). Fixed slug: both arms 12/12 = 100% [76%, 100%].
+- Ledge lift (fa76014) slower on 10 of 12 landings: sign p = 0.039, mean +9.0 s, 95% [−20.3, +2.2]. Reverted (87e2c67).
+
+## Dragon, f7 + f8 (6 runs each)
+- f7 (death ends attempt, breath dodge): 0/6; 3 of 3 inspected deaths "slain by Enderman" before any bed (gaze level after the tp).
+- f8 (+ gaze down, fend endermen, 1c12fe9): 0/6; 1 enderman death, 4 dragon's breath, 1 own-bed explosion. Next: bed placement retries in place with held=none or a floor of air after a dodge, standing in the breath; the fountain stand is in the dragon's path.
+
+## f8 arena, run 37897412661, shuffle vs base, 12 paired
+- Both 10/12 = 83% [55%, 95%], pass P = 0.497, seconds P(better) = 0.136. Kept (not worse). The shuffle arm cast landing 7 (19360,68,21281), which stuck at 9/10 in both f4 arms and f8 base; it lost landing 9 to a pillar jam (15 pillar_steps "placed dirt" with feet fixed at 72), unrelated to the refill walk.
+
+## Iron, f6 run 37894072875 (fuel fix 9d145cf vs base)
+- fuel 1/10 vs base 1/11 so far: no effect. The fuel arm gathered 5 logs, then sat 600 s at ore=1 logs=5 planks=0 coal=0: smelt_iron's fuel gate counted only coal and planks. Fix: logs count (f9).
