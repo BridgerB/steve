@@ -344,8 +344,7 @@ export const steps: readonly Step[] = [
 			s.equipment.hasFurnace &&
 			s.inventory.ironOre >=
 				Math.min(3, Math.max(1, IRON_NEED - s.inventory.ironIngots - kitBuckets(s) * 3 - (s.inventory.flintAndSteel >= 1 ? 1 : 0))) &&
-			// Logs are fuel too (smeltItems loads them): f6 fuel arm sat 600 s on 5 logs, 0 planks.
-			(s.inventory.coal >= 2 || s.inventory.planks >= 4 || s.inventory.logs >= 2),
+			(s.inventory.coal >= 2 || s.inventory.planks >= 4),
 		// Count iron already invested in buckets (3 each) so a bot that smelted, then
 		// spent ingots on buckets, doesn't loop back to re-smelt iron it no longer has.
 		isComplete: (s) =>
