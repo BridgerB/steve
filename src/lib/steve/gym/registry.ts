@@ -61,6 +61,8 @@ export interface GymStep {
 	/** Optional RCON cleanup after the run (e.g. release forceloads the setup added). */
 	teardown?: (rcon: (cmd: string) => Promise<string>) => Promise<void>;
 	timeoutMs: number;
+	/** The landing is meant to be in water (a lake-shore landing set); placement accepts it. */
+	waterStart?: boolean;
 }
 
 const has = (bot: Bot, pat: string, n: number): boolean =>
@@ -119,7 +121,38 @@ let blazeRcon: ((cmd: string) => Promise<string>) | null = null;
 const BLAZE_BUDGET_MS = 600_000;
 const inNether = (cmd: string) => `execute in minecraft:the_nether run ${cmd}`;
 
+// Cycle 7 Part 6.2: water. The bot lands in a lake (landing set W: swimmable water 2+ deep,
+// a bank 3-5 blocks away at most one block above the water) and runs escapeWater. Pass is
+// dry land from the server's view: feet not in water, standing on something solid. 120 s.
+// Measures the ledge-lift port fix (fa76014) and the lily-pad break (3e1f231).
+const WATER_BUDGET_MS = 120_000;
+const onDryLand = async (rcon: (cmd: string) => Promise<string>, name: string): Promise<boolean> =>
+	/passed/i.test(
+		await rcon(`execute as ${name} at @s unless block ~ ~ ~ minecraft:water unless block ~ ~-1 ~ minecraft:water unless block ~ ~-1 ~ minecraft:air unless block ~ ~-1 ~ minecraft:lava`).catch(() => ""),
+	);
+let waterRcon: ((cmd: string) => Promise<string>) | null = null;
+
 export const GYM_STEPS: GymStep[] = [
+	{
+		slug: "water-escape",
+		label: "From a lake to dry land",
+		order: 0.5,
+		waterStart: true,
+		prereq: ["stone_pickaxe 1", "dirt 16"],
+		setup: async (_b, rcon) => {
+			waterRcon = rcon;
+		},
+		run: async (b) => {
+			const { escapeWater } = await import("../lib/bot-utils.ts");
+			const t0 = Date.now();
+			await Promise.race([escapeWater(b).catch(() => false), new Promise((r) => setTimeout(r, WATER_BUDGET_MS))]);
+			const dry = waterRcon ? await onDryLand(waterRcon, b.username) : !b.entity?.isInWater;
+			return { success: dry, message: `${dry ? "on dry land" : "still in water"} after ${Math.round((Date.now() - t0) / 1000)} s` };
+		},
+		pass: (b) => !b.entity?.isInWater,
+		truthPass: (rcon, name) => onDryLand(rcon, name),
+		timeoutMs: WATER_BUDGET_MS + 60_000,
+	},
 	{
 		slug: "blaze-rod",
 		label: "Kitted bot at a Nether fortress to a blaze rod",

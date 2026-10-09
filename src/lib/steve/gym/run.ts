@@ -94,7 +94,8 @@ export const runGymStep = async (
 			const ly = bot.entity?.position?.y ?? 0;
 			const wet = !!(bot as { entity?: { isInWater?: boolean } }).entity?.isInWater;
 			const lava = /passed/i.test(await rcon(`execute as ${name} at @s if block ~ ~ ~ minecraft:lava`).catch(() => ""));
-			if (ly >= 55 && !wet && !lava) {
+			// A water-start slug (water-escape) lands in its lake on purpose.
+			if (ly >= 55 && (!wet || step.waterStart) && !lava) {
 				landed = true;
 				landing = [tx, tz];
 				// Respawn at this landing, not world spawn: p0b's deaths respawned at spawn,
@@ -142,7 +143,8 @@ export const runGymStep = async (
 	// shouldn't fail an unrelated step (mining/gathering bail "yielding to escape_water").
 	// In a real run escape_water always gets the bot to dry land BEFORE any other step,
 	// so do the same here — otherwise water spawns falsely tank every resource step.
-	if ((bot as { entity?: { isInWater?: boolean } }).entity?.isInWater) {
+	// A water-start slug measures exactly this escape, so the harness must not do it first.
+	if (!step.waterStart && (bot as { entity?: { isInWater?: boolean } }).entity?.isInWater) {
 		try {
 			const { escapeWater } = await import("../lib/bot-utils.ts");
 			await Promise.race([escapeWater(bot as never), sleep(30000)]);

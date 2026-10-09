@@ -56,7 +56,7 @@ log(`seed ${await cmd("seed")}`);
 mkdirSync("data/gym", { recursive: true });
 const r = spawnSync(process.execPath, ["--import", "./typecraft-resolve.mjs", "scripts/ml/landings.ts"], {
 	stdio: "inherit",
-	env: { ...process.env, SET, N: String(set.n), CENTER: set.center.join(","), SPACING: String(set.spacing), PREGEN_R: String(set.pregen_r) },
+	env: { ...process.env, SET, N: String(set.n), CENTER: set.center.join(","), SPACING: String(set.spacing), PREGEN_R: String(set.pregen_r), KIND: set.kind ?? "natural", ...(set.max_cells ? { MAX_CELLS: String(set.max_cells) } : {}) },
 });
 if (r.status !== 0) throw new Error(`landings.ts exited ${r.status}`);
 const landings = JSON.parse(readFileSync(`data/gym/landings-${SET}.json`, "utf8")) as [number, number][];

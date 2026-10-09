@@ -62,11 +62,51 @@ const nearestPortal = async (x: number, z: number): Promise<number> => {
 	return best;
 };
 
-type Meta = { x: number; z: number; y: number; portal_d: number; tries: number };
+type Meta = { x: number; z: number; y: number; portal_d: number; tries: number; kind?: string; bank_d?: number; bank_dh?: number; depth?: number };
+// KIND=shore (water-escape set): the landing is a swimmable water cell (2+ deep) with a bank
+// 3-5 blocks away whose stand height is at most 1 above the water's; the bank distance and
+// height difference are recorded.
+const KIND = process.env.KIND ?? "natural";
+/** The first swimmable water cell within 32 of (gx, gz), scanned in rings, that has a bank 3-5 away. */
+const findShore = async (gx: number, gz: number, i: number): Promise<Meta | null> => {
+	await cmd(`forceload add ${gx - 40} ${gz - 40} ${gx + 40} ${gz + 40}`);
+	for (let w = 0; w < 240; w++) {
+		if (passed(await cmd(`execute if loaded ${gx - 40} 0 ${gz - 40}`)) && passed(await cmd(`execute if loaded ${gx + 40} 0 ${gz + 40}`))) break;
+		await sleep(250);
+	}
+	let found: Meta | null = null;
+	ring: for (let r = 0; r <= 32; r += 2)
+		for (let dx = -r; dx <= r; dx += 2)
+			for (const dz of r === 0 ? [0] : Math.abs(dx) === r ? Array.from({ length: r + 1 }, (_, k) => -r + 2 * k) : [-r, r]) {
+				const x = gx + dx;
+				const z = gz + dz;
+				if (!(await surfaceIs(x, z, "minecraft:water", "motion_blocking"))) continue;
+				if (!passed(await cmd(`execute positioned ${x} 0 ${z} positioned over motion_blocking if block ~ ~-2 ~ minecraft:water`))) continue;
+				const wy = await heightAt(x, z);
+				if (wy === null || wy < 55) continue;
+				for (const d of [3, 4, 5])
+					for (const [ux, uz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]] as const) {
+						const bx = x + ux * d;
+						const bz = z + uz * d;
+						if (await surfaceIs(bx, bz, "minecraft:water", "motion_blocking")) continue;
+						const by = await heightAt(bx, bz);
+						if (by === null || by - wy > 1 || by - wy < 0) continue;
+						const portalD = await nearestPortal(x, z);
+						if (portalD <= 200) continue;
+						found = { x, z, y: wy, portal_d: portalD, tries: 1, kind: "shore", bank_d: d, bank_dh: by - wy, depth: 2 };
+						break ring;
+					}
+			}
+	await cmd(`forceload remove ${gx - 40} ${gz - 40} ${gx + 40} ${gz + 40}`);
+	console.log(`cell ${i} ${gx},${gz}: ${found ? `shore ${found.x},${found.z} water y=${found.y} bank ${found.bank_d} away, +${found.bank_dh}` : "no shore within 32"}`);
+	return found;
+};
+
 const out: Meta[] = [];
 const side = Math.ceil(Math.sqrt(N));
 const t0 = Date.now();
-for (let i = 0; out.length < N && i < N * 3; i++) {
+const MAX_CELLS = Number(process.env.MAX_CELLS ?? N * 3);
+for (let i = 0; out.length < N && i < MAX_CELLS; i++) {
 	const cx = CX + ((i % side) - Math.floor(side / 2)) * SPACING;
 	const cz = CZ + (Math.floor(i / side) - Math.floor(side / 2)) * SPACING;
 	// Snap the grid cell to the nearest forest or plains (an ocean cell rejected 34 of 36
@@ -88,7 +128,11 @@ for (let i = 0; out.length < N && i < N * 3; i++) {
 	}
 	const [gx, gz] = snap;
 	let ok: Meta | null = null;
-	for (let t = 0; t < 6 && !ok; t++) {
+	if (KIND === "shore") {
+		ok = await findShore(gx, gz, i);
+		if (ok) await pregen(ok.x, ok.z);
+	}
+	for (let t = 0; t < 6 && !ok && KIND !== "shore"; t++) {
 		const x = gx + [0, 24, -24, 0, 0, 48][t]!;
 		const z = gz + [0, 0, 0, 24, -24, 48][t]!;
 		// Check on a small loaded patch first; only an accepted landing gets its ±PREGEN_R square.
