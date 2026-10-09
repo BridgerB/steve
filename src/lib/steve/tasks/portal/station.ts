@@ -230,7 +230,7 @@ export const stationRefill = async (
 		{
 			const q = bot.entity.position;
 			const dq = Math.hypot(q.x - (S.x + 0.5), q.z - (S.z + 0.5));
-			if (deps.shuffle && dq > 1.5 && dq <= 8) {
+			if (deps.shuffle && !atStand(bot, S) && dq <= 8) {
 				await deps.shuffle(S.x + 0.5, S.z + 0.5).catch(() => {});
 				shuffled = true;
 			}
