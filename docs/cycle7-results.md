@@ -134,3 +134,11 @@ compare.ts keyed rows by landing only, so the f10/f12 "nat + nat2" pools used 12
 - natural (22 pairs): 1/22 each (light: landing 5, 1745 s; **base: landing 2, 2097 s — the first natural Nether entry on any landing but 5**); best frame 5.68 vs 5.77 (highest means yet), P = 0.460; deaths 1.91 vs 1.59, P = 0.191; lava deaths equal. Kept (not separated; mechanism).
 - Lighting: base had 5 complete 10/10 frames, **4 portal_unlit**, 1 lit; light arm 1 complete frame, interior clear, lit. Lighting a complete frame failed 4 of 5 times on the old code — the light_interior event (light arm only) will say why as frames accumulate.
 - arena: 10/12 vs 9/12.
+
+## f23, run 37926168729: safe lighting vs base on landing set B, 12 paired at 2700 s
+- light 1/10 (**landing B6, 1464 s — the first set-B Nether entry**) vs base 0/10; best frame 6.50 vs 7.30 (high in both), P = 0.271; deaths 2.20 vs 1.90. Not separated.
+
+## f25, run 37930859247: HEAD (safe light + enter-first, before the pickaxe digs) at 2700 s
+- set B 0/12 (mean frame 6.67), set B 0/12 (3.50), set A 0/12 (4.92): **0/36 with 5 complete 10/10 frames**.
+- light_interior on those frames: **4 of 5 had cobblestone in the interior** (e.g. "air,cobblestone,cobblestone,air,air,air"); each portal_unlit, then site_complete (no refill — the 7332567 change worked) and the same failed interior again. The interior was cleared with digAt, which never equipped a pickaxe: fixed 869b276 + 3aac1ae (f27).
+- Open: f25-natb-a-12 lit its portal (27301,44,12632) and the next dispatch found the bot 45 away and built a new site instead of entering.
