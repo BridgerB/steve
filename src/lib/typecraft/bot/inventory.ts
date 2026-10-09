@@ -29,21 +29,7 @@ export const initInventory = (bot: Bot, _options: BotOptions): void => {
 
 	// ── Create inventory on login ──
 
-	// A login or respawn gives the player a fresh server-side menu: any container the client
-	// still holds open is gone on the server, and a click sent to it is silently ignored
-	// (no resync), while the client applies it to its own model. ruststeve measured this as
-	// a 2×2 craft that "succeeded" with nothing made (0/6 before the fix, 6/6 after).
-	const dropStaleWindow = (why: string): void => {
-		const w = bot.currentWindow;
-		if (!w) return;
-		bot.currentWindow = null;
-		bot.emit("debug", "window", { event: "stale_drop", why, windowId: w.id });
-		bot.emit("windowClose", w);
-	};
-	bot.client.on("respawn", () => dropStaleWindow("respawn"));
-
 	bot.client.on("login", () => {
-		dropStaleWindow("login");
 		if (!bot.registry) return;
 		const windowTypes = getWindowTypes(bot.registry);
 		const invInfo = windowTypes["minecraft:inventory"];
@@ -104,15 +90,21 @@ export const initInventory = (bot: Bot, _options: BotOptions): void => {
 			stateId: packet.stateId ?? null,
 		});
 
-		// Items the server holds in the 2×2 grid stay where the server says they are. This
-		// used to move them into an empty inventory slot client-side only: the bot then saw
-		// planks the server still held in the grid, every pick-up from that phantom slot was
-		// resynced to empty, and the grid was never reclaimed because the client saw it empty
-		// (race c5, steve-race-808: "No craft result" 100 times in 19 minutes). Callers
-		// reclaim the grid with real clicks (bot.craft sweeps it before placing).
+		// Auto-move items from crafting grid (slots 1-4) to main inventory after resync
+		// Prevents items getting stuck in the grid from server resyncs
 		if (windowId === 0 && window === bot.inventory) {
-			const held = [1, 2, 3, 4].filter((s) => window.slots[s]);
-			if (held.length) bot.emit("debug", "inventory", { event: "grid_occupied", slots: held });
+			for (let s = 1; s <= 4; s++) {
+				if (window.slots[s]) {
+					// Find an empty slot in main inventory (9-44) to move to
+					for (let dest = 9; dest < 45; dest++) {
+						if (!window.slots[dest]) {
+							updateSlot(window, dest, window.slots[s]!);
+							updateSlot(window, s, null);
+							break;
+						}
+					}
+				}
+			}
 		}
 	});
 
@@ -257,11 +249,8 @@ export const initInventory = (bot: Bot, _options: BotOptions): void => {
 		slot: number,
 		mouseButton: number,
 		mode: number,
-		target?: Window,
 	): Promise<void> => {
-		// An explicit target keeps a caller's slot numbers on the window they were computed
-		// for: a 2×2 craft must never land in a 3×3 table window opened by someone else.
-		const window = target ?? bot.currentWindow ?? bot.inventory;
+		const window = bot.currentWindow ?? bot.inventory;
 		if (!window || !bot.registry) return;
 
 		const actionId = nextActionId++;
@@ -499,9 +488,9 @@ export const initInventory = (bot: Bot, _options: BotOptions): void => {
 			// Pick up the source item
 			if (remaining < item.count) {
 				// Need only part of this stack — right-click to pick up half, or pick up all and put back
-				await bot.clickWindow(i, 0, 0, win);
+				await bot.clickWindow(i, 0, 0);
 			} else {
-				await bot.clickWindow(i, 0, 0, win);
+				await bot.clickWindow(i, 0, 0);
 			}
 
 			// Try to place into destination range
@@ -509,7 +498,7 @@ export const initInventory = (bot: Bot, _options: BotOptions): void => {
 				const destItem = win.slots[j];
 				if (destItem == null) {
 					// Empty slot — drop all
-					await bot.clickWindow(j, 0, 0, win);
+					await bot.clickWindow(j, 0, 0);
 					break;
 				} else if (
 					destItem.type === itemType &&
@@ -517,7 +506,7 @@ export const initInventory = (bot: Bot, _options: BotOptions): void => {
 					destItem.count < destItem.stackSize
 				) {
 					// Matching partial stack — fill it
-					await bot.clickWindow(j, 0, 0, win);
+					await bot.clickWindow(j, 0, 0);
 					if (!win.selectedItem) break;
 				}
 			}
@@ -573,13 +562,13 @@ export const initInventory = (bot: Bot, _options: BotOptions): void => {
 					bot.setQuickBarSlot(i - 36);
 					return;
 				}
-				await bot.clickWindow(i, 0, 0, bot.inventory);
-				await bot.clickWindow(destSlot, 0, 0, bot.inventory);
+				await bot.clickWindow(i, 0, 0);
+				await bot.clickWindow(destSlot, 0, 0);
 				// The item displaced from destSlot is now on the cursor: park it back
 				// in the source slot, otherwise it is silently lost on the next window
 				// close (the "planks vanish at the table" bug) and every later click
 				// starts with a stale cursor.
-				if (bot.inventory.selectedItem) await bot.clickWindow(i, 0, 0, bot.inventory);
+				if (bot.inventory.selectedItem) await bot.clickWindow(i, 0, 0);
 				// "hand" is hotbar 0 — SELECT it, or the held item never changes when
 				// another hotbar slot is active (station_place_failed heldAfter=andesite).
 				if (destination === "hand") bot.setQuickBarSlot(0);
@@ -594,11 +583,11 @@ export const initInventory = (bot: Bot, _options: BotOptions): void => {
 		const destSlot = getEquipSlot(destination);
 		if (destSlot === -1) return;
 		if (bot.inventory.slots[destSlot]) {
-			await bot.clickWindow(destSlot, 0, 0, bot.inventory);
+			await bot.clickWindow(destSlot, 0, 0);
 			// Put away
 			for (let i = 9; i < 45; i++) {
 				if (!bot.inventory.slots[i]) {
-					await bot.clickWindow(i, 0, 0, bot.inventory);
+					await bot.clickWindow(i, 0, 0);
 					return;
 				}
 			}
@@ -610,7 +599,7 @@ export const initInventory = (bot: Bot, _options: BotOptions): void => {
 	bot.tossStack = async (item: Item): Promise<void> => {
 		for (let i = 0; i < bot.inventory.slots.length; i++) {
 			if (bot.inventory.slots[i] === item) {
-				await bot.clickWindow(i, 0, 4, bot.inventory); // mode 4 = drop
+				await bot.clickWindow(i, 0, 4); // mode 4 = drop
 				return;
 			}
 		}
@@ -625,7 +614,7 @@ export const initInventory = (bot: Bot, _options: BotOptions): void => {
 		for (let i = 0; i < bot.inventory.slots.length && remaining > 0; i++) {
 			const item = bot.inventory.slots[i];
 			if (item && item.type === itemType) {
-				await bot.clickWindow(i, 0, 4, bot.inventory);
+				await bot.clickWindow(i, 0, 4);
 				remaining--;
 			}
 		}
@@ -667,20 +656,20 @@ export const initInventory = (bot: Bot, _options: BotOptions): void => {
 			// If no space at all, toss
 			if (destSlot === null) {
 				if (slot != null) {
-					await bot.clickWindow(slot, 0, 0, window);
+					await bot.clickWindow(slot, 0, 0);
 				}
-				await bot.clickWindow(-999, 0, 0, window);
+				await bot.clickWindow(-999, 0, 0);
 				break;
 			}
 
-			await bot.clickWindow(destSlot, 0, 0, window);
+			await bot.clickWindow(destSlot, 0, 0);
 		}
 	};
 
-	bot.putAway = async (slot: number, target?: Window): Promise<void> => {
-		const window = target ?? bot.currentWindow ?? bot.inventory;
+	bot.putAway = async (slot: number): Promise<void> => {
+		const window = bot.currentWindow ?? bot.inventory;
 		if (!window) return;
-		await bot.clickWindow(slot, 0, 0, window); // Pick up the item
+		await bot.clickWindow(slot, 0, 0); // Pick up the item
 		await bot.putSelectedItemRange(
 			window.inventoryStart,
 			window.inventoryEnd,

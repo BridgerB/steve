@@ -503,12 +503,10 @@ export type Bot = EventEmitter & {
 	awaitMessage: (...args: (string | RegExp | number)[]) => Promise<string>;
 
 	// ── Methods: Inventory ──
-	/** Click a slot of `window` (default: the open window, else the player inventory). */
 	clickWindow: (
 		slot: number,
 		mouseButton: number,
 		mode: number,
-		window?: Window,
 	) => Promise<void>;
 	putSelectedItemRange: (
 		start: number,
@@ -516,7 +514,7 @@ export type Bot = EventEmitter & {
 		window: Window,
 		slot: number,
 	) => Promise<void>;
-	putAway: (slot: number, window?: Window) => Promise<void>;
+	putAway: (slot: number) => Promise<void>;
 	closeWindow: (window: Window) => void;
 	transfer: (options: TransferOptions) => Promise<void>;
 	openBlock: (
