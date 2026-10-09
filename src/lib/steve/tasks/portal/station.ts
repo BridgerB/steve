@@ -215,7 +215,7 @@ export const stationRefill = async (
 		}
 		const { S, d } = st;
 		bot.setControlState("sneak", false);
-		await goTo(bot, S, { range: 0, timeout: 20000 }).catch(() => false);
+		await goTo(bot, S, { range: 0, timeout: 20000, nudge: false }).catch(() => false);
 		{
 			const q = bot.entity.position;
 			if (Math.hypot(q.x - (S.x + 0.5), q.z - (S.z + 0.5)) <= 1.5)

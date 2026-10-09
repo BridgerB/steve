@@ -67,7 +67,7 @@ export const lavaSafeMove = async (
 	const pf = getPathfinder(bot);
 	pf.setMovements({ exclusionAreasStep: [(x, y, z) => (lavaRing(bot, x, y, z) ? Number.POSITIVE_INFINITY : 0)] });
 	try {
-		await goTo(bot, target, { range: opts.range ?? 0.5, timeout: opts.timeout ?? 20000 }).catch(() => false);
+		await goTo(bot, target, { range: opts.range ?? 0.5, timeout: opts.timeout ?? 20000, nudge: false }).catch(() => false);
 	} finally {
 		pf.setMovements({ exclusionAreasStep: [] });
 	}

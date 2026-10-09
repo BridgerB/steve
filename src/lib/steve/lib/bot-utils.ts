@@ -89,6 +89,9 @@ export interface GoToOptions {
 	timeout?: number;
 	/** Whether to allow digging (default: true) */
 	canDig?: boolean;
+	/** Blind forward-walk nudge when the pathfinder fails (default: true). Off near lava:
+	 *  s14n-2 sprinted into the pool after a refused path, twice. */
+	nudge?: boolean;
 	/** Whether to allow sprinting (default: true) */
 	allowSprinting?: boolean;
 }
@@ -199,7 +202,7 @@ export const goTo = async (
 	pos: Vec3,
 	options: GoToOptions = {},
 ): Promise<boolean> => {
-	const { range = 2, timeout = 10000 } = options;
+	const { range = 2, timeout = 10000, nudge = true } = options;
 	throwIfPreempted();
 
 	const dist = distance(bot.entity.position, pos);
@@ -237,6 +240,7 @@ export const goTo = async (
 		// (≥3 blocks above) — walking into a wall does nothing; the pathfinder pillars
 		// up instead (scaffoldingBlocks). Never blind-walk toward lava.
 		if (
+			nudge &&
 			moved < 2 &&
 			!lavaAround(bot) &&
 			pos.y - bot.entity.position.y < 3
