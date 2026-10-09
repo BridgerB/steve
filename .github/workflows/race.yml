@@ -1,0 +1,135 @@
+# Hot path (cycle 7, Part 4.4): one race on a runner's own server, in the pregenerated race
+# region of the cached world. Same environment as gym.yml; nothing installs or generates.
+# Live telemetry: when the STEVE_INGEST_SECRET secret exists, bots also post rows to the
+# deployed Worker (STEVE_INGEST_URL), which writes them to D1, so the dashboard shows the race.
+name: race
+
+on:
+  workflow_dispatch:
+    inputs:
+      bots:
+        default: "5"
+      minutes:
+        default: "240"
+      landing_set:
+        default: A
+      env_json:
+        description: Extra environment, a JSON object
+        default: "{}"
+      label:
+        required: true
+  push:
+    # Smoke trigger before the workflow is on main; removed before the workflows-only PR.
+    branches: [feat/portal-loop-7]
+    paths: [.github/workflows/race.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  race:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    env:
+      BOTS: ${{ inputs.bots || '2' }}
+      MINUTES: ${{ inputs.minutes || '30' }}
+      SET: ${{ inputs.landing_set || 'A' }}
+      LABEL: ${{ inputs.label || format('racesmoke{0}', github.run_number) }}
+    steps:
+      - name: Start clock
+        run: echo "JOB_T0=$(date +%s)" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Cache key
+        id: key
+        run: echo "key=gym-env-${{ hashFiles('package-lock.json', 'ci/env.json', 'ci/typecraft-data.tar.zst') }}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore environment
+        uses: actions/cache/restore@v4
+        with:
+          path: env
+          key: ${{ steps.key.outputs.key }}
+          fail-on-cache-miss: true
+
+      - name: Link environment
+        env:
+          ENV_JSON: ${{ inputs.env_json || '{}' }}
+        run: |
+          echo "$PWD/env/node/bin" >> "$GITHUB_PATH"
+          ln -sfn "$PWD/env/node_modules" node_modules
+          mkdir -p src/lib/typecraft
+          ln -sfn "$PWD/env/typecraft-data" src/lib/typecraft/data
+          cat env/VERSION
+          echo "${ENV_JSON:-{\}}" | jq -r 'to_entries[] | "\(.key)=\(.value)"' >> "$GITHUB_ENV"
+          echo "RACE_BASE=$(jq -r '.race_base | join(",")' "env/worlds/$SET/world-meta.json")" >> "$GITHUB_ENV"
+
+      - name: Start server
+        run: |
+          RUNNER_RCON_PASS=$(openssl rand -hex 16)
+          echo "::add-mask::$RUNNER_RCON_PASS"
+          echo "RUNNER_RCON_PASS=$RUNNER_RCON_PASS" >> "$GITHUB_ENV"
+          export RUNNER_RCON_PASS
+          mkdir -p work
+          cp -r "env/worlds/$SET/world" work/world
+          scripts/ci/server.sh start "$PWD/env" "$PWD/work"
+          GYM_SERVER=runner node --import ./typecraft-resolve.mjs scripts/rcon.ts \
+            "gamerule keep_inventory true" "gamerule spawn_mobs true" "tick rate 20" "forceload query" "time query gametime"
+
+      - name: Race
+        env:
+          INGEST_SECRET: ${{ secrets.STEVE_INGEST_SECRET }}
+        run: |
+          node scripts/ci/init-telemetry.ts data/gym/telemetry.sqlite
+          export STEVE_D1_FILE=data/gym/telemetry.sqlite STEVE_PARAMS_FILE=data/params.json
+          export MC_HOST=127.0.0.1 MC_PORT=25565 MC_RCON_HOST=127.0.0.1 MC_RCON_PORT=25575 MC_RCON_PASS=$RUNNER_RCON_PASS
+          export STEVE_NUM_VIEWERS=0 STEVE_CLI=1
+          if [ -n "$INGEST_SECRET" ]; then
+            export STEVE_INGEST_URL=https://steve.bridgerb.workers.dev STEVE_INGEST_SECRET=$INGEST_SECRET STEVE_D1_TEE=1
+            echo "live telemetry: on"
+          else
+            echo "live telemetry: off (no STEVE_INGEST_SECRET secret)"
+          fi
+          echo "race $LABEL: $BOTS bots, $MINUTES min, RACE_BASE $RACE_BASE"
+          node --import ./typecraft-resolve.mjs src/lib/steve/main.ts --bots "$BOTS" --timeout $(( MINUTES * 60 )) 2>&1 | tee "data/race-$LABEL.log"
+
+      - name: Stop server
+        if: always()
+        run: scripts/ci/server.sh stop "$PWD/work" || true
+
+      - name: Pack
+        if: always()
+        run: |
+          mkdir -p data/gym
+          [ -f data/gym/telemetry.sqlite ] && zstd -q -19 -f data/gym/telemetry.sqlite -o data/gym/telemetry.sqlite.zst || true
+          cp work/server.log "data/race-$LABEL-server.log" 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: race-${{ env.LABEL }}
+          retention-days: 3
+          if-no-files-found: warn
+          path: |
+            data/gym/attempts.jsonl
+            data/gym/telemetry.sqlite.zst
+            data/race-*.log
+            data/bot-logs/
+            data/params.json
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## race $LABEL ($BOTS bots, $MINUTES min, ref ${{ github.sha }})"
+            echo ""
+            echo '```'
+            cat env/VERSION 2>/dev/null
+            grep -E "Kit buckets|pregenerated|tp |landed|WINS|exited|did not join" "data/race-$LABEL.log" 2>/dev/null | head -40
+            echo '```'
+            echo '```'
+            [ -f data/gym/attempts.jsonl ] && node scripts/ml/race-funnel.ts 2 data/gym/attempts.jsonl 2>&1 || echo "no attempts"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
