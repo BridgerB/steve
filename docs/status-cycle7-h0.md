@@ -6,7 +6,8 @@
 3. Keep the Mac awake (caffeinate -dimsu is running, pid 11536).
 
 ## Headline
-No steve bot has entered the Nether by its own portal. Last measured: natural cast 0/63 [0%, 6%] (cycle 5); arena 66/66 excluding the s2a gate bug.
+**First natural-terrain portal: gym trial f1-nat-b-5 (fleet f1, GitHub run 37885057543, worker 18), bot Gym_cast, landing 5 of set A (18488,20672), entered the Nether in 604 s.** Own frame at 18551,63,20685: 10 obsidian cast 04:45:55–04:50:56 UTC, lit 04:52:47, pass from the server (RCON dimension check). 2 lava deaths before the site. Tree b41c40e (before the per-cell top-up). Runner natural trials on that tree: 1 pass of 5 completed before f1 was cancelled, Wilson 95% [4%, 62%] (n=5; f1-nat-a-2 fail, -a-5 death ×4 at find_lava on the same landing, -a-8 fail 1/10, -a-12 death). No race bot yet.
+Previous: natural cast 0/63 [0%, 6%] (cycle 5); arena 66/66 excluding the s2a gate bug.
 
 ## Phase 0: cycle 6 closed
 - Race c6 was killed on Server A before any bot finished (Bridger's stop). It has no usable data, which is why there is no c6 funnel.

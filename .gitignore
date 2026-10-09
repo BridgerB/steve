@@ -41,3 +41,5 @@ worker-configuration.d.ts
 # Local gym server (local-server.sh): jar and worlds
 /data/local-server/
 /data/local-world*/
+# Local runtime data (gym databases, run downloads, landing files, worlds); never committed
+/data/
