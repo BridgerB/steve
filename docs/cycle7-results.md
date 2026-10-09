@@ -142,3 +142,10 @@ compare.ts keyed rows by landing only, so the f10/f12 "nat + nat2" pools used 12
 - set B 0/12 (mean frame 6.67), set B 0/12 (3.50), set A 0/12 (4.92): **0/36 with 5 complete 10/10 frames**.
 - light_interior on those frames: **4 of 5 had cobblestone in the interior** (e.g. "air,cobblestone,cobblestone,air,air,air"); each portal_unlit, then site_complete (no refill — the 7332567 change worked) and the same failed interior again. The interior was cleared with digAt, which never equipped a pickaxe: fixed 869b276 + 3aac1ae (f27).
 - Open: f25-natb-a-12 lit its portal (27301,44,12632) and the next dispatch found the bot 45 away and built a new site instead of entering.
+
+## f26, run 37930988683: dig straight down back to an own frame after a far respawn, set A ×2 at 2700 s
+- 1/23 each (return: landing 2, 2498 s; base: landing 5, 2407 s); best frame 5.61 vs 5.22, P = 0.663; deaths 1.74 vs 2.04, P = 0.744. Kept.
+- site_return_dig fired 19 times; 13 brought the bot back within 1–5 blocks of its frame (frames 1–10/10, one complete), the rest stopped on water below, a 30 s stall or an error.
+
+## f27 arena (run 37931233053): pickaxe on every cast dig vs base
+- 11/12 each; **pick faster by 29 s per trial, 95% [7.6, 57.2]**, better on 9 of 12. Natural arms pending.
