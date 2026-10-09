@@ -168,3 +168,8 @@ compare.ts keyed rows by landing only, so the f10/f12 "nat + nat2" pools used 12
 
 ## f28, run 37938181172: champion (pickaxe everywhere) on landing set B, 12 at 2700 s
 - **5/12 = 42% [19%, 68%]** (B1 800 s, B2 758 s, B4 949 s, B6 877 s, B9 771 s). Set B before the pickaxe fix: f23 1/20 (both arms), f25 0/24. The jump generalises to terrain the fixes were never tuned on. The failures are deaths (6) and one 9/10 frame out of time.
+
+## f32 blaze (run 37945850662), f33 tunnel (run 37949941624), races c10–c12 (f24/f29/f30)
+- **f32: first steve blaze rod** — killBlazes rewrite 1/8 vs base 0/8; new arms survive the full 600 s budget (7 of 8), base dies at 34–265 s. Kept.
+- f33 falling-block-safe tunnel: pass 6/21 vs 8/24, best frame 7.19 vs 6.62 (P = 0.750), deaths 1.90 vs 2.00. Not separated; kept.
+- Races c10 3/20, c11 3/20, c12 1/20 into the Nether (server-confirmed). Race total c7–c12: 14/105 = 13% [8%, 21%]. Pooled c10–c12 funnel (55 bots): flint & steel 44, site anchor 34, obsidian ≥ 1 33, portal lit 5, Nether 6 — the race wall is the cast. Portal-step time by reason: cast stuck 225 min, lava not exposed 197, in water 188, died at verify 152, site too close 146, portal_start no progress 144, complete frame unlit 99, pickaxe worn out 42.
