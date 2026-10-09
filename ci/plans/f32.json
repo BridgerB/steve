@@ -1,0 +1,23 @@
+{
+	"label": "f32",
+	"workers": 20,
+	"experiments": [
+		{
+			"name": "blaze",
+			"slug": "blaze-rod",
+			"runs": 8,
+			"est_s": 700,
+			"bot": "Gym_blaze",
+			"per_server": 1,
+			"arms": [
+				{
+					"name": "new"
+				},
+				{
+					"name": "base",
+					"ref": "exp/blaze-base"
+				}
+			]
+		}
+	]
+}
