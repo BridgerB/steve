@@ -92,6 +92,7 @@ jobs:
         if: always()
         run: |
           bash scripts/ci/server.sh stop "$PWD/work" >/dev/null 2>&1 || true
+          [ -f data/gym/telemetry.sqlite ] && env/node/bin/node scripts/ci/checkpoint.ts data/gym/telemetry.sqlite || true
           [ -f data/gym/telemetry.sqlite ] && zstd -q -19 -f data/gym/telemetry.sqlite -o data/gym/telemetry.sqlite.zst || true
           rm -f data/gym/telemetry.sqlite data/gym/telemetry.sqlite-*
       - uses: actions/upload-artifact@v4

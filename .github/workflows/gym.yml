@@ -163,6 +163,7 @@ jobs:
         if: always()
         run: |
           mkdir -p data/gym
+          [ -f data/gym/telemetry.sqlite ] && env/node/bin/node scripts/ci/checkpoint.ts data/gym/telemetry.sqlite || true
           [ -f data/gym/telemetry.sqlite ] && zstd -q -19 -f data/gym/telemetry.sqlite -o data/gym/telemetry.sqlite.zst || true
           cp work/server.log "data/gym/server-$BATCH.log" 2>/dev/null || true
 
