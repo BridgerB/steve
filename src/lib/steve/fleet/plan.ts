@@ -38,8 +38,8 @@ const GymExp = z.object({
 	bot: z.string().regex(/^[A-Za-z0-9_]{1,16}$/).default("Gym_cast"),
 	env,
 	arms: z.array(Arm).min(1).default([{ name: "a", ref: "", env: {} }]),
-	/** Bots sharing one server at the same time (capacity test). */
-	per_server: z.number().int().min(1).max(12).default(1),
+	/** Bots sharing one server at the same time; absent = the plan default (capacity result). */
+	per_server: z.number().int().min(1).max(12).optional(),
 	/** Server heap in MB for this experiment's servers; absent = the script default. */
 	heap_mb: z.number().int().min(1024).max(14336).optional(),
 });
@@ -65,6 +65,15 @@ export const PlanSchema = z
 		max_worker_s: z.number().positive().max(21_000).default(19_800),
 		/** Seconds per unit for the world copy and server start/stop. */
 		overhead_s: z.number().min(0).default(30),
+		/** Defaults for experiments that do not set them (filled from ci/capacity.json by withCapacity). */
+		defaults: z
+			.object({
+				per_server: z.number().int().min(1).max(12).default(1),
+				heap_mb: z.number().int().min(1024).max(14336).optional(),
+				/** Natural trials run 4× longer than the arena the capacity test used; cap them separately. */
+				natural_per_server: z.number().int().min(1).max(12).optional(),
+			})
+			.default({ per_server: 1 }),
 		// A race needs kind "race"; anything else is a gym experiment.
 		experiments: z.array(z.union([RaceExp, GymExp])).min(1),
 	})
@@ -130,10 +139,10 @@ export const expandTrials = (plan: Plan): Trial[] =>
 				env: { ...e.env, ...arm.env },
 				est_s: e.est_s,
 				set: e.landing_set,
-				...(e.heap_mb ? { heap_mb: e.heap_mb } : {}),
+				...((e.heap_mb ?? plan.defaults.heap_mb) ? { heap_mb: e.heap_mb ?? plan.defaults.heap_mb } : {}),
 			};
 			if (e.kind === "race") return [{ ...base, id: base.batch, kind: "race", bots: e.bots, minutes: e.minutes }];
-			const k = e.per_server;
+			const k = e.per_server ?? (e.slug === "portal-natural" ? (plan.defaults.natural_per_server ?? plan.defaults.per_server) : plan.defaults.per_server);
 			return Array.from({ length: e.runs }, (_, i) => ({
 				...base,
 				id: `${base.batch}-${i + 1}`,
@@ -193,3 +202,11 @@ export const matrixFor = (s: Schedule) => ({
 		.map((units, k) => ({ worker: k + 1, units: units.length, trials: units.reduce((n, u) => n + u.trials.length, 0), load_s: s.load_s[k]! }))
 		.filter((w) => w.units > 0),
 });
+
+export type Capacity = { k: number; heap_mb?: number; natural_k?: number };
+
+/** Fill a raw plan's defaults from the measured capacity, unless the plan sets its own. */
+export const withCapacity = (raw: unknown, cap: Capacity | null): unknown => {
+	if (!cap || typeof raw !== "object" || raw === null || "defaults" in raw) return raw;
+	return { ...raw, defaults: { per_server: cap.k, ...(cap.heap_mb ? { heap_mb: cap.heap_mb } : {}), natural_per_server: cap.natural_k ?? Math.min(cap.k, 6) } };
+};

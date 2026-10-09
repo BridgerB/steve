@@ -92,3 +92,20 @@ describe("matrixFor", () => {
 		expect(JSON.stringify(m).length).toBeLessThan(4000);
 	});
 });
+
+describe("capacity defaults", () => {
+	const raw = { label: "d1", workers: 4, experiments: [{ name: "ar", slug: "build-nether-portal", lava_d: 6, runs: 12, est_s: 450 }, { name: "nat", slug: "portal-natural", runs: 12, est_s: 1900 }, { name: "x", slug: "build-nether-portal", lava_d: 6, runs: 2, est_s: 450, per_server: 1 }] };
+	it("fills bots per server and heap from the capacity result; natural is capped at 6", async () => {
+		const { withCapacity } = await import("./plan.ts");
+		const ts = expandTrials(parsePlan(withCapacity(raw, { k: 8, heap_mb: 6144 })));
+		const groups = (exp: string) => new Set(ts.filter((t) => t.exp === exp).map((t) => t.group)).size;
+		expect(groups("ar")).toBe(2); // 12 runs in groups of 8
+		expect(groups("nat")).toBe(2); // natural capped at 6 → 2 groups
+		expect(ts.find((t) => t.exp === "x")!.group).toBeUndefined(); // explicit per_server 1 wins
+		expect(ts.every((t) => t.heap_mb === 6144)).toBe(true);
+	});
+	it("without capacity, one bot per server", async () => {
+		const { withCapacity } = await import("./plan.ts");
+		expect(expandTrials(parsePlan(withCapacity(raw, null))).some((t) => t.group)).toBe(false);
+	});
+});

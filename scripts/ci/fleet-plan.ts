@@ -6,12 +6,12 @@
  *   node scripts/ci/fleet-plan.ts ci/plans/<plan>.json      # stdout: matrix=<json>
  *                                                           # stderr: the schedule
  */
-import { readFileSync } from "node:fs";
-import { matrixFor, parsePlan, schedule } from "../../src/lib/steve/fleet/plan.ts";
+import { loadPlan } from "../../src/lib/steve/fleet/load.ts";
+import { matrixFor, schedule } from "../../src/lib/steve/fleet/plan.ts";
 
 const file = process.argv[2];
 if (!file) throw new Error("usage: fleet-plan.ts <plan.json>");
-const plan = parsePlan(JSON.parse(readFileSync(file, "utf8")));
+const plan = loadPlan(file);
 const s = schedule(plan);
 const m = matrixFor(s);
 console.log(`matrix=${JSON.stringify(m)}`);

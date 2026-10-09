@@ -13,7 +13,8 @@ import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, cpSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { launchFor } from "../../src/lib/steve/fleet/launch.ts";
-import { assignmentFor, parsePlan, type Unit } from "../../src/lib/steve/fleet/plan.ts";
+import { loadPlan } from "../../src/lib/steve/fleet/load.ts";
+import { assignmentFor, type Unit } from "../../src/lib/steve/fleet/plan.ts";
 import { cpuPct, machinePct, parseCpuTotals, parseMemAvailableMb, parsePidStat, treeOf } from "../../src/lib/steve/fleet/procstat.ts";
 
 const ROOT = resolve(".");
@@ -22,7 +23,7 @@ const DATA = join(ROOT, "data");
 const WORK = join(ROOT, "work");
 process.env.GYM_SERVER = "runner";
 const worker = Number(process.env.WORKER);
-const plan = parsePlan(JSON.parse(readFileSync(process.env.PLAN ?? "", "utf8")));
+const plan = loadPlan(process.env.PLAN ?? "");
 const units = assignmentFor(plan, worker);
 mkdirSync(join(DATA, "fleet"), { recursive: true });
 mkdirSync(join(DATA, "gym"), { recursive: true });
