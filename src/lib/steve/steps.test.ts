@@ -39,4 +39,8 @@ describe("smelt fuel (cycle 7 f4 iron-deadlock gate arm)", () => {
 		const s = { ...(deadlock as object), inventory: { ...(deadlock as { inventory: object }).inventory, logs: 2 } } as never;
 		expect(step("gather_wood").isComplete(s)).toBe(true);
 	});
+	it("smelt_iron burns logs: f6 fuel arm held 5 logs, 0 planks and 0 coal for 600 s", () => {
+		const s = { ...(deadlock as object), inventory: { ...(deadlock as { inventory: object }).inventory, logs: 5 } } as never;
+		expect(step("smelt_iron").canExecute(s)).toBe(true);
+	});
 });
