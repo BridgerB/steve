@@ -352,6 +352,16 @@ const shuffleTo = async (bot: Bot, tx: number, tz: number, opts: { lavaSafe?: bo
 		const headN = getBlock(bot, vec3(px, Math.floor(p.y) + 1, pz))?.name;
 		const inWater =
 			(feetN ?? "").includes("water") || (headN ?? "").includes("water");
+		// Never step toward lava: the station stands sit beside the pool, and a straight walk
+		// can step off a ledge into it (f10 nat-lid-5 d4: died in the pool walking to a stand
+		// 2 below). Lava at the feet, the floor, or under an open floor ahead stops the walk.
+		if (opts.lavaSafe) {
+			const ahead = [0, -1, -2].map((dy) => getBlock(bot, vec3(fx, fy + dy, fz))?.name);
+			if (isLava(ahead[0]) || isLava(ahead[1]) || (!isSolid(ahead[1]) && isLava(ahead[2]))) {
+				logEvent("cast", "shuffle_lava_stop", `ahead ${fx},${fy},${fz} feet=${ahead[0]} floor=${ahead[1]} under=${ahead[2]}`, p);
+				break;
+			}
+		}
 		const stuck = dist > prevDist - 0.05;
 		prevDist = dist;
 		// A step up needs a jump, and a jump needs the cell over the head clear. Landing 11
