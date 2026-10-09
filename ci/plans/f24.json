@@ -1,0 +1,10 @@
+{
+	"label": "f24",
+	"workers": 20,
+	"experiments": [
+		{ "name": "c10a", "kind": "race", "bots": 5, "minutes": 240, "est_s": 15000 },
+		{ "name": "c10b", "kind": "race", "bots": 5, "minutes": 240, "est_s": 15000 },
+		{ "name": "c10c", "kind": "race", "bots": 5, "minutes": 240, "est_s": 15000 },
+		{ "name": "c10d", "kind": "race", "bots": 5, "minutes": 240, "est_s": 15000 }
+	]
+}
