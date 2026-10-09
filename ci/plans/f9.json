@@ -1,0 +1,17 @@
+{
+	"label": "f9",
+	"workers": 20,
+	"experiments": [
+		{
+			"name": "iron",
+			"slug": "iron-deadlock",
+			"runs": 12,
+			"est_s": 650,
+			"per_server": 1,
+			"arms": [
+				{ "name": "logfuel" },
+				{ "name": "base", "ref": "exp/logfuel-base" }
+			]
+		}
+	]
+}
