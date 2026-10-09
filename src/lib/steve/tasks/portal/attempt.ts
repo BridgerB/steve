@@ -70,7 +70,7 @@ export const castAttempt = async (
 	// Credit the drawn arms (cycle 5 decision 6: live on anchor_dy_max and stall_s; pinned
 	// params are never updated). Reward: the attempt placed obsidian or finished.
 	// Cycle 6 (decision 7): arena attempts (GYM_LAVA_D) never credit an arm.
-	if (!process.env.GYM_LAVA_D) {
+	if (!(Number(process.env.GYM_LAVA_D ?? 0) > 0)) {
 		try {
 			updateParams(params, g.success || snap.obsidian > 0);
 		} catch {}
