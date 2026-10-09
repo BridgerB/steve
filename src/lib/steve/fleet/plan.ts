@@ -59,8 +59,10 @@ const RaceExp = z.object({
 export const PlanSchema = z
 	.object({
 		label: name,
-		/** Workers to use, at most 20 (the account's concurrent-job limit). */
-		workers: z.number().int().min(1).max(20),
+		/** Workers to use: at most 15 (this repo's share of the account's 20 concurrent jobs since 2026-10-09). */
+		workers: z.number().int().min(1).max(15),
+		/** Concurrent workers for this fleet (fleet.yml max-parallel), at most 15; lower it while long jobs of an older run still hold runners. */
+		max_parallel: z.number().int().min(1).max(15).optional(),
 		/** A worker's planned seconds must fit a 6 h job with margin. */
 		max_worker_s: z.number().positive().max(21_000).default(19_800),
 		/** Seconds per unit for the world copy and server start/stop. */

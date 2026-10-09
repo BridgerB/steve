@@ -85,9 +85,9 @@ describe("schedule", () => {
 
 describe("matrixFor", () => {
 	it("carries no trial payload and stays tiny for the largest plan", () => {
-		const p = parsePlan({ label: "max", workers: 20, experiments: [{ name: "n", slug: "x", runs: 256, est_s: 400, arms: [{ name: "a" }, { name: "b" }, { name: "c" }] }] });
+		const p = parsePlan({ label: "max", workers: 15, experiments: [{ name: "n", slug: "x", runs: 192, est_s: 400, arms: [{ name: "a" }, { name: "b" }, { name: "c" }] }] });
 		const m = matrixFor(schedule(p));
-		expect(m.include).toHaveLength(20);
+		expect(m.include).toHaveLength(15);
 		expect(Object.keys(m.include[0]!)).toEqual(["worker", "units", "trials", "load_s"]);
 		expect(JSON.stringify(m).length).toBeLessThan(4000);
 	});

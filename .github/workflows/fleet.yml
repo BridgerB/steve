@@ -20,6 +20,14 @@ permissions:
   contents: read
   pull-requests: write
 
+# Runner budget: this repo may use at most 15 of the account's 20 concurrent jobs (5 belong to
+# another project, 2026-10-09). One fleet at a time (a new run waits for the running one; keep at
+# most one pending, GitHub replaces an older pending run) and at most 15 workers per fleet;
+# a plan's max_parallel lowers that when long jobs from older runs still hold runners.
+concurrency:
+  group: fleet
+  cancel-in-progress: false
+
 jobs:
   plan:
     runs-on: ubuntu-24.04
@@ -27,6 +35,7 @@ jobs:
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
       plan: ${{ steps.pick.outputs.plan }}
+      parallel: ${{ steps.par.outputs.parallel }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -52,6 +61,10 @@ jobs:
           echo "plan: $P"; cat "$P"
       - id: plan
         run: node scripts/ci/fleet-plan.ts "${{ steps.pick.outputs.plan }}" >> "$GITHUB_OUTPUT"
+      - id: par
+        run: |
+          N=$(node -e 'const p=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(Math.max(1,Math.min(15,Number(p.max_parallel??15))))' "${{ steps.pick.outputs.plan }}")
+          echo "parallel=$N" >> "$GITHUB_OUTPUT"; echo "max-parallel: $N"
 
   worker:
     needs: plan
@@ -59,7 +72,7 @@ jobs:
     timeout-minutes: 350
     strategy:
       fail-fast: false
-      max-parallel: 20
+      max-parallel: ${{ fromJSON(needs.plan.outputs.parallel) }}
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     name: worker ${{ matrix.worker }} (${{ matrix.trials }} trials, ${{ matrix.load_s }} s)
     steps:
