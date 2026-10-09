@@ -126,10 +126,14 @@ const inNether = (cmd: string) => `execute in minecraft:the_nether run ${cmd}`;
 // dry land from the server's view: feet not in water, standing on something solid. 120 s.
 // Measures the ledge-lift port fix (fa76014) and the lily-pad break (3e1f231).
 const WATER_BUDGET_MS = 120_000;
-const onDryLand = async (rcon: (cmd: string) => Promise<string>, name: string): Promise<boolean> =>
-	/passed/i.test(
-		await rcon(`execute as ${name} at @s unless block ~ ~ ~ minecraft:water unless block ~ ~-1 ~ minecraft:water unless block ~ ~-1 ~ minecraft:air unless block ~ ~-1 ~ minecraft:lava`).catch(() => ""),
-	);
+// Dry land from the server's view: on the ground, feet and head out of water. The block
+// under the bot's centre is not the test: on a bank edge the centre overhangs the water
+// while the hitbox stands on the lip (wfail-l1: "still in water" for a bot on the bank).
+const onDryLand = async (rcon: (cmd: string) => Promise<string>, name: string): Promise<boolean> => {
+	const dry = /passed/i.test(await rcon(`execute as ${name} at @s unless block ~ ~ ~ minecraft:water unless block ~ ~1 ~ minecraft:water unless block ~ ~ ~ minecraft:lava`).catch(() => ""));
+	if (!dry) return false;
+	return /entity data:\s*1b/.test(await rcon(`data get entity ${name} OnGround`).catch(() => ""));
+};
 let waterRcon: ((cmd: string) => Promise<string>) | null = null;
 
 export const GYM_STEPS: GymStep[] = [
@@ -145,9 +149,20 @@ export const GYM_STEPS: GymStep[] = [
 		run: async (b) => {
 			const { escapeWater } = await import("../lib/bot-utils.ts");
 			const t0 = Date.now();
-			await Promise.race([escapeWater(b).catch(() => false), new Promise((r) => setTimeout(r, WATER_BUDGET_MS))]);
-			const dry = waterRcon ? await onDryLand(waterRcon, b.username) : !b.entity?.isInWater;
-			return { success: dry, message: `${dry ? "on dry land" : "still in water"} after ${Math.round((Date.now() - t0) / 1000)} s` };
+			// The race re-dispatches escape_water (priority 0) every tick the bot is wet, so
+			// the slug calls escapeWater again until dry or the budget runs out.
+			const dryNow = async () => (waterRcon ? await onDryLand(waterRcon, b.username) : !b.entity?.isInWater);
+			let calls = 0;
+			let dry = false;
+			while (Date.now() - t0 < WATER_BUDGET_MS) {
+				calls++;
+				const left = WATER_BUDGET_MS - (Date.now() - t0);
+				await Promise.race([escapeWater(b).catch(() => false), new Promise((r) => setTimeout(r, left))]);
+				await new Promise((r) => setTimeout(r, 1000));
+				if ((dry = await dryNow())) break;
+			}
+			logEvent("water", "escape_calls", `${calls} call(s), dry=${dry}`, b.entity?.position);
+			return { success: dry, message: `${dry ? "on dry land" : "still in water"} after ${Math.round((Date.now() - t0) / 1000)} s, ${calls} escape call(s)` };
 		},
 		pass: (b) => !b.entity?.isInWater,
 		truthPass: (rcon, name) => onDryLand(rcon, name),
