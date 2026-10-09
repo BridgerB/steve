@@ -1,0 +1,108 @@
+{
+	"label": "f34",
+	"workers": 20,
+	"experiments": [
+		{
+			"name": "c13a",
+			"kind": "race",
+			"bots": 5,
+			"minutes": 240,
+			"est_s": 15000
+		},
+		{
+			"name": "c13b",
+			"kind": "race",
+			"bots": 5,
+			"minutes": 240,
+			"est_s": 15000
+		},
+		{
+			"name": "c13c",
+			"kind": "race",
+			"bots": 5,
+			"minutes": 240,
+			"est_s": 15000
+		},
+		{
+			"name": "c13d",
+			"kind": "race",
+			"bots": 5,
+			"minutes": 240,
+			"est_s": 15000
+		},
+		{
+			"name": "c13e",
+			"kind": "race",
+			"bots": 5,
+			"minutes": 240,
+			"est_s": 15000
+		},
+		{
+			"name": "c13f",
+			"kind": "race",
+			"bots": 5,
+			"minutes": 240,
+			"est_s": 15000
+		},
+		{
+			"name": "c13g",
+			"kind": "race",
+			"bots": 5,
+			"minutes": 240,
+			"est_s": 15000
+		},
+		{
+			"name": "c13h",
+			"kind": "race",
+			"bots": 5,
+			"minutes": 240,
+			"est_s": 15000
+		},
+		{
+			"name": "nata",
+			"slug": "portal-natural",
+			"runs": 12,
+			"est_s": 2800,
+			"env": {
+				"GYM_TOTAL_S": "2700"
+			}
+		},
+		{
+			"name": "nata2",
+			"slug": "portal-natural",
+			"runs": 12,
+			"est_s": 2800,
+			"env": {
+				"GYM_TOTAL_S": "2700"
+			}
+		},
+		{
+			"name": "natb",
+			"slug": "portal-natural",
+			"landing_set": "B",
+			"runs": 12,
+			"est_s": 2800,
+			"env": {
+				"GYM_TOTAL_S": "2700"
+			}
+		},
+		{
+			"name": "natb2",
+			"slug": "portal-natural",
+			"landing_set": "B",
+			"runs": 12,
+			"est_s": 2800,
+			"env": {
+				"GYM_TOTAL_S": "2700"
+			}
+		},
+		{
+			"name": "blaze",
+			"slug": "blaze-rod",
+			"runs": 4,
+			"est_s": 700,
+			"bot": "Gym_blaze",
+			"per_server": 1
+		}
+	]
+}
