@@ -81,3 +81,12 @@ compare.ts keyed rows by landing only, so the f10/f12 "nat + nat2" pools used 12
 - natural (23 pairs): 0/23 vs 1/24 (base nat2-5, landing 5, 1518 s); best frame 3.35 vs 3.30, P = 0.528; deaths 1.35 vs 1.96 (better on 16, worse on 6; P = 0.912); **lava deaths 0.57 vs 1.13, P(better) = 0.986**, 95% [0.04, 1.09]. Kept. Caveat: the f4 noise floor produced a lava-death P of 0.015 between identical trees, so this is at the edge of that floor; the direction matches the mechanism read in f10.
 - arena: 9/12 vs 10/12, P = 0.283, not separated.
 - Headroom decision (deferred from f12): with the guard, deaths 1.35 sit below f12's no-headroom base (1.82): headroom stays.
+
+## f14, run 37905541655, refill walkway vs base, 2 replicates
+- natural (24 pairs): 0/24 vs 0/24; best frame 2.88 vs 2.42, P = 0.774; deaths 2.13 vs 1.75, P = 0.169; refill walks arrived 45% vs 37%. Kept (not separated). The walkway itself arrived 4 of 51: nearly every failure never left the start cell, which sat one block above the path; the walk sneaked, and sneaking refuses a ledge. Fix ffefa95 (sneak only on level steps), f16.
+- arena: 10/12 each; the walkway never fired in the arena.
+
+## f15, run 37907607494, descend lava guard vs base, 2 replicates
+- natural (24 pairs): 0/24 vs 1/24 (base nat-5, landing 5, 653 s); **best frame 3.92 vs 3.25, P = 0.803** (highest natural mean this cycle); deaths 1.79 vs 2.21, P = 0.821; lava deaths equal. Kept.
+- arena: 11/12 vs 11/12.
+- Landing 5 has now entered the Nether 6 times across f1–f15, and no other landing ever has: the others fail upstream (anchor, find_lava, refill).
