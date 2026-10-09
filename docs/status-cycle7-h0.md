@@ -28,3 +28,11 @@ Not measured yet (Phase 2).
 1. f1 (running): noise floor + pathfinder arm, craft fix vs base, arena, dragon, race c7.
 2. f2 (queued): arena challenge, per-cell top-up (1b61d5c) against a390916.
 3. Capacity test (Bridger, 2026-10-09): each runner has 4 vCPU / 16 GB; find the per-runner optimum before scaling screens. Grid: concurrent bots per server K ∈ {1, 2, 3, 4, 6} × server heap ∈ {4, 6, 10} GB, each bot on its own landing of set A, arena slug (short, deterministic). Measure per run: tick mean/p99 and max (tick query every 30 s), CPU and RSS of the server and each bot process (ps every 10 s), bot physics-tick jitter, pass rate and time-to-pass against K=1. Pick the largest K whose max tick stays under 30 ms and whose pass rate and time are not worse (paired against K=1). Needs: gym-batch lock and data paths per slot, fleet-worker running K trials concurrently on one server.
+
+## Flint and steel in race c5 (plan item 2, read from the box's c5 attempts and telemetry)
+All three bots hit the same "no executable step" deadlock after filling water: 808 52,768 events (14:00–14:44, to the end), 809 116,304 (13:07–14:44, to the end), 810 701 (13:23–13:37, recovered; flint and steel at 31 min). "2 of 3 never got flint" is this deadlock, not a flint mechanism: ~2.6 bot-hours of a 6 bot-hour race. The smelt gate (d27933a) does not fully cure it: a local iron-deadlock trial on the gated tree deadlocked (5,509 events in 5 min), another passed in 58 s. Deadlock events now carry the blocking state (550d2ae); f4 runs 12 paired (gate vs exp/smelt-base).
+
+## Fixed this hour
+- 26.x attack packet (f99fd3f): bot.attack sent an undecodable interact and the server kicked the bot on its first swing.
+- Bandit live on runners (f683719): workers drew pinned defaults; ci/params.json now seeds them with anchor_dy_max, stall_s, buckets live.
+- RCON rotated on Server A; no default password in code (1400a21).
