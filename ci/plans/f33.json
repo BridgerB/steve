@@ -1,0 +1,42 @@
+{
+	"label": "f33",
+	"workers": 20,
+	"experiments": [
+		{
+			"name": "nat",
+			"slug": "portal-natural",
+			"runs": 12,
+			"est_s": 2800,
+			"env": {
+				"GYM_TOTAL_S": "2700"
+			},
+			"arms": [
+				{
+					"name": "tunnel"
+				},
+				{
+					"name": "base",
+					"ref": "exp/tunnel-base"
+				}
+			]
+		},
+		{
+			"name": "nat2",
+			"slug": "portal-natural",
+			"runs": 12,
+			"est_s": 2800,
+			"env": {
+				"GYM_TOTAL_S": "2700"
+			},
+			"arms": [
+				{
+					"name": "tunnel"
+				},
+				{
+					"name": "base",
+					"ref": "exp/tunnel-base"
+				}
+			]
+		}
+	]
+}
