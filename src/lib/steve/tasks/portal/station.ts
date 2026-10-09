@@ -255,6 +255,31 @@ export const stationRefill = async (
 		if (!atStand(bot, S)) {
 			const p = bot.entity.position;
 			logEvent("cast", "station_walk_fail", `stand ${key(S)} bot ${p.x.toFixed(1)},${p.y.toFixed(1)},${p.z.toFixed(1)}`, p);
+			// Diagnostic (cycle 7): the blocks between the bot and the stand, layer by layer, so a
+			// failed walk can be read instead of guessed. One char per cell: . air, # solid,
+			// L lava, W water, O obsidian, B bot, S stand.
+			{
+				const bx = Math.floor(p.x);
+				const by = Math.floor(p.y);
+				const bz = Math.floor(p.z);
+				const [x0, x1] = [Math.min(bx, S.x) - 1, Math.max(bx, S.x) + 1];
+				const [z0, z1] = [Math.min(bz, S.z) - 1, Math.max(bz, S.z) + 1];
+				const layers: string[] = [];
+				for (let y = Math.max(by, S.y) + 2; y >= Math.min(by, S.y) - 2; y--) {
+					const rows: string[] = [];
+					for (let z = z0; z <= z1; z++) {
+						let row = "";
+						for (let x = x0; x <= x1; x++) {
+							const n = deps.name(vec3(x, y, z)) ?? "?";
+							row +=
+								x === bx && y === by && z === bz ? "B" : x === S.x && y === S.y && z === S.z ? "S" : deps.isLava(n) ? "L" : n.includes("water") ? "W" : n === "obsidian" ? "O" : deps.isSolid(n) ? "#" : ".";
+						}
+						rows.push(row);
+					}
+					layers.push(`y${y}:${rows.join("/")}`);
+				}
+				logEvent("cast", "walk_grid", `x${x0}..${x1} z${z0}..${z1} ${layers.join(" ")}`, p);
+			}
 			excluded.push(S);
 			continue;
 		}
