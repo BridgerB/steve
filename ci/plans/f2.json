@@ -3,6 +3,6 @@
 	"workers": 12,
 	"experiments": [
 		{ "name": "arena", "slug": "build-nether-portal", "lava_d": 6, "runs": 12, "est_s": 420,
-			"arms": [ { "name": "base", "ref": "a390916" }, { "name": "topup" } ] }
+			"arms": [ { "name": "base", "ref": "a390916737529fb21f41daaf2f72c58d85874ab5" }, { "name": "topup" } ] }
 	]
 }
