@@ -16,7 +16,7 @@ export const connect = (
 			process.env.MC_RCON_HOST ??
 			process.env.MC_HOST ??
 			"localhost",
-		port: options.port ?? 25575,
-		password: options.password ?? "minecraft-test-rcon",
+		port: options.port ?? parseInt(process.env.MC_RCON_PORT ?? "25575", 10),
+		password: options.password ?? process.env.MC_RCON_PASS ?? "minecraft-test-rcon",
 		...options,
 	});

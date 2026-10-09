@@ -38,3 +38,6 @@ test-results
 worker-configuration.d.ts
 # Viewer textures copied from the (gitignored) typecraft data dir (`npm run sync-textures`)
 /static/textures/
+# Local gym server (local-server.sh): jar and worlds
+/data/local-server/
+/data/local-world*/

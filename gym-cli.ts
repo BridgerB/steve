@@ -7,6 +7,7 @@
 import { createBot } from "typecraft";
 import { GYM_BY_SLUG } from "./src/lib/steve/gym/registry.ts";
 import { runGymStep } from "./src/lib/steve/gym/run.ts";
+import { applyServerProfile } from "./src/lib/steve/gym/server-profile.ts";
 import { registerBlockMemory } from "./src/lib/steve/lib/bot-utils.ts";
 import { attachDiagnostics, initLogger, logEvent, stopLogger } from "./src/lib/steve/lib/logger.ts";
 import { connect } from "./src/lib/steve/lib/rcon.ts";
@@ -19,6 +20,8 @@ if (!step) {
 }
 const BOT = (process.env.BOT ?? `Gym_${SLUG}`).replace(/[^A-Za-z0-9_]/g, "").slice(0, 16);
 
+// Cycle 6: server profile (GYM_SERVER); gym-batch already applied it, a direct run applies it here.
+applyServerProfile();
 // spreadplayers onto ungenerated terrain can take well over the 5 s default.
 const rcon = await connect({ timeout: 30_000 });
 const bot = createBot({

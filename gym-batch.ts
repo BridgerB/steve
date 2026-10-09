@@ -12,13 +12,26 @@
  */
 import { spawn, execSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { freemem } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { connect } from "./src/lib/steve/lib/rcon.ts";
 import { runMetrics, type TelemetryEvent } from "./src/lib/steve/ml/screen.ts";
 import { fmtRate, quantile } from "./src/lib/steve/ml/stats.ts";
 import { writeAttempt } from "./src/lib/steve/lib/attempts.ts";
 
+import { applyServerProfile, headerError } from "./src/lib/steve/gym/server-profile.ts";
+
 const SLUG = process.env.STEP ?? "build-nether-portal";
+// Cycle 6: the server profile (GYM_SERVER, default box-a) and the header assertion run
+// before anything touches a server.
+const SERVER = applyServerProfile();
+{
+	const err = headerError(SLUG, process.env.GYM_LAVA_D);
+	if (err) {
+		console.log(`REFUSED: ${err}`);
+		process.exit(4);
+	}
+}
 const RUNS = parseInt(process.env.RUNS ?? "10", 10);
 const BATCH = process.env.BATCH ?? `b${Date.now().toString(36)}`;
 // Mobs stay ON for every batch: it is the race's condition, and a RUNS=0 smoke test
@@ -83,7 +96,7 @@ const rcon = await connect({ timeout: 30_000 });
 // batch before this fix ran with mobs ON regardless of MOBS.
 const mobReply = await rcon.command(`gamerule spawn_mobs ${MOBS === "on" ? "true" : "false"}`);
 if (/Incorrect/i.test(mobReply)) console.log(`WARN gamerule: ${mobReply}`);
-console.log(`batch ${BATCH} slug=${SLUG} runs=${RUNS} commit=${commit} mobs=${MOBS}`);
+console.log(`batch ${BATCH} slug=${SLUG} runs=${RUNS} commit=${commit} mobs=${MOBS} server=${SERVER} GYM_LAVA_D=${process.env.GYM_LAVA_D ?? "-"} landings=${process.env.GYM_LANDINGS ?? "-"}`);
 // A killed batch never reaches the per-run release below, so its landing stays
 // forceloaded; this runner owns server A's forceloads — clear leftovers up front.
 console.log(`startup ${await rcon.command("forceload remove all").catch(() => "forceload remove failed")}`);
@@ -93,7 +106,8 @@ const memAvailMb = (): number | null => {
 		const m = /MemAvailable:\s+(\d+) kB/.exec(readFileSync("/proc/meminfo", "utf8"));
 		return m ? Math.round(parseInt(m[1]!, 10) / 1024) : null;
 	} catch {
-		return null;
+		// macOS (local gym server): no /proc; free memory is the closest number.
+		return Math.round(freemem() / 1048576);
 	}
 };
 /** Server health before a run; null when RCON does not answer. */
