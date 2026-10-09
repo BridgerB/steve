@@ -95,6 +95,11 @@ const craftStaleTable = async (b: Bot): Promise<StepResult> => {
 		await new Promise((r) => setTimeout(r, 2000));
 		logEvent("gym", "craft_stale", `respawned, window=${b.currentWindow?.id ?? "none"}`);
 	}
+	// Race c5 808: a preempted plank craft still clicking while the next one started minted an
+	// oak_button, and the grid desync behind it failed every stick craft for 19 minutes. Two
+	// plank crafts at once, then sticks.
+	const both = await Promise.all([craftPlanks(b), craftPlanks(b)]);
+	logEvent("gym", "craft_stale", `overlapping plank crafts: ${both.map((r) => r.message).join(" | ")}`);
 	return craftSticks(b);
 };
 
@@ -103,7 +108,8 @@ export const GYM_STEPS: GymStep[] = [
 		slug: "craft-stale-table",
 		label: "Craft sticks after an open table and a death",
 		order: 4.5,
-		prereq: ["oak_planks 16", "crafting_table 1"],
+		// Logs, not planks: the sticks depend on planks surviving two overlapping crafts.
+		prereq: ["oak_log 6", "crafting_table 1"],
 		setup: async (_b, rcon) => {
 			craftRcon = rcon;
 		},
