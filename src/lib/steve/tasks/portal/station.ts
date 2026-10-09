@@ -125,18 +125,10 @@ const walkway = async (bot: Bot, deps: StationDeps, S: Vec3): Promise<boolean> =
 				if (deps.isLava(deps.name(s)) && (await deps.placeCobble(s))) placed++;
 			}
 		if (deps.isLava(deps.name(floor)) || deps.isLava(deps.name(c)) || deps.isSolid(deps.name(c))) break;
-		// Sneak only on a level step: sneaking refuses to step off a ledge, and the walkway
-		// often starts one block above its level (f14: 47 of 51 walkways never left the start
-		// cell, starts at y+1 over the path). The cell was just floored and lava-capped.
-		const level = Math.floor(bot.entity.position.y) <= c.y;
-		bot.setControlState("sneak", level);
+		bot.setControlState("sneak", true);
 		await walkToXZ(bot, c.x + 0.5, c.z + 0.5, { targetDist: 0.3, maxTime: 2500 }).catch(() => {});
 		bot.setControlState("sneak", false);
-		if (Math.floor(bot.entity.position.x) !== c.x || Math.floor(bot.entity.position.z) !== c.z) {
-			const q = bot.entity.position;
-			logEvent("cast", "walkway_stuck", `at ${q.x.toFixed(1)},${q.y.toFixed(1)},${q.z.toFixed(1)} for ${key(c)} feet=${deps.name(c)} head=${deps.name(vec3(c.x, c.y + 1, c.z))} floor=${deps.name(vec3(c.x, c.y - 1, c.z))}`, q);
-			break;
-		}
+		if (Math.floor(bot.entity.position.x) !== c.x || Math.floor(bot.entity.position.z) !== c.z) break;
 	}
 	const ok = atStand(bot, S);
 	logEvent("cast", "walkway", `to ${key(S)} cells ${path.length} placed ${placed} dug ${dug} arrived=${ok}`, bot.entity.position);
