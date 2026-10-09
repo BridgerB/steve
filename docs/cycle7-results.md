@@ -89,4 +89,4 @@ compare.ts keyed rows by landing only, so the f10/f12 "nat + nat2" pools used 12
 ## f15, run 37907607494, descend lava guard vs base, 2 replicates
 - natural (24 pairs): 0/24 vs 1/24 (base nat-5, landing 5, 653 s); **best frame 3.92 vs 3.25, P = 0.803** (highest natural mean this cycle); deaths 1.79 vs 2.21, P = 0.821; lava deaths equal. Kept.
 - arena: 11/12 vs 11/12.
-- Landing 5 has now entered the Nether 6 times across f1–f15, and no other landing ever has: the others fail upstream (anchor, find_lava, refill).
+- Landing 5 has entered the Nether 5 times (f1, f5, f7, f13, f15), and no other landing ever has: the others fail upstream (anchor, find_lava, refill).
