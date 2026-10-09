@@ -14,8 +14,14 @@ f1-nat-b-5, landing 5 of set A: own frame at 18551,63,20685, 10 obsidian cast 04
 - Decision: keep (faithful port of vanilla physics, not worse). Set W is mostly flush banks (8 of 11 locally), which the old physics also escapes.
 - Open: 2 landings (20734,20094 and 18784,24640) fail in both arms with "still in water" after 8–15 s: escapeWater gives up long before its 120 s budget.
 
-## Iron deadlock (race c5 809's inventory), f4 run 37890750601
-Baseline (exp/smelt-base, smelt gate reverted) reproduces the deadlock exactly: ore=1 ingots=0 buckets=2/1w, furnace and table present, mine_iron complete, smelt_iron waiting for 3 ore, flint and steel needing an ingot (11,903 deadlock events in 600 s). Paired result: see the f4 section when complete.
+## f4 gym, run 37890750601 (report: data/runs/37890750601/report.md), landing set A, 12 paired unless noted
+- **Noise floor (nat a vs nat b, identical tree):** both 0/12 [0%, 24%]; best frame 3.42 vs 2.42 obsidian, P = 0.163; lava deaths P = 0.015 (so a "significant" lava-death difference between two identical trees happens — lava deaths need a bigger margin than P ≥ 0.95 alone); seconds P = 0.997 (tree-vs-tree time is dominated by landing luck, not code). Decision: a natural challenger must beat the noise floor on best frame, not on time.
+- **pf (TYPECRAFT_PF_SEARCH_BUDGET=1):** 0/12, best frame 1.58 vs 3.42, P(better) = 0.008. Rejected; dropped from default plans.
+- **craft (craft-stale-table, overlapping crafts):** fix 12/12 = 100% [76%, 100%] vs base 9/12 = 75% [47%, 91%], P(base better) = 0.016. Promoted (b962291 stays).
+- **arena top-up (1b61d5c):** 9/12 = 75% [47%, 91%] vs base 10/12 = 83% [55%, 95%], P(base better) = 0.821, not separated. Kept per the not-worse rule. The 5 failures all stopped at 9/10 obsidian: 2 stuck on the same mold cell in both arms (19296,88,21857 and 19360,68,21281: landing-specific), 1 death at verify, 2 move_vetoed mold stances (footing air / not arrived). Lintel shortfall no longer appears.
+- **iron deadlock (race c5 809's inventory, 600 s step machine):** gate 2/12 [5%, 46%] vs base 0/12 [0%, 24%]. Base reproduces the deadlock exactly (ore=1 ingots=0, smelt waiting for 3 ore, flint needing an ingot; 11,903 deadlock events). The gate arm's failures exposed a second deadlock: no fuel at smelt time (coal 0, planks 0, logs 0, gather_wood complete). Fix 9d145cf (needsSmeltFuel reopens gather_wood); measured in f6.
+- **dragon (3 runs):** 0/3. See below.
+- **blaze (10 runs, baseline):** 0/10 [0%, 28%]. See below.
 
 ## Dragon kit (decision 3, 762f638), f4
 The kit order works: in every trial the server confirmed the bot in the End with 6 beds (cycle 5: 0 beds server-side, 0/6). The fight itself: death by an enderman 1 s after start, death by dragon's breath at 39 s; after a death the attempt continued in the overworld (should end).
