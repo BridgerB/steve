@@ -1,0 +1,17 @@
+{
+	"label": "f11",
+	"workers": 20,
+	"experiments": [
+		{ "name": "c8a", "kind": "race", "bots": 5, "minutes": 240, "est_s": 15000 },
+		{ "name": "c8b", "kind": "race", "bots": 5, "minutes": 240, "est_s": 15000 },
+		{ "name": "c8c", "kind": "race", "bots": 5, "minutes": 240, "est_s": 15000 },
+		{ "name": "c8d", "kind": "race", "bots": 5, "minutes": 240, "est_s": 15000 },
+		{
+			"name": "nat",
+			"slug": "portal-natural",
+			"runs": 12,
+			"est_s": 1900,
+			"env": { "GYM_TOTAL_S": "1800" }
+		}
+	]
+}
