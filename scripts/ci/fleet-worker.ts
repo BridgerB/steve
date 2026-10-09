@@ -10,10 +10,11 @@
  * data/fleet/trials.jsonl. Load samples of a shared unit: data/fleet/<unit>.metrics.jsonl.
  */
 import { spawn, spawnSync } from "node:child_process";
-import { appendFileSync, cpSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { launchFor } from "../../src/lib/steve/fleet/launch.ts";
 import { assignmentFor, parsePlan, type Unit } from "../../src/lib/steve/fleet/plan.ts";
+import { cpuPct, machinePct, parseCpuTotals, parseMemAvailableMb, parsePidStat, treeOf } from "../../src/lib/steve/fleet/procstat.ts";
 
 const ROOT = resolve(".");
 const ENV = join(ROOT, "env");
@@ -78,24 +79,57 @@ const runUnit = async (unit: Unit): Promise<void> => {
 	run(process.execPath, ["--import", "./typecraft-resolve.mjs", "scripts/rcon.ts", "gamerule keep_inventory true", "gamerule spawn_mobs true", "tick rate 20"]);
 	const shared = unit.trials.length;
 	const serverPid = readFileSync(join(WORK, "server.pid"), "utf8").trim();
-	const pids: number[] = [];
+	// Load sampler (every unit; one bot per server is the capacity test's baseline): every 10 s
+	// machine CPU and available memory, CPU and RSS of the server and of each trial's whole
+	// process tree, from /proc deltas; server tick mean/p99 every 30 s.
+	const roots = new Map<string, number>(); // trial id → gym-batch / race pid
+	const metricsFile = join(DATA, "fleet", `${unit.id}.metrics.jsonl`);
+	const readProc = () => {
+		const ppid = new Map<number, number>();
+		const st = new Map<number, { jiffies: number; rssPages: number }>();
+		for (const d of readdirSync("/proc")) {
+			if (!/^\d+$/.test(d)) continue;
+			try {
+				const p = parsePidStat(readFileSync(`/proc/${d}/stat`, "utf8"));
+				if (p) {
+					ppid.set(p.pid, p.ppid);
+					st.set(p.pid, p);
+				}
+			} catch {}
+		}
+		return { ppid, st, cpu: parseCpuTotals(readFileSync("/proc/stat", "utf8")), mem: parseMemAvailableMb(readFileSync("/proc/meminfo", "utf8")), at: Date.now() };
+	};
+	const linux = existsSync("/proc/stat");
+	let prev = linux ? readProc() : null;
 	let n = 0;
-	const sampler =
-		shared > 1
-			? setInterval(async () => {
-					const row: Record<string, unknown> = { t: Math.round((Date.now() - t0) / 1000) };
-					row.ps = spawnSync("ps", ["-o", "pid=,pcpu=,rss=", "-p", [serverPid, ...pids].join(",")], { encoding: "utf8" })
-						.stdout.trim()
-						.split("\n")
-						.map((l) => l.trim().split(/\s+/).map(Number));
-					if (n++ % 3 === 0) {
-						const q = await rconAsync("tick query");
-						row.tick_mean = Number(/Average time per tick: ([\d.]+)ms/.exec(q)?.[1] ?? Number.NaN);
-						row.tick_p99 = Number(/P99: ([\d.]+)ms/.exec(q)?.[1] ?? Number.NaN);
-					}
-					appendFileSync(join(DATA, "fleet", `${unit.id}.metrics.jsonl`), `${JSON.stringify(row)}\n`);
-				}, 10_000)
-			: null;
+	const tree = (root: number, snap: NonNullable<typeof prev>) => {
+		const pids = treeOf(root, snap.ppid);
+		return { jiffies: pids.reduce((a, p) => a + (snap.st.get(p)?.jiffies ?? 0), 0), rssMb: Math.round(pids.reduce((a, p) => a + (snap.st.get(p)?.rssPages ?? 0), 0) * 4 / 1024) };
+	};
+	const sampler = setInterval(async () => {
+		const row: Record<string, unknown> = { t: Math.round((Date.now() - t0) / 1000), bots: unit.trials.length, heap_mb: first.heap_mb ?? null };
+		if (linux && prev) {
+			const cur = readProc();
+			const dt = (cur.at - prev.at) / 1000;
+			row.machine_cpu = machinePct(prev.cpu, cur.cpu);
+			row.mem_avail_mb = cur.mem;
+			const s0 = tree(Number(serverPid), prev);
+			const s1 = tree(Number(serverPid), cur);
+			row.server = { cpu: cpuPct(s0.jiffies, s1.jiffies, dt), rss_mb: s1.rssMb };
+			row.trials = [...roots].map(([id, pid]) => {
+				const a0 = tree(pid, prev!);
+				const a1 = tree(pid, cur);
+				return { id, cpu: cpuPct(a0.jiffies, a1.jiffies, dt), rss_mb: a1.rssMb };
+			});
+			prev = cur;
+		}
+		if (n++ % 3 === 0) {
+			const q = await rconAsync("tick query");
+			row.tick_mean = Number(/Average time per tick: ([\d.]+)ms/.exec(q)?.[1] ?? Number.NaN);
+			row.tick_p99 = Number(/P99: ([\d.]+)ms/.exec(q)?.[1] ?? Number.NaN);
+		}
+		appendFileSync(metricsFile, `${JSON.stringify(row)}\n`);
+	}, 10_000);
 	const ctx = {
 		root: ROOT,
 		dirForRef,
@@ -117,7 +151,7 @@ const runUnit = async (unit: Unit): Promise<void> => {
 			const ts = Date.now();
 			const exit = await new Promise<number | string>((done) => {
 				const p = spawn(process.execPath, l.argv, { cwd: l.cwd, env, stdio: ["ignore", out, out] });
-				if (p.pid) pids.push(p.pid);
+				if (p.pid) roots.set(t.id, p.pid);
 				const kill = setTimeout(() => p.kill("SIGKILL"), l.limitMs);
 				p.on("exit", (c, sig) => {
 					clearTimeout(kill);
@@ -127,7 +161,7 @@ const runUnit = async (unit: Unit): Promise<void> => {
 			return { t, exit, wall_s: Math.round((Date.now() - ts) / 1000) };
 		}),
 	);
-	if (sampler) clearInterval(sampler);
+	clearInterval(sampler);
 	serverStop();
 	cpSync(join(WORK, "server.log"), join(DATA, "fleet", `${unit.id}.server.log`));
 	for (const { t, exit, wall_s } of results) {
