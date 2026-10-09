@@ -1203,17 +1203,6 @@ export const castObsidianAt = async (
 			targetDist: 0.15,
 			maxTime: 2500,
 		});
-		// A lid over the cup: the previous block's water bowl walls include the cell above
-		// this cup (f7/f5/f4 landing 8, every arm: aim_fail "got" the bot's own cell ×3 →
-		// block_fail at 20030,38,21334, the ray stopping on 20030,39,21334). Dig it open.
-		{
-			const lid = vec3(pos.x, pos.y + 1, pos.z);
-			const n = getBlock(bot, lid)?.name;
-			if (isSolid(n) && n !== "obsidian" && !touchesLava(bot, lid)) {
-				await digAt(bot, lid);
-				logEvent("cast", "cup_lid_cleared", `${lid.x},${lid.y},${lid.z} was ${n} now ${getBlock(bot, lid)?.name}`, bot.entity.position);
-			}
-		}
 		const bp = bot.entity.position;
 		setPhase(`lava ${pos.x},${pos.y},${pos.z}`);
 		logEvent(
