@@ -19,7 +19,8 @@ on:
       landing_set:
         default: A
       shard_size:
-        default: "6"
+        description: Runs per job (1 = every run its own runner, fastest)
+        default: "1"
       bots:
         description: Concurrent bots per job (1 for cast gyms)
         default: "1"
@@ -66,7 +67,7 @@ jobs:
           node-version: "24"
       - id: plan
         env:
-          SHARD_SIZE: ${{ inputs.shard_size || '6' }}
+          SHARD_SIZE: ${{ inputs.shard_size || '1' }}
           ARMS: ${{ inputs.arms }}
           REF: ${{ github.sha }}
         run: node scripts/ci/plan.ts >> "$GITHUB_OUTPUT"
@@ -77,7 +78,7 @@ jobs:
     timeout-minutes: 350
     strategy:
       fail-fast: false
-      max-parallel: 10
+      max-parallel: 20
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     name: ${{ matrix.batch }}
     env:
