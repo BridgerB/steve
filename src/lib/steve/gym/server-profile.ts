@@ -7,6 +7,9 @@
  * The profile overwrites MC_HOST / MC_PORT / MC_RCON_HOST / MC_RCON_PORT in process.env, so
  * the gym-cli children inherit it (node --env-file never overrides a variable already set).
  */
+import { existsSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 const PROFILES: Record<string, { host: string; port: number; rconPort: number } | null> = {
 	"box-a": null,
 	"local-1": { host: "127.0.0.1", port: 25569, rconPort: 25579 },
@@ -25,6 +28,14 @@ export const applyServerProfile = (): string => {
 		process.env.MC_RCON_PORT = String(p.rconPort);
 	}
 	if (name === "runner" && process.env.RUNNER_RCON_PASS) process.env.MC_RCON_PASS = process.env.RUNNER_RCON_PASS;
+	// A local server's password is the one local-server.sh generated (data/local-server/rcon-<n>.pass),
+	// never the box password from .env.
+	const local = /^local-(\d)$/.exec(name);
+	if (local) {
+		const file = new URL(`../../../../data/local-server/rcon-${local[1]}.pass`, import.meta.url);
+		if (!existsSync(file)) throw new Error(`${fileURLToPath(file)} missing: start the server with ./local-server.sh ${local[1]}`);
+		process.env.MC_RCON_PASS = readFileSync(file, "utf8").trim();
+	}
 	process.env.GYM_SERVER = name;
 	return `${name} (${process.env.MC_HOST ?? "localhost"}:${process.env.MC_PORT ?? "25565"}, rcon ${process.env.MC_RCON_PORT ?? "25575"})`;
 };

@@ -17,7 +17,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { chromium } from "playwright";
 import { createRcon } from "typecraft";
 
-const RCON_PASS = "minecraft-test-rcon";
+const RCON_PASS = process.env.MC_RCON_PASS ?? "";
 const VIEWER_URL = "http://localhost:3001";
 const TEST_POS = { x: 0, y: 0, z: 0 };
 const SECTION_KEY = "0,0,0";

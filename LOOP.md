@@ -221,7 +221,7 @@ PHASE 2 DIAGNOSE, then PHASE 3 sniff-debug the craft/clickWindow wall (wall #2),
 ## Env / operational quick-ref
 
 - MC game DIRECT `144.24.32.76:25565` (bots connect direct; `.env` MC_HOST/PORT). RCON via
-  SSH tunnel `127.0.0.1:25575` → box 25575, pass `minecraft-test-rcon`
+  SSH tunnel `127.0.0.1:25575` → box 25575, pass from `MC_RCON_PASS` in `.env`
   (`ssh -fN -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -L 25575:127.0.0.1:25575 bridger@144.24.32.76`).
 - Postgres telemetry `steve-db-1` (Docker, port 4623): `ticks`, `events`, `inventory_snapshots`.
   `ts` is TEXT — cast `ts::timestamptz`. inventory_snapshots is per-slot (item_name,count).

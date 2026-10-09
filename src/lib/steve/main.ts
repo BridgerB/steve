@@ -366,7 +366,7 @@ const runRace = async (count: number, timeoutMs: number) => {
 	console.log(`  Kit buckets: ${names.map((n, i) => `${n}=${kits[i]}`).join(", ")}`);
 	const SERVER_PORT = parseInt(process.env.MC_PORT ?? "25565", 10);
 	const RCON_PORT = parseInt(process.env.MC_RCON_PORT ?? "25575", 10);
-	const RCON_PASS = process.env.MC_RCON_PASS ?? "minecraft-test-rcon";
+	const RCON_PASS = (await import("./lib/rcon.ts")).rconPassword();
 
 	const RACE_ID = new Date().toISOString().replace(/:/g, "-");
 

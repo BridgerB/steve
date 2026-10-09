@@ -4,6 +4,13 @@
 
 import { createRcon, type RconOptions } from "typecraft";
 
+/** The RCON password from MC_RCON_PASS. No fallback: a known default was public for months. */
+export const rconPassword = (): string => {
+	const p = process.env.MC_RCON_PASS;
+	if (!p) throw new Error("MC_RCON_PASS is not set (put it in .env; local servers write theirs to data/local-server/rcon-<n>.pass)");
+	return p;
+};
+
 export const connect = (
 	options: RconOptions = {},
 ): ReturnType<typeof createRcon> =>
@@ -17,6 +24,6 @@ export const connect = (
 			process.env.MC_HOST ??
 			"localhost",
 		port: options.port ?? parseInt(process.env.MC_RCON_PORT ?? "25575", 10),
-		password: options.password ?? process.env.MC_RCON_PASS ?? "minecraft-test-rcon",
+		password: options.password ?? rconPassword(),
 		...options,
 	});

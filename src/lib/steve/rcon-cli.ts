@@ -5,7 +5,7 @@
  */
 
 import { createInterface } from "node:readline";
-import { connect } from "./lib/rcon.ts";
+import { connect, rconPassword } from "./lib/rcon.ts";
 
 const tryConnect = async (): Promise<Awaited<ReturnType<typeof connect>>> => {
 	for (let i = 1; ; i++) {
@@ -13,7 +13,7 @@ const tryConnect = async (): Promise<Awaited<ReturnType<typeof connect>>> => {
 			return await connect({
 				host: process.env.MC_HOST ?? "localhost",
 				port: parseInt(process.env.MC_RCON_PORT ?? "25575", 10),
-				password: process.env.MC_RCON_PASS ?? "minecraft-test-rcon",
+				password: rconPassword(),
 			});
 		} catch {
 			process.stdout.write(`\rWaiting for RCON... (attempt ${i})`);

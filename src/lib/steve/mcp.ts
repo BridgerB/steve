@@ -46,14 +46,18 @@ const VERSION = process.env.MC_VERSION ?? "1.21.11";
 // ── RCON for server commands (op, tp, etc.) ──
 
 const RCON_PORT = parseInt(process.env.MC_RCON_PORT ?? "25575", 10);
-const RCON_PASS = process.env.MC_RCON_PASS ?? "minecraft-test-rcon";
+const RCON_PASS = (): string => {
+	const p = process.env.MC_RCON_PASS;
+	if (!p) throw new Error("MC_RCON_PASS is not set");
+	return p;
+};
 
 let rcon: ((cmd: string) => Promise<string>) | null = null;
 const getRcon = async () => {
 	if (rcon) return rcon;
 	try {
 		const { connect } = await import("./lib/rcon.ts");
-		const client = await connect({ port: RCON_PORT, password: RCON_PASS });
+		const client = await connect({ port: RCON_PORT, password: RCON_PASS() });
 		rcon = (cmd: string) => client.command(cmd);
 		return rcon;
 	} catch {

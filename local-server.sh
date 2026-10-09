@@ -25,6 +25,12 @@ JAR_SHA1=97ccd4c0ed3f81bbb7bfacddd1090b0c56f9bc51
 JAR=$DIR/data/local-server/server-26.1.2.jar
 
 mkdir -p "$DIR/data/local-server" "$WORLD"
+# Each local server has its own random RCON password (gitignored file, mode 600); the local-N
+# server profile reads it. No default password: a known one was public for months.
+PASS_FILE=$DIR/data/local-server/rcon-$N.pass
+if [ ! -s "$PASS_FILE" ]; then
+  (umask 077 && head -c 24 /dev/urandom | od -An -tx1 | tr -d " \\n" > "$PASS_FILE")
+fi
 if [ ! -f "$JAR" ] || [ "$(shasum -a 1 "$JAR" | cut -d' ' -f1)" != "$JAR_SHA1" ]; then
   curl -fsSL -o "$JAR.tmp" "$JAR_URL"
   [ "$(shasum -a 1 "$JAR.tmp" | cut -d' ' -f1)" = "$JAR_SHA1" ] || { echo "server.jar sha1 mismatch" >&2; exit 1; }
@@ -57,7 +63,7 @@ spawn-npcs=true
 allow-flight=true
 rate-limit=0
 enable-rcon=true
-rcon.password=${RCON_PASS:-minecraft-test-rcon}
+rcon.password=$(cat "$PASS_FILE")
 rcon.port=$RCON_PORT
 broadcast-rcon-to-ops=true
 # 26.x pauses an empty server after 60 s; forceloaded chunks then barely load (a 4-chunk

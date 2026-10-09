@@ -97,7 +97,7 @@ const runChild = async (): Promise<void> => {
 			const { connect } = await import("./lib/rcon.ts");
 			const rconClient = await connect({
 				port: parseInt(process.env.MC_RCON_PORT ?? "25575", 10),
-				password: process.env.MC_RCON_PASS ?? "minecraft-test-rcon",
+				password: process.env.MC_RCON_PASS ?? "",
 			});
 			const username = process.env.MC_USERNAME ?? "Test";
 			const p0 = bot.entity.position;
@@ -197,7 +197,7 @@ const runOrchestrator = async (): Promise<void> => {
 
 	const ROOT = process.cwd();
 	const RCON_PORT = parseInt(process.env.MC_RCON_PORT ?? "25575", 10);
-	const RCON_PASS = process.env.MC_RCON_PASS ?? "minecraft-test-rcon";
+	const RCON_PASS = process.env.MC_RCON_PASS ?? "";
 	const { connect } = await import("./lib/rcon.ts");
 	const rconClient = await connect({ port: RCON_PORT, password: RCON_PASS });
 	const rcon = (c: string) => rconClient.command(c);
