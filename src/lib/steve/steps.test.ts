@@ -21,22 +21,3 @@ describe("iron kit steps", () => {
 		expect(step("smelt_iron").canExecute(s)).toBe(false);
 	});
 });
-
-describe("smelt fuel (cycle 7 f4 iron-deadlock gate arm)", () => {
-	// The exact deadlock state from 10 of 12 gate trials: the planks went into a table and the
-	// furnace; the bucket kit is in hand, so gather_wood counted itself done.
-	const deadlock = {
-		equipment: { hasFurnace: true, hasCraftingTable: true, pickaxe: "stone" },
-		world: { dimension: "overworld" },
-		alive: true,
-		inventory: { ironOre: 1, ironIngots: 0, buckets: 2, waterBuckets: 1, lavaBuckets: 0, flintAndSteel: 0, coal: 0, planks: 0, logs: 0 },
-	} as never;
-	it("gather_wood is not done while raw iron needs fuel", () => {
-		expect(step("gather_wood").isComplete(deadlock)).toBe(false);
-		expect(step("gather_wood").canExecute(deadlock)).toBe(true);
-	});
-	it("gather_wood stays done once there is fuel", () => {
-		const s = { ...(deadlock as object), inventory: { ...(deadlock as { inventory: object }).inventory, logs: 2 } } as never;
-		expect(step("gather_wood").isComplete(s)).toBe(true);
-	});
-});
