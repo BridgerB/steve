@@ -1,0 +1,257 @@
+# Hot path (cycle 7, Part 4.2): gym batches on GitHub runners, each job with its own vanilla
+# 26.1.2 server and a copy of the cached pregenerated world. Nothing here installs, builds
+# or generates terrain: the environment comes from prepare-env.yml's cache entry, and a miss
+# fails the job in seconds.
+name: gym
+
+on:
+  workflow_dispatch:
+    inputs:
+      slug:
+        description: Gym slug (build-nether-portal is the arena and needs lava_d)
+        default: build-nether-portal
+      runs:
+        description: Runs per arm
+        default: "6"
+      lava_d:
+        description: GYM_LAVA_D (arena distance; 0 for natural slugs)
+        default: "6"
+      landing_set:
+        default: A
+      shard_size:
+        default: "6"
+      bots:
+        description: Concurrent bots per job (1 for cast gyms)
+        default: "1"
+      arms:
+        description: 'JSON list of arms, e.g. [{"name":"a"},{"name":"b","ref":"<sha>","env":{"K":"V"}}]; empty = one arm on this ref'
+        default: ""
+      env_json:
+        description: Extra environment for every arm, a JSON object
+        default: "{}"
+      label:
+        description: Batch label (the batch id in batches.db)
+        required: true
+  push:
+    # Smoke trigger before the workflow is on main (workflow_dispatch needs it there).
+    # Removed before the workflows-only pull request.
+    branches: [feat/portal-loop-7]
+    paths: [.github/workflows/gym.yml]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  SLUG: ${{ inputs.slug || 'build-nether-portal' }}
+  RUNS: ${{ inputs.runs || '6' }}
+  LAVA_D: ${{ inputs.lava_d || '6' }}
+  SET: ${{ inputs.landing_set || 'A' }}
+  BOTS: ${{ inputs.bots || '1' }}
+  LABEL: ${{ inputs.label || format('smoke{0}', github.run_number) }}
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          sparse-checkout: scripts/ci
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - id: plan
+        env:
+          SHARD_SIZE: ${{ inputs.shard_size || '6' }}
+          ARMS: ${{ inputs.arms }}
+          REF: ${{ github.sha }}
+        run: node scripts/ci/plan.ts >> "$GITHUB_OUTPUT"
+
+  shard:
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      max-parallel: 10
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    name: ${{ matrix.batch }}
+    env:
+      BATCH: ${{ matrix.batch }}
+    steps:
+      - name: Start clock
+        run: echo "JOB_T0=$(date +%s)" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          ref: ${{ matrix.ref }}
+
+      - name: Cache key
+        id: key
+        run: echo "key=gym-env-${{ hashFiles('package-lock.json', 'ci/env.json', 'ci/typecraft-data.tar.zst') }}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore environment
+        uses: actions/cache/restore@v4
+        with:
+          path: env
+          key: ${{ steps.key.outputs.key }}
+          fail-on-cache-miss: true
+
+      - name: Link environment
+        env:
+          ENV_JSON: ${{ inputs.env_json || '{}' }}
+          ARM_ENV: ${{ matrix.env }}
+        run: |
+          echo "RESTORED_S=$(( $(date +%s) - JOB_T0 ))" >> "$GITHUB_ENV"
+          echo "$PWD/env/node/bin" >> "$GITHUB_PATH"
+          ln -sfn "$PWD/env/node_modules" node_modules
+          mkdir -p src/lib/typecraft
+          ln -sfn "$PWD/env/typecraft-data" src/lib/typecraft/data
+          cat env/VERSION
+          # Extra environment: the dispatch's env_json, then the arm's own.
+          for J in "$ENV_JSON" "$ARM_ENV"; do
+            echo "${J:-{\}}" | jq -r 'to_entries[] | "\(.key)=\(.value)"' >> "$GITHUB_ENV"
+          done
+
+      - name: Start server
+        run: |
+          RUNNER_RCON_PASS=$(openssl rand -hex 16)
+          echo "::add-mask::$RUNNER_RCON_PASS"
+          echo "RUNNER_RCON_PASS=$RUNNER_RCON_PASS" >> "$GITHUB_ENV"
+          export RUNNER_RCON_PASS
+          mkdir -p work
+          cp -r "env/worlds/$SET/world" work/world
+          scripts/ci/server.sh start "$PWD/env" "$PWD/work"
+          echo "SERVER_UP_S=$(( $(date +%s) - JOB_T0 ))" >> "$GITHUB_ENV"
+
+      - name: Gamerules and checks
+        env:
+          GYM_SERVER: runner
+        run: |
+          node --import ./typecraft-resolve.mjs scripts/rcon.ts \
+            "gamerule keep_inventory true" "gamerule spawn_mobs true" "tick rate 20" \
+            "forceload query" "execute in minecraft:the_nether run forceload query" "execute in minecraft:the_end run forceload query" \
+            "time query gametime" | tee work/checks.txt
+          if grep -q "force loaded chunks were found" work/checks.txt && ! grep -q "No force loaded" work/checks.txt; then echo "forceloads present at start"; exit 1; fi
+
+      - name: Gym batch
+        env:
+          GYM_SERVER: runner
+          STEP: ${{ env.SLUG }}
+          RUNS: ${{ matrix.runs }}
+          GYM_LANDINGS: env/worlds/${{ env.SET }}/landings-${{ env.SET }}.json
+          GYM_LANDING_OFFSET: ${{ matrix.offset }}
+          STEVE_D1_FILE: data/gym/telemetry.sqlite
+          STEVE_PARAMS_FILE: data/params.json
+          BOT: Gym_cast
+        run: |
+          node scripts/ci/init-telemetry.ts data/gym/telemetry.sqlite
+          if [ "$LAVA_D" != "0" ]; then export GYM_LAVA_D=$LAVA_D; fi
+          node --import ./typecraft-resolve.mjs gym-batch.ts 2>&1 | tee "data/gym/gym-$BATCH.log"
+
+      - name: Stop server
+        if: always()
+        run: scripts/ci/server.sh stop "$PWD/work" || true
+
+      - name: Pack telemetry
+        if: always()
+        run: |
+          mkdir -p data/gym
+          [ -f data/gym/telemetry.sqlite ] && zstd -q -19 -f data/gym/telemetry.sqlite -o data/gym/telemetry.sqlite.zst || true
+          cp work/server.log "data/gym/server-$BATCH.log" 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gym-${{ matrix.batch }}
+          retention-days: 3
+          if-no-files-found: warn
+          path: |
+            data/gym/attempts.jsonl
+            data/gym/batches.db
+            data/gym.db
+            data/gym/gym-${{ matrix.batch }}.log
+            data/gym/server-${{ matrix.batch }}.log
+            data/gym/logs/
+            data/gym/telemetry.sqlite.zst
+            data/params.json
+
+      - name: Summary
+        if: always()
+        run: |
+          FIRST_LOGIN=$(grep -m1 "joined the game" work/server.log | sed -E 's/^\[([0-9:]+)\].*/\1/' || true)
+          LOGIN_S=$([ -n "$FIRST_LOGIN" ] && echo $(( $(date -u -d "$FIRST_LOGIN" +%s) - JOB_T0 )) || echo never)
+          {
+            echo "## ${{ matrix.batch }} (${{ env.SLUG }}, arm ${{ matrix.arm }}, ref ${{ matrix.ref }})"
+            echo ""
+            echo "restore ${RESTORED_S:-?} s, server up ${SERVER_UP_S:-?} s after job start; first bot login ${LOGIN_S} s after job start"
+            echo ""
+            echo '```'
+            cat env/VERSION 2>/dev/null || echo "no environment"
+            echo '```'
+            [ -f data/gym/batches.db ] && node scripts/ci/shard-summary.ts "$BATCH" || echo "no batches.db"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  aggregate:
+    needs: shard
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Cache key
+        id: key
+        run: echo "key=gym-env-${{ hashFiles('package-lock.json', 'ci/env.json', 'ci/typecraft-data.tar.zst') }}" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        with:
+          path: env
+          key: ${{ steps.key.outputs.key }}
+          fail-on-cache-miss: true
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: gym-*
+          path: artifacts
+      - name: Merge and compare
+        env:
+          ARMS: ${{ inputs.arms }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          export PATH="$PWD/env/node/bin:$PATH"
+          node scripts/ci/aggregate.ts artifacts agg "${{ github.run_id }}" > batches.txt
+          cat batches.txt
+          {
+            echo "## $LABEL: all shards"
+            BATCHES_DB=agg/gym/batches.db STEVE_ATTEMPTS_FILE=agg/gym/attempts.jsonl node scripts/ci/shard-summary.ts "$(paste -sd, batches.txt)"
+            NAMES=$(echo "${ARMS:-[]}" | jq -r '.[].name')
+            if [ "$(echo "$NAMES" | grep -c .)" -ge 2 ]; then
+              BASE=$(echo "$NAMES" | head -1)
+              for ARM in $(echo "$NAMES" | tail -n +2); do
+                A=$(grep -- "^$LABEL-$BASE-" batches.txt | paste -sd,)
+                B=$(grep -- "^$LABEL-$ARM-" batches.txt | paste -sd,)
+                echo ""
+                echo "### paired: $ARM against $BASE"
+                echo '```'
+                BATCHES_DB=agg/gym/batches.db STEVE_ATTEMPTS_FILE=agg/gym/attempts.jsonl node scripts/ml/compare.ts --paired "$A" "$B"
+                echo '```'
+              done
+            fi
+          } | tee summary.md >> "$GITHUB_STEP_SUMMARY"
+          PR=$(gh pr list --head "${{ github.ref_name }}" --state open --json number -q '.[0].number' 2>/dev/null || true)
+          if [ -n "$PR" ]; then
+            { cat summary.md; echo ""; echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"; } > comment.md
+            gh pr comment "$PR" --body-file comment.md || true
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aggregate-${{ github.run_id }}
+          retention-days: 3
+          path: |
+            agg/
+            summary.md
