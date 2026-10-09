@@ -973,7 +973,6 @@ const stationDeps = (bot: Bot): StationDeps => ({
 	placeCobble: (p) => placeCobble(bot, p),
 	use: (look) => reliableUse(bot, look),
 	shuffle: (x, z) => shuffleTo(bot, x, z, { lavaSafe: true }),
-	dig: (p) => digAt(bot, p),
 });
 
 // Cells this process has cast (the bot's own obsidian; also the obsidian_lost diagnostic).
