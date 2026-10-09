@@ -66,8 +66,11 @@ const INV_COLS = "race_id, bot_id, ts, slot, item_name, count";
 
 const createLocalWriter = (): Writer => {
 	const db = new DatabaseSync(findLocalD1File());
-	db.exec("PRAGMA journal_mode = WAL");
+	// busy_timeout first: switching to WAL takes a lock, and several bots opening the same
+	// file at once (bots sharing a runner) failed "database is locked" before the timeout
+	// was set.
 	db.exec("PRAGMA busy_timeout = 8000");
+	db.exec("PRAGMA journal_mode = WAL");
 	db.exec("PRAGMA synchronous = NORMAL");
 
 	const insertMany = (table: string, cols: string, n: number, rows: Row[]) => {

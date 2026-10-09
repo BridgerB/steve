@@ -18,6 +18,8 @@ const getDb = (): DatabaseSync => {
 		/* exists */
 	}
 	db = new DatabaseSync(join(dir, 'gym.db'));
+	// Several bots may share one machine (fleet capacity test): wait, don't fail, on a lock.
+	db.exec('PRAGMA busy_timeout = 15000');
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS gym_runs (
 			id       INTEGER PRIMARY KEY AUTOINCREMENT,
