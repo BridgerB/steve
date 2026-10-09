@@ -1,0 +1,63 @@
+{
+	"label": "f38",
+	"workers": 20,
+	"experiments": [
+		{
+			"name": "nata",
+			"slug": "portal-natural",
+			"runs": 12,
+			"est_s": 2800,
+			"env": {
+				"GYM_TOTAL_S": "2700"
+			}
+		},
+		{
+			"name": "nata2",
+			"slug": "portal-natural",
+			"runs": 12,
+			"est_s": 2800,
+			"env": {
+				"GYM_TOTAL_S": "2700"
+			}
+		},
+		{
+			"name": "natb",
+			"slug": "portal-natural",
+			"landing_set": "B",
+			"runs": 12,
+			"est_s": 2800,
+			"env": {
+				"GYM_TOTAL_S": "2700"
+			}
+		},
+		{
+			"name": "natb2",
+			"slug": "portal-natural",
+			"landing_set": "B",
+			"runs": 12,
+			"est_s": 2800,
+			"env": {
+				"GYM_TOTAL_S": "2700"
+			}
+		},
+		{
+			"name": "nata3",
+			"slug": "portal-natural",
+			"runs": 12,
+			"est_s": 2800,
+			"env": {
+				"GYM_TOTAL_S": "2700"
+			}
+		},
+		{
+			"name": "natb3",
+			"slug": "portal-natural",
+			"landing_set": "B",
+			"runs": 12,
+			"est_s": 2800,
+			"env": {
+				"GYM_TOTAL_S": "2700"
+			}
+		}
+	]
+}
