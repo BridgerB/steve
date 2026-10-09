@@ -30,8 +30,6 @@ export interface StationDeps {
 	equip: (name: string) => Promise<boolean>;
 	placeCobble: (p: Vec3) => Promise<boolean>;
 	use: (look: Vec3) => Promise<boolean>;
-	/** Straight-line walk toward (x, z), digging non-obsidian blocks that do not touch lava. */
-	shuffle?: (x: number, z: number) => Promise<void>;
 }
 
 type Stand = { S: Vec3; d: [number, number]; targets: Vec3[] };
@@ -222,19 +220,6 @@ export const stationRefill = async (
 		const d0 = Math.hypot(p0.x - (S.x + 0.5), p0.z - (S.z + 0.5));
 		const tWalk = Date.now();
 		const pfOk = await goTo(bot, S, { range: 0, timeout: 20000, nudge: false }).catch(() => false);
-		// f5-natk1-a-7: perched one block above the floor beside the frame, every pathfinder
-		// walk to a stand 3-6 blocks away made no progress (265 vetoed moves in 15 min), while
-		// the one walk that started on the floor arrived in 1.7 s. Fall back to a straight
-		// shuffle that digs its way down and across.
-		let shuffled = false;
-		{
-			const q = bot.entity.position;
-			const dq = Math.hypot(q.x - (S.x + 0.5), q.z - (S.z + 0.5));
-			if (deps.shuffle && dq > 1.5 && dq <= 8) {
-				await deps.shuffle(S.x + 0.5, S.z + 0.5).catch(() => {});
-				shuffled = true;
-			}
-		}
 		{
 			const q = bot.entity.position;
 			if (Math.hypot(q.x - (S.x + 0.5), q.z - (S.z + 0.5)) <= 1.5)
@@ -248,7 +233,7 @@ export const stationRefill = async (
 			logEvent(
 				"cast",
 				"refill_walk",
-				JSON.stringify({ stand: key(S), site, d0: +d0.toFixed(1), d1: +d1.toFixed(1), dy: +(S.y - p0.y).toFixed(1), pf_ok: pfOk === true, shuffled, arrived, reason, ms: Date.now() - tWalk, targets: st.targets.length }),
+				JSON.stringify({ stand: key(S), site, d0: +d0.toFixed(1), d1: +d1.toFixed(1), dy: +(S.y - p0.y).toFixed(1), pf_ok: pfOk === true, arrived, reason, ms: Date.now() - tWalk, targets: st.targets.length }),
 				q,
 			);
 		}
