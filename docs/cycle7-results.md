@@ -96,3 +96,7 @@ compare.ts keyed rows by landing only, so the f10/f12 "nat + nat2" pools used 12
 - Funnel (race-funnel.ts, data/runs/37890750601/fleet-w1/race-funnel.txt): stone pick 5/5 (3–12 min); bucket 4/5; water 4/5; flint & steel 3/5 (35, 77, 38 min); site anchor 2/5; obsidian ≥ 1 2/5; portal lit 1/5; in Nether 1/5 [4%, 62%].
 - Two bots never got flint and steel (002: no bucket kit; 004: no water). Race c5 (old code): 0/3 past the iron deadlock. Deaths: 26 rows (6 inWall, 4 lava, 3 mob, 13 uncaused). 26 water re-placements at the start, 5 process exits.
 - This ran on 303cc21, before the iron fuel fixes (9d145cf, f9 log fuel), the lid, walkway, lava guards. Races c8a–d (f11) run the current code.
+
+## f16, run 37910944659, walkway level-step sneak vs base, 2 replicates
+- natural (24 pairs): 0/24 each; best frame 3.58 vs 3.17, P = 0.791; deaths 2.13 vs 1.58, P = 0.101; lava deaths 0.67 vs 0.33, P = 0.083. Not separated (trending worse on deaths); walkway arrivals 6/58 vs 3/61.
+- **Root cause found in walkway_stuck:** the head cell was still stone/andesite/copper ore after the walkway "dug" it. digAt never equips a tool (6 s cap); refills run holding a bucket. The cup-lid dig had the same bug: across f10–f16 cup_lid_cleared logged "was X now X" 20 of 21 times (landing 8's copper ore 5 of 5). So the lid fix, the walkway and the shuffle were mostly no-ops. Fix: digWithPick (f18).
