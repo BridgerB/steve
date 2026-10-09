@@ -31,6 +31,31 @@ const breathNear = (bot: Bot): Vec3 | null => {
 	return e ? (e.position as Vec3) : null;
 };
 
+// Endermen turn hostile when looked at. f7 dragon-1/3/5 were all "slain by Enderman" before
+// a single bed, with the gaze level (the tp sets pitch 0). Keep the eyes on the ground except
+// to place a bed, which is below eye level too.
+const GAZE_DOWN = -1.2;
+const gazeDown = async (bot: Bot): Promise<void> => {
+	if ((bot.entity.pitch ?? 0) > GAZE_DOWN + 0.1) await bot.look(bot.entity.yaw, GAZE_DOWN, true).catch(() => {});
+};
+
+/** An enderman within 3.5 blocks: sword out, hit its body, gaze back down. */
+const fendEnderman = async (bot: Bot): Promise<boolean> => {
+	const p = bot.entity.position;
+	const e = Object.values(bot.entities).find((x) => x.name === "enderman" && Math.hypot(x.position.x - p.x, x.position.z - p.z) < 3.5 && Math.abs(x.position.y - p.y) < 3);
+	if (!e) return false;
+	const sword = item(bot, (n) => n.endsWith("_sword"));
+	try {
+		if (sword && bot.heldItem?.name !== sword.name) await bot.equip(sword, "hand");
+		await bot.lookAt(vec3(e.position.x, e.position.y + 1, e.position.z), true);
+		bot.attack(e as never);
+	} catch {}
+	logEvent("end", "enderman_hit", `at ${e.position.x.toFixed(1)},${e.position.z.toFixed(1)} hp ${(bot.health ?? 0).toFixed(1)}`, p);
+	await sleep(650); // sword cooldown
+	await gazeDown(bot);
+	return true;
+};
+
 /** Sprint ~5 blocks directly away from the cloud (f4 dragon-2 died to breath at 39 s, standing still). */
 const dodge = async (bot: Bot, from: Vec3): Promise<void> => {
 	const p = bot.entity.position;
@@ -38,13 +63,14 @@ const dodge = async (bot: Bot, from: Vec3): Promise<void> => {
 	const dz = p.z - from.z || 1;
 	const n = Math.hypot(dx, dz);
 	try {
-		await bot.lookAt(vec3(p.x + (dx / n) * 6, p.y + 1.62, p.z + (dz / n) * 6), true);
+		await bot.look(Math.atan2(-dx, -dz), GAZE_DOWN / 2, true);
 	} catch {}
 	bot.setControlState("forward", true);
 	bot.setControlState("sprint", true);
 	await sleep(1200);
 	bot.setControlState("forward", false);
 	bot.setControlState("sprint", false);
+	await gazeDown(bot);
 	logEvent("end", "breath_dodge", `cloud ${from.x.toFixed(1)},${from.z.toFixed(1)} → ${bot.entity.position.x.toFixed(1)},${bot.entity.position.z.toFixed(1)} hp ${(bot.health ?? 0).toFixed(1)}`, bot.entity.position);
 };
 
@@ -99,6 +125,8 @@ export const bedDragon = async (bot: Bot, budgetMs: number): Promise<StepResult>
 	try {
 		while (Date.now() - t0 < budgetMs) {
 			if (died || (bot.health ?? 20) <= 0 || !inEnd(bot)) return dead();
+			await gazeDown(bot);
+			if (await fendEnderman(bot)) continue;
 			if ((bot.health ?? 20) < 10) await eat(bot);
 			const cloud = breathNear(bot);
 			if (cloud) await dodge(bot, cloud);
@@ -134,7 +162,7 @@ export const bedDragon = async (bot: Bot, budgetMs: number): Promise<StepResult>
 			}
 			// The bed's head extends the way the bot faces: look along d first.
 			try {
-				await bot.lookAt(vec3(p.x + d.x * 4, p.y + 1, p.z + d.z * 4), true);
+				await bot.lookAt(vec3(p.x + d.x * 4 + 0.5, p.y, p.z + d.z * 4 + 0.5), true);
 			} catch {}
 			const placed = await placeOn(bot, "bed", foot);
 			const hp0 = bot.health ?? 0;
