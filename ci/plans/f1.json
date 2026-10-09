@@ -1,0 +1,13 @@
+{
+	"label": "f1",
+	"workers": 19,
+	"experiments": [
+		{ "name": "nat", "slug": "portal-natural", "runs": 12, "est_s": 1900, "env": { "GYM_TOTAL_S": "1800" },
+			"arms": [ { "name": "a" }, { "name": "b" }, { "name": "pf", "env": { "TYPECRAFT_PF_SEARCH_BUDGET": "1" } } ] },
+		{ "name": "craft", "slug": "craft-stale-table", "runs": 12, "est_s": 150, "bot": "Gym_craft",
+			"arms": [ { "name": "fix" }, { "name": "base", "ref": "exp/craft-base" } ] },
+		{ "name": "arena", "slug": "build-nether-portal", "lava_d": 6, "runs": 6, "est_s": 420 },
+		{ "name": "dragon", "slug": "dragon", "runs": 3, "est_s": 1000, "bot": "Gym_dragon" },
+		{ "name": "c7", "kind": "race", "bots": 5, "minutes": 240, "est_s": 15000 }
+	]
+}
