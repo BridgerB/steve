@@ -156,3 +156,12 @@ compare.ts keyed rows by landing only, so the f10/f12 "nat + nat2" pools used 12
 - Lighting: pick arm 13 complete frames → 12 interiors clear → 12 lit; base 5 complete frames → 4 interiors blocked (cobblestone) → 1 lit.
 - arena: 11/12 each, pick 29 s faster per trial.
 - Cause: digAt never equipped a tool and capped digs at 6 s; the cast holds buckets/dirt/cobble, so every stone or cobblestone dig failed silently — cup clearing, lids, walkway, interiors. champion.json → 49ecaa4.
+
+## Races c9a–d (f19, run 37917882780; build = f17 champion + pickaxe for lid/walkway/shuffle digs; before safe light, enter-first, pickaxe-everywhere), 4 × 5 bots × 240 min
+| race | flint & steel | portal lit | **Nether** (server "[We Need to Go Deeper]") |
+|---|---|---|---|
+| c9a (w1) | 4/5 | 0/5 | 0/5 |
+| c9b (w2) | 4/5 | 1/5 (89 min) | 0/5 |
+| c9c (w3) | 4/5 | 2/5 | **3/5** (72, 99, 146 min; 11:42:36, 12:08:51, 12:56:03 UTC) |
+| c9d (w4) | 5/5 | 2/5 | **2/5** (63, 65 min; 11:33:11, 11:35:41 UTC) |
+- **Race Nether rate 5/20 = 25% [11%, 47%]** (c8: 1/20, c7: 1/5). c9c steve-race-005 entered at 99 min without a portal of its own in the funnel — it found another bot's portal. c9b's lit portal at 89 min was never entered (the enter-first fix 143f2b1 came after this build).
