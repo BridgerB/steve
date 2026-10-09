@@ -198,17 +198,10 @@ const ensureSolid = async (
 	return false;
 };
 
-/** Dig the block at `pos` (used to open the portal gap / remove molds). A hard block is
- *  dug with a carried pickaxe: the cast holds buckets, dirt or cobble most of the time, and
- *  stone or cobble by hand outlasts the 6 s cap below (f16-f22: lid, walkway, interior digs
- *  logged "was X now X"; 13 complete frames had cobblestone left in the interior). */
+/** Dig the block at `pos` (used to open the portal gap / remove molds). */
 const digAt = async (bot: Bot, pos: Vec3): Promise<void> => {
 	const b = getBlock(bot, pos) as Block | null;
 	if (!b || isAir(b.name)) return;
-	if (!/dirt|grass_block|gravel|sand|clay|snow|podzol|mud|leaves|_log|planks/.test(b.name) && !(bot.heldItem?.name ?? "").endsWith("_pickaxe")) {
-		const pick = bot.inventory.slots.find((sl) => !!sl && sl.name.endsWith("_pickaxe"));
-		if (pick) await equip(bot, pick.name);
-	}
 	try {
 		await bot.lookAt(offset(b.position, 0.5, 0.5, 0.5));
 		// Cap the dig: bot.dig can hang indefinitely if the server never acks the break
@@ -229,7 +222,15 @@ const digAt = async (bot: Bot, pos: Vec3): Promise<void> => {
 /** digAt with a pickaxe in hand (if one is carried). Refill walks run holding a bucket, and
  *  stone by hand outlasts digAt's 6 s cap: f16 walkway_stuck had the head cell still stone,
  *  andesite or copper ore after its "dig" in most cases. Never crafts or walks. */
-const digWithPick = digAt;
+const digWithPick = async (bot: Bot, pos: Vec3): Promise<void> => {
+	const n = getBlock(bot, pos)?.name ?? "";
+	const soft = /dirt|grass_block|gravel|sand|clay|snow|podzol|mud/.test(n);
+	if (!soft && !(bot.heldItem?.name ?? "").endsWith("_pickaxe")) {
+		const pick = bot.inventory.slots.find((s) => !!s && s.name.endsWith("_pickaxe"));
+		if (pick) await equip(bot, pick.name);
+	}
+	await digAt(bot, pos);
+};
 
 const feetY = (bot: Bot): number => Math.floor(bot.entity.position.y);
 
