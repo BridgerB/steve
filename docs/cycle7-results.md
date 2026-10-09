@@ -129,3 +129,8 @@ compare.ts keyed rows by landing only, so the f10/f12 "nat + nat2" pools used 12
 - **c8d: steve-race-004 entered the Nether at 220 min** (server "[We Need to Go Deeper]" 11:39:30 UTC). Pooled c8: Nether 1/20 = 5% [1%, 24%]; portal lit 2/20; flint & steel 12/20.
 - c8b steve-race-004 lit at 89 min and never entered: portalBuilt only held while a portal block was within 6 of the bot; regressed iron steps (lower priority numbers) took over; it later drowned. Fix 143f2b1 (remember the lit portal; enter_nether first). Validated by races, not the gym (the natural slug enters directly).
 - Early-game losses: c8c bots 002/003 spent the race in gather_wood timeouts ("Returning to surface for wood (y=36 → 64)") and water escapes — treeless/underground starts.
+
+## f22, run 37924991079: safe lighting (7332567) vs base, set A, 2 replicates at 2700 s
+- natural (22 pairs): 1/22 each (light: landing 5, 1745 s; **base: landing 2, 2097 s — the first natural Nether entry on any landing but 5**); best frame 5.68 vs 5.77 (highest means yet), P = 0.460; deaths 1.91 vs 1.59, P = 0.191; lava deaths equal. Kept (not separated; mechanism).
+- Lighting: base had 5 complete 10/10 frames, **4 portal_unlit**, 1 lit; light arm 1 complete frame, interior clear, lit. Lighting a complete frame failed 4 of 5 times on the old code — the light_interior event (light arm only) will say why as frames accumulate.
+- arena: 10/12 vs 9/12.
