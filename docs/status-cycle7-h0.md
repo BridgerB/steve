@@ -1,8 +1,8 @@
 # steve cycle 7 status, hour 0 (2026-10-09 03:45 UTC)
 
 ## Only Bridger can do (not waiting on any of them)
-1. Merge the workflows-only pull request "ci: runner workflows" (not opened yet; it opens after the first gym.yml smoke passes).
-2. Add the repository secrets CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_DATABASE_ID, CLOUDFLARE_D1_TOKEN (live race telemetry on the dashboard). Races run without them until then.
+1. Merge the workflows-only pull request "ci: runner workflows": https://github.com/BridgerB/steve/pull/6
+2. Add one repository secret, STEVE_INGEST_SECRET (live race telemetry on the dashboard through the existing ingest Worker; replaces the three Cloudflare secrets the directive named). Races run without it until then.
 3. Keep the Mac awake (caffeinate -dimsu is running, pid 11536).
 
 ## Headline
