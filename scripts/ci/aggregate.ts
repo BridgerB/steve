@@ -31,6 +31,8 @@ const find = (dir: string, name: string): string[] =>
 for (const db of find(src, "batches.db")) {
 	const inDb = new DatabaseSync(db, { readOnly: true });
 	const cols = (inDb.prepare("PRAGMA table_info(runs)").all() as { name: string; type: string }[]).filter((c) => c.name !== "gh_run");
+	// A race-only worker has no gym runs table (f19: "near FROM: syntax error").
+	if (!cols.length) continue;
 	out.exec(`CREATE TABLE IF NOT EXISTS runs (run_id TEXT PRIMARY KEY)`);
 	const have = new Set((out.prepare("PRAGMA table_info(runs)").all() as { name: string }[]).map((c) => c.name));
 	for (const c of [...cols, { name: "gh_run", type: "TEXT" }]) if (!have.has(c.name)) out.exec(`ALTER TABLE runs ADD COLUMN ${c.name} ${c.type || "TEXT"}`);
