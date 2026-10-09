@@ -1,0 +1,157 @@
+# The fleet (cycle 7): one plan of experiments, expanded into trials and spread over up to 20
+# workers by estimated time, each worker running its trials back to back on fresh copies of
+# the cached world. The matrix carries worker numbers only (job outputs are capped at 1 MB);
+# every worker recomputes its own units from the plan with the pure planner. One aggregate job merges every worker's data and reports per experiment.
+# Dispatch: push a plan file under ci/plans/ (the newest changed plan runs), or
+# workflow_dispatch with a plan path once this file is on main.
+name: fleet
+
+on:
+  workflow_dispatch:
+    inputs:
+      plan:
+        description: Plan file, e.g. ci/plans/f1.json
+        required: true
+  push:
+    branches: [feat/portal-loop-7]
+    paths: [ci/plans/**]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      plan: ${{ steps.pick.outputs.plan }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Cache key
+        id: key
+        run: echo "key=gym-env-${{ hashFiles('package-lock.json', 'ci/env.json', 'ci/typecraft-data.tar.zst') }}" >> "$GITHUB_OUTPUT"
+      - name: Restore environment (Node 24 and zod for the planner)
+        uses: actions/cache/restore@v4
+        with:
+          path: env
+          key: ${{ steps.key.outputs.key }}
+          fail-on-cache-miss: true
+      - run: |
+          echo "$PWD/env/node/bin" >> "$GITHUB_PATH"
+          ln -sfn "$PWD/env/node_modules" node_modules
+      - id: pick
+        run: |
+          P="${{ inputs.plan }}"
+          if [ -z "$P" ]; then P=$(git diff --name-only HEAD~1 HEAD -- ci/plans/ | grep '\.json$' | tail -1); fi
+          [ -f "$P" ] || { echo "no plan file ($P)"; exit 1; }
+          echo "plan=$P" >> "$GITHUB_OUTPUT"
+          echo "plan: $P"; cat "$P"
+      - id: plan
+        run: node scripts/ci/fleet-plan.ts "${{ steps.pick.outputs.plan }}" >> "$GITHUB_OUTPUT"
+
+  worker:
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    name: worker ${{ matrix.worker }} (${{ matrix.trials }} trials, ${{ matrix.load_s }} s)
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Cache key
+        id: key
+        run: echo "key=gym-env-${{ hashFiles('package-lock.json', 'ci/env.json', 'ci/typecraft-data.tar.zst') }}" >> "$GITHUB_OUTPUT"
+      - name: Restore environment
+        uses: actions/cache/restore@v4
+        with:
+          path: env
+          key: ${{ steps.key.outputs.key }}
+          fail-on-cache-miss: true
+      - name: Link environment
+        run: |
+          echo "$PWD/env/node/bin" >> "$GITHUB_PATH"
+          ln -sfn "$PWD/env/node_modules" node_modules
+          mkdir -p src/lib/typecraft
+          ln -sfn "$PWD/env/typecraft-data" src/lib/typecraft/data
+          P=$(openssl rand -hex 16); echo "::add-mask::$P"; echo "RUNNER_RCON_PASS=$P" >> "$GITHUB_ENV"
+          cat env/VERSION
+      - name: Trials
+        env:
+          PLAN: ${{ needs.plan.outputs.plan }}
+          WORKER: ${{ matrix.worker }}
+        run: node scripts/ci/fleet-worker.ts
+      - name: Pack
+        if: always()
+        run: |
+          bash scripts/ci/server.sh stop "$PWD/work" >/dev/null 2>&1 || true
+          [ -f data/gym/telemetry.sqlite ] && zstd -q -19 -f data/gym/telemetry.sqlite -o data/gym/telemetry.sqlite.zst || true
+          rm -f data/gym/telemetry.sqlite data/gym/telemetry.sqlite-*
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fleet-w${{ matrix.worker }}
+          retention-days: 3
+          if-no-files-found: warn
+          path: |
+            data/
+            !data/**/*.lock
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### worker ${{ matrix.worker }}"
+            echo '```'
+            cat data/fleet/trials.jsonl 2>/dev/null || echo "no trials recorded"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  aggregate:
+    needs: [plan, worker]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Cache key
+        id: key
+        run: echo "key=gym-env-${{ hashFiles('package-lock.json', 'ci/env.json', 'ci/typecraft-data.tar.zst') }}" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        with:
+          path: env
+          key: ${{ steps.key.outputs.key }}
+          fail-on-cache-miss: true
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: fleet-w*
+          path: artifacts
+      - name: Merge and report
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          export PATH="$PWD/env/node/bin:$PATH"
+          ln -sfn "$PWD/env/node_modules" node_modules
+          mkdir -p src/lib/typecraft && ln -sfn "$PWD/env/typecraft-data" src/lib/typecraft/data
+          node scripts/ci/aggregate.ts artifacts agg "${{ github.run_id }}"
+          node scripts/ci/fleet-report.ts "${{ needs.plan.outputs.plan }}" agg artifacts | tee report.md >> "$GITHUB_STEP_SUMMARY"
+          PR=$(gh pr list --head "${{ github.ref_name }}" --state open --json number -q '.[0].number' 2>/dev/null || true)
+          if [ -n "$PR" ]; then
+            { cat report.md; echo ""; echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"; } > comment.md
+            gh pr comment "$PR" --body-file comment.md || true
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fleet-aggregate
+          retention-days: 3
+          path: |
+            agg/
+            report.md
