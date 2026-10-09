@@ -2354,17 +2354,8 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
  * dirt cup, lava + water from above → obsidian), digs the 2x3 gap, then lights it.
  */
 export const buildPortalByCasting = async (bot: Bot): Promise<StepResult> => {
-	// No "frame already present" shortcut: base3-6 returned success on a radius count of
-	// someone else's obsidian with 3 of its own cast, and the shortcut skipped lighting.
-	// A complete own frame goes through the normal flow (cast cells are skipped, then the
-	// gap is cleared and the frame lit). Diagnostic only: where the old rule would fire.
-	{
-		const n = bot.findBlocks({ matching: (x: string) => x === "obsidian", maxDistance: 8, count: 12 } as never).length;
-		const a = siteAnchor.get(bot);
-		const own = a ? ownObsidianIn(bot, a) : 0;
-		if (n >= 10 && own < 10) logEvent("cast", "frame_present_blocked", `${n} obsidian within 8, ${own}/10 own at the anchor`);
-	}
-
+	// No "frame already present" shortcut (base3-6 counted someone else's obsidian): a complete
+	// own frame goes through the normal flow, cast cells skipped, then cleared and lit.
 	// Scale the need to the cells still to cast (~4 blocks each: cup walls + pillar):
 	// s13n-6 stood at 8/10 with 0 blocks and a flat "need 30" — 2 cells need ~12.
 	const anc = siteAnchor.get(bot);
