@@ -66,3 +66,8 @@ Fortress found in ~5 s; the bot burns to death from blaze fireballs and wither s
 
 ## f10 arena, run 37900099447, lid vs base, 12 paired
 - lid 10/12 vs base 11/12, P(better) = 0.175, not separated; the lid dig never fired in the arena (no natural rock over arena cups). Natural arms pending.
+
+## f10 natural, run 37900099447, lid vs base, 2 replicates × 12 landings
+- both 0/24 [0%, 14%]; best frame (paired by landing) 3.17 vs 2.00, P = 0.880; deaths equal (2.25 vs 2.25). Kept: landing 8 got past its lidded cell (4–5 obsidian vs 1).
+- **Deaths are now the dominant natural outcome**: 137 deaths in 48 trials (~2.9 per trial). Lava ~60 (lava_fill 14, verify 11, find_lava 11, water 7, lava 6, anchor 5, portal_start 5), mobs ~25 (15 at find_lava), drowning 14, inWall 7. The "verify" lava deaths are 3–10 blocks from the cell: they happen on the refill walk under a stale phase label. One read in full (nat-lid-5 d4): the station shuffle stepped off a ledge into the pool → fix ed61b58 (shuffle never steps toward lava).
+- Landing 11 (refill-walk lock) walk_grid, local repro: the bot in a 2-high pocket at y16, the stand one up beside it, the cell over the head solid → no step-up jump. Fix: shuffle digs its own headroom and fires whenever off the stand (f12). Local rerun: past landing 11's 1/10 for the first time (2 obsidian, one headroom dig, one arrival).
