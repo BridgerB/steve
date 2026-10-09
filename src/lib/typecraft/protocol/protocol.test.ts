@@ -546,3 +546,15 @@ describe("full pipeline", () => {
 		}
 	});
 });
+
+describe("attack packet (26.x)", () => {
+	it("encodes minecraft:attack as id 1 followed by the entity id", async () => {
+		const { buildProtocol } = await import("./build-protocol.ts");
+		const { createPacketCodec } = await import("./codec.ts");
+		const p = buildProtocol().protocol as unknown as Record<string, Record<string, { types: Record<string, unknown> }>> & { types: Record<string, unknown> };
+		const codec = createPacketCodec({ types: { ...p.types, ...p.play!.toServer!.types } });
+		expect(codec.packetIds.get("attack")).toBe(1);
+		const buf = codec.write("attack", { target: 300 });
+		expect([...buf]).toEqual([0x01, 0xac, 0x02]); // id 1, varint 300
+	});
+});

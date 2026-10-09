@@ -2399,6 +2399,10 @@ export const PACKET_DEFS: Readonly<Record<string, unknown>> = {
 			{ name: "entityId", type: "varint" },
 		],
 	],
+	// 26.x: attacking an entity is its own packet (minecraft:attack, serverbound id 1) carrying the
+	// entity id. Sending interact with mouse=1 is undecodable and gets the client kicked
+	// ("Failed to decode packet serverbound/minecraft:interact").
+	"play.toServer.packet_attack": ["container", [{ name: "target", type: "varint" }]],
 	"play.toServer.packet_interact": [
 		"container",
 		[

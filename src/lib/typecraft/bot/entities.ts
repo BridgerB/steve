@@ -837,11 +837,8 @@ export const initEntities = (bot: Bot, _options: BotOptions): void => {
 			bot.swingArm();
 		}
 
-		bot.client.write("interact", {
-			target: target.id,
-			mouse: 1,
-			sneaking: bot.controlState.sneak,
-		});
+		// 26.x has a dedicated attack packet; interact with mouse=1 gets the bot kicked.
+		bot.client.write("attack", { target: target.id });
 
 		if (!bot.supportFeature("armAnimationBeforeUse")) {
 			bot.swingArm();
