@@ -219,6 +219,19 @@ const digAt = async (bot: Bot, pos: Vec3): Promise<void> => {
 	}
 };
 
+/** digAt with a pickaxe in hand (if one is carried). Refill walks run holding a bucket, and
+ *  stone by hand outlasts digAt's 6 s cap: f16 walkway_stuck had the head cell still stone,
+ *  andesite or copper ore after its "dig" in most cases. Never crafts or walks. */
+const digWithPick = async (bot: Bot, pos: Vec3): Promise<void> => {
+	const n = getBlock(bot, pos)?.name ?? "";
+	const soft = /dirt|grass_block|gravel|sand|clay|snow|podzol|mud/.test(n);
+	if (!soft && !(bot.heldItem?.name ?? "").endsWith("_pickaxe")) {
+		const pick = bot.inventory.slots.find((s) => !!s && s.name.endsWith("_pickaxe"));
+		if (pick) await equip(bot, pick.name);
+	}
+	await digAt(bot, pos);
+};
+
 const feetY = (bot: Bot): number => Math.floor(bot.entity.position.y);
 
 /** Dig straight down to bring the bot's feet to `targetFeetY` (removes a pillar). */
@@ -350,7 +363,7 @@ const shuffleTo = async (bot: Bot, tx: number, tz: number, opts: { lavaSafe?: bo
 		for (const dy of [0, 1]) {
 			const b = getBlock(bot, vec3(fx, fy + dy, fz));
 			if (b && isSolid(b.name) && b.name !== "obsidian" && !(opts.lavaSafe && touchesLava(bot, vec3(fx, fy + dy, fz)))) {
-				await digAt(bot, vec3(fx, fy + dy, fz));
+				await digWithPick(bot, vec3(fx, fy + dy, fz));
 			}
 		}
 		// Step toward the target in short bursts. Jump when not making progress
@@ -383,7 +396,7 @@ const shuffleTo = async (bot: Bot, tx: number, tz: number, opts: { lavaSafe?: bo
 			const lid = vec3(px, Math.floor(p.y) + 2, pz);
 			const n = getBlock(bot, lid)?.name;
 			if (isSolid(n) && n !== "obsidian" && !(opts.lavaSafe && touchesLava(bot, lid))) {
-				await digAt(bot, lid);
+				await digWithPick(bot, lid);
 				logEvent("cast", "shuffle_headroom", `${lid.x},${lid.y},${lid.z} was ${n}`, p);
 			}
 		}
@@ -985,7 +998,7 @@ const stationDeps = (bot: Bot): StationDeps => ({
 	placeCobble: (p) => placeCobble(bot, p),
 	use: (look) => reliableUse(bot, look),
 	shuffle: (x, z) => shuffleTo(bot, x, z, { lavaSafe: true }),
-	dig: (p) => digAt(bot, p),
+	dig: (p) => digWithPick(bot, p),
 });
 
 // Cells this process has cast (the bot's own obsidian; also the obsidian_lost diagnostic).
@@ -1244,7 +1257,7 @@ export const castObsidianAt = async (
 			const lid = vec3(pos.x, pos.y + 1, pos.z);
 			const n = getBlock(bot, lid)?.name;
 			if (isSolid(n) && n !== "obsidian" && !touchesLava(bot, lid)) {
-				await digAt(bot, lid);
+				await digWithPick(bot, lid);
 				logEvent("cast", "cup_lid_cleared", `${lid.x},${lid.y},${lid.z} was ${n} now ${getBlock(bot, lid)?.name}`, bot.entity.position);
 			}
 		}
