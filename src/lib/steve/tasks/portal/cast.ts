@@ -29,7 +29,7 @@ import { setTarget } from "../../lib/progress.ts";
 import { lavaSafeMove } from "./lava-move.ts";
 import { type StationDeps, stationRefill } from "./station.ts";
 import { param } from "../../ml/bandit.ts";
-import { digDownVertical as digDownTo, ensurePickaxe } from "../mining/main.ts";
+import { ensurePickaxe } from "../mining/main.ts";
 import type { Block, StepResult } from "../../types.ts";
 
 // Per-bot: how many deep-lava descents ended in water after the surface walk to
@@ -1870,24 +1870,6 @@ export const prepareCastSite = async (bot: Bot): Promise<StepResult> => {
 				if (Math.hypot(bot.entity.position.x - q.x, bot.entity.position.z - q.z) < 1) break;
 			}
 			logEvent("cast", "site_return", `${prev.x},${prev.y},${prev.z} was ${Math.round(far)} away, now ${distance(bot.entity.position, offset(prev, 0.5, 0, 0.5)).toFixed(1)}`, bot.entity.position);
-			// Still far and the frame is below: walk on the surface to the column in front of
-			// the frame and dig straight down to it. f20-nat-a-8 respawned on the surface 31
-			// above-and-beside a complete 10/10 frame, the legs could not path down, and the
-			// next dispatch built a second frame 80 blocks away.
-			const frameObs = (() => {
-				let n = 0;
-				for (let x = 0; x <= 3; x++) for (let y = 0; y <= 4; y++) if (getBlock(bot, vec3(prev.x + x, prev.y + y, prev.z))?.name === "obsidian") n++;
-				return n;
-			})();
-			if (frameObs > 0 && distance(bot.entity.position, offset(prev, 0.5, 0, 0.5)) > 12 && feetY(bot) > prev.y + 3) {
-				const cx = prev.x + 1;
-				const cz = prev.z + 2;
-				await goTo(bot, vec3(cx, surfaceYAt(bot, cx, cz), cz), { range: 1, timeout: 30000 }).catch(() => {});
-				await walkToXZ(bot, cx + 0.5, cz + 0.5, { targetDist: 0.3, maxTime: 2500 }).catch(() => {});
-				const r = await digDownTo(bot, prev.y, Date.now() + 120_000, undefined, 30_000).catch(() => ({ y: feetY(bot), stopped: "error" }));
-				await goTo(bot, prev, { range: 1, timeout: 15000 }).catch(() => {});
-				logEvent("cast", "site_return_dig", `frame ${frameObs}/10 at ${prev.x},${prev.y},${prev.z}: dug to y=${r.y} stopped=${r.stopped}, now ${distance(bot.entity.position, offset(prev, 0.5, 0, 0.5)).toFixed(1)} away`, bot.entity.position);
-			}
 		}
 		if (siteAnchor.get(bot) && distance(bot.entity.position, offset(prev!, 0.5, 0, 0.5)) <= 16) {
 			let obs = 0;
