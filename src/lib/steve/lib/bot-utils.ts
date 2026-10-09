@@ -2660,6 +2660,23 @@ const escapeWaterInner = async (
 ): Promise<boolean> => {
 	if (isOnDryLand(bot)) return true;
 
+	// A lily pad over the bot's head is a lid: it stops the rise to the surface. Break it
+	// (instant) before swimming. Land searches below already refuse pads as land (cycle 6,
+	// from ruststeve: a pad accepted as land steers the escape to the pad, not the shore).
+	try {
+		const p = bot.entity?.position;
+		if (p) {
+			for (let dy = 1; dy <= 3; dy++) {
+				const b = getBlock(bot, vec3(Math.floor(p.x), Math.floor(p.y) + dy, Math.floor(p.z)));
+				if (b?.name === "lily_pad") {
+					await bot.dig(b as never, true).catch(() => {});
+					logEvent("water", "lily_broken", `dy=${dy}`);
+					break;
+				}
+			}
+		}
+	} catch {}
+
 	// PRIMARY: route out to real shore with the pathfinder (fast + no bank-climbing
 	// flakiness). Only fall through to the manual carve-a-stair logic below when no
 	// reachable shore exists (a fully boxed pocket). STEVE_ESCAPE_NO_PF=1 (harness
