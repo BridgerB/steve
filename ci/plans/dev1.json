@@ -1,0 +1,12 @@
+{
+	"label": "dev1",
+	"workers": 6,
+	"experiments": [
+		{ "name": "cap", "slug": "build-nether-portal", "lava_d": 6, "runs": 2, "est_s": 420, "per_server": 2, "heap_mb": 4096 },
+		{ "name": "craft", "slug": "craft-stale-table", "runs": 1, "est_s": 150, "bot": "Gym_craft",
+			"arms": [ { "name": "fix" }, { "name": "base", "ref": "exp/craft-base" } ] },
+		{ "name": "arena", "slug": "build-nether-portal", "lava_d": 6, "runs": 1, "est_s": 420,
+			"arms": [ { "name": "topup" }, { "name": "base", "ref": "exp/topup-base" } ] },
+		{ "name": "race", "kind": "race", "est_s": 300, "bots": 2, "minutes": 4 }
+	]
+}
