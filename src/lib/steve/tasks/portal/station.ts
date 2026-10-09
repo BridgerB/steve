@@ -215,11 +215,27 @@ export const stationRefill = async (
 		}
 		const { S, d } = st;
 		bot.setControlState("sneak", false);
-		await goTo(bot, S, { range: 0, timeout: 20000, nudge: false }).catch(() => false);
+		// Refill-reach study (cycle 7): one refill_walk event per stand walk, arrived or not.
+		const p0 = bot.entity.position;
+		const d0 = Math.hypot(p0.x - (S.x + 0.5), p0.z - (S.z + 0.5));
+		const tWalk = Date.now();
+		const pfOk = await goTo(bot, S, { range: 0, timeout: 20000, nudge: false }).catch(() => false);
 		{
 			const q = bot.entity.position;
 			if (Math.hypot(q.x - (S.x + 0.5), q.z - (S.z + 0.5)) <= 1.5)
 				await walkToXZ(bot, S.x + 0.5, S.z + 0.5, { targetDist: 0.25, maxTime: 2500 }).catch(() => {});
+		}
+		{
+			const q = bot.entity.position;
+			const d1 = Math.hypot(q.x - (S.x + 0.5), q.z - (S.z + 0.5));
+			const arrived = atStand(bot, S);
+			const reason = arrived ? "" : d1 <= 1.5 ? "near_not_on_stand" : pfOk ? "pf_done_but_far" : d1 < d0 - 1 ? "pf_partial" : "pf_no_progress";
+			logEvent(
+				"cast",
+				"refill_walk",
+				JSON.stringify({ stand: key(S), site, d0: +d0.toFixed(1), d1: +d1.toFixed(1), dy: +(S.y - p0.y).toFixed(1), pf_ok: pfOk === true, arrived, reason, ms: Date.now() - tWalk, targets: st.targets.length }),
+				q,
+			);
 		}
 		if (!atStand(bot, S)) {
 			const p = bot.entity.position;

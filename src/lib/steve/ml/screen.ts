@@ -59,6 +59,7 @@ export const COUNTED = [
 	"site_station",
 	"topup_walk",
 	"cell_topup",
+	"refill_walk",
 	"site_anchor",
 	"site_tunnel",
 	"site_return",
