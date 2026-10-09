@@ -9,7 +9,7 @@
  * no water on the surface within 8 blocks (probed every block); no ruined portal (the
  * overworld's only natural obsidian frames) within 200. Candidates sit on a grid SPACING
  * apart so one landing's frames never come within 200 of another; a failed candidate is
- * nudged up to 6 times. Each landing's ±PREGEN_R square is generated before it is checked.
+ * nudged up to 6 times. Each accepted landing's ±PREGEN_R square is generated after it passes.
  */
 import { writeFileSync } from "node:fs";
 import { applyServerProfile } from "../../src/lib/steve/gym/server-profile.ts";
@@ -29,12 +29,14 @@ const passed = (r: string) => /passed/i.test(r);
 const pregen = async (x: number, z: number): Promise<void> => {
 	for (let x0 = x - PREGEN_R; x0 < x + PREGEN_R; x0 += 128)
 		for (let z0 = z - PREGEN_R; z0 < z + PREGEN_R; z0 += 128) {
-			await cmd(`forceload add ${x0} ${z0} ${x0 + 127} ${z0 + 127}`);
-			for (let w = 0; w < 120; w++) {
-				if (passed(await cmd(`execute if loaded ${x0} 0 ${z0}`)) && passed(await cmd(`execute if loaded ${x0 + 127} 0 ${z0 + 127}`))) break;
+			const x1 = Math.min(x0 + 127, x + PREGEN_R - 1);
+			const z1 = Math.min(z0 + 127, z + PREGEN_R - 1);
+			await cmd(`forceload add ${x0} ${z0} ${x1} ${z1}`);
+			for (let w = 0; w < 240; w++) {
+				if (passed(await cmd(`execute if loaded ${x0} 0 ${z0}`)) && passed(await cmd(`execute if loaded ${x1} 0 ${z1}`))) break;
 				await sleep(500);
 			}
-			await cmd(`forceload remove ${x0} ${z0} ${x0 + 127} ${z0 + 127}`);
+			await cmd(`forceload remove ${x0} ${z0} ${x1} ${z1}`);
 		}
 };
 
@@ -71,8 +73,12 @@ for (let i = 0; out.length < N && i < N * 3; i++) {
 	for (let t = 0; t < 6 && !ok; t++) {
 		const x = gx + t * 48;
 		const z = gz + (t % 2 ? 32 : 0);
-		await pregen(x, z);
+		// Check on a small loaded patch first; only an accepted landing gets its ±PREGEN_R square.
 		await cmd(`forceload add ${x - 8} ${z - 8} ${x + 8} ${z + 8}`);
+		for (let w = 0; w < 240; w++) {
+			if (passed(await cmd(`execute if loaded ${x - 8} 0 ${z - 8}`)) && passed(await cmd(`execute if loaded ${x + 8} 0 ${z + 8}`))) break;
+			await sleep(250);
+		}
 		const why: string[] = [];
 		for (const b of ["minecraft:water", "minecraft:lava", "#minecraft:ice"]) if (await surfaceIs(x, z, b)) why.push(`surface ${b}`);
 		if (!why.length) {
@@ -89,7 +95,10 @@ for (let i = 0; out.length < N && i < N * 3; i++) {
 		if (!why.length && portalD <= 200) why.push(`ruined portal ${portalD}`);
 		await cmd(`forceload remove ${x - 8} ${z - 8} ${x + 8} ${z + 8}`);
 		console.log(`cand ${i}.${t} ${x},${z}: ${why.length ? `rejected (${why.join("; ")})` : `ok y=${y} portal ${portalD}`}`);
-		if (!why.length) ok = { x, z, y: y!, portal_d: portalD, tries: t + 1 };
+		if (!why.length) {
+			await pregen(x, z);
+			ok = { x, z, y: y!, portal_d: portalD, tries: t + 1 };
+		}
 	}
 	if (ok) out.push(ok);
 }

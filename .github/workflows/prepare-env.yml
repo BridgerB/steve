@@ -1,0 +1,183 @@
+# Cold path (cycle 7, Part 4.1): build the gym environment once and save it as one cache
+# entry, gym-env-<hash>. Hot workflows (gym.yml, race.yml) restore it and never build it.
+# The hash covers the lockfile, ci/env.json (server jar sha1, seed, node version, jlink
+# modules, landing sets, race region), the typecraft data manifest and flake.lock.
+name: prepare-env
+
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Rebuild even if the entry exists
+        type: boolean
+        default: false
+  schedule:
+    - cron: "23 6 * * 1" # weekly restore keeps the entry from 7-day eviction
+  push:
+    branches: [feat/portal-loop-7]
+    paths:
+      - .github/workflows/prepare-env.yml
+      - ci/env.json
+      - scripts/ci/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prepare-env-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Cache key
+        id: key
+        run: |
+          echo "key=gym-env-${{ hashFiles('package-lock.json', 'ci/env.json', 'ci/typecraft-data.sha256', 'flake.lock') }}" >> "$GITHUB_OUTPUT"
+          echo "T0=$(date +%s)" >> "$GITHUB_ENV"
+
+      - name: Restore existing entry (keeps it warm)
+        id: probe
+        if: ${{ !inputs.force }}
+        uses: actions/cache/restore@v4
+        with:
+          path: env
+          key: ${{ steps.key.outputs.key }}
+
+      - name: Decide
+        run: |
+          if [ "${{ steps.probe.outputs.cache-hit }}" = "true" ]; then
+            echo "BUILD=false" >> "$GITHUB_ENV"
+            echo "Entry ${{ steps.key.outputs.key }} exists; restored to keep it warm ($(du -sh env | cut -f1))." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "BUILD=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Java 25 (for jlink only)
+        if: env.BUILD == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      - name: jlink runtime
+        if: env.BUILD == 'true'
+        run: |
+          MODS=$(jq -r '.jlink_modules | join(",")' ci/env.json)
+          rm -rf env && mkdir -p env
+          "$JAVA_HOME/bin/jlink" --add-modules "$MODS" --strip-debug --no-man-pages --no-header-files --compress=zip-9 --output env/jre
+          env/jre/bin/java -version
+          du -sh env/jre
+
+      - name: Server jar (sha1-checked here and nowhere else)
+        if: env.BUILD == 'true'
+        run: |
+          URL=$(jq -r .server_jar_url ci/env.json)
+          SHA=$(jq -r .server_jar_sha1 ci/env.json)
+          curl -fsSL -o env/server-26.1.2.jar "$URL"
+          echo "$SHA  env/server-26.1.2.jar" | sha1sum -c -
+
+      - name: Node runtime
+        if: env.BUILD == 'true'
+        run: |
+          V=$(jq -r .node_version ci/env.json)
+          curl -fsSLO "https://nodejs.org/dist/v$V/node-v$V-linux-x64.tar.xz"
+          curl -fsSLO "https://nodejs.org/dist/v$V/SHASUMS256.txt"
+          grep " node-v$V-linux-x64.tar.xz\$" SHASUMS256.txt | sha256sum -c -
+          mkdir -p env/node
+          tar -xJf "node-v$V-linux-x64.tar.xz" -C env/node --strip-components 1
+          rm "node-v$V-linux-x64.tar.xz" SHASUMS256.txt
+          env/node/bin/node -v
+
+      - name: node_modules (production dependencies; steve runs TypeScript, no build)
+        if: env.BUILD == 'true'
+        run: |
+          export PATH="$PWD/env/node/bin:$PATH"
+          npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+          mv node_modules env/node_modules
+          du -sh env/node_modules
+
+      - name: Nix (datagen only)
+        if: env.BUILD == 'true'
+        uses: cachix/install-nix-action@v31
+
+      - name: typecraft data (datagen)
+        if: env.BUILD == 'true'
+        run: |
+          nix run .#datagen
+          cd src/lib/typecraft/data
+          TOTAL=$(wc -l < ../../../../ci/typecraft-data.sha256)
+          BAD=$(sha256sum -c ../../../../ci/typecraft-data.sha256 2>/dev/null | grep -vc ': OK$' || true)
+          echo "typecraft data: $BAD of $TOTAL files differ from ci/typecraft-data.sha256" | tee -a "$GITHUB_STEP_SUMMARY"
+          sha256sum -c ../../../../ci/typecraft-data.sha256 2>/dev/null | grep -v ': OK$' | head -40 || true
+          cd -
+          mkdir -p env/typecraft-data
+          rsync -a --exclude assets src/lib/typecraft/data/ env/typecraft-data/
+          du -sh env/typecraft-data
+
+      - name: Worlds
+        if: env.BUILD == 'true'
+        env:
+          GYM_SERVER: runner
+          NODE_BIN: ${{ github.workspace }}/env/node/bin/node
+        run: |
+          export PATH="$PWD/env/node/bin:$PATH"
+          ln -sfn "$PWD/env/node_modules" node_modules
+          export RUNNER_RCON_PASS=$(openssl rand -hex 16)
+          echo "::add-mask::$RUNNER_RCON_PASS"
+          for SET in $(jq -r '.landing_sets | keys[]' ci/env.json); do
+            T=$(date +%s)
+            mkdir -p "work/$SET"
+            scripts/ci/server.sh start "$PWD/env" "$PWD/work/$SET"
+            SET=$SET node --import ./typecraft-resolve.mjs scripts/ci/prepare-world.ts "env/worlds/$SET"
+            scripts/ci/server.sh stop "$PWD/work/$SET"
+            mv "work/$SET/world" "env/worlds/$SET/world"
+            echo "world $SET: $(du -sh env/worlds/$SET | cut -f1) in $(( $(date +%s) - T )) s; $(find env/worlds/$SET/world -name '*.mca' | wc -l) region files" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+          rm -f node_modules
+
+      - name: VERSION
+        if: env.BUILD == 'true'
+        run: |
+          {
+            echo "key ${{ steps.key.outputs.key }}"
+            echo "commit ${{ github.sha }}"
+            echo "built $(date -u +%Y-%m-%dT%H:%MZ)"
+            echo "java $(env/jre/bin/java -version 2>&1 | head -1)"
+            echo "node $(env/node/bin/node -v)"
+            echo "jar_sha1 $(jq -r .server_jar_sha1 ci/env.json)"
+            echo "seed $(jq -r .level_seed ci/env.json)"
+            echo "jlink $(jq -r '.jlink_modules | join(",")' ci/env.json)"
+            for s in env/worlds/*/world-meta.json; do echo "world $s $(jq -c '{seed, landings, race_base, fortress}' "$s")"; done
+          } > env/VERSION
+          cat env/VERSION
+
+      - name: Save
+        if: env.BUILD == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: env
+          key: ${{ steps.key.outputs.key }}
+
+      - name: Summary
+        if: env.BUILD == 'true'
+        run: |
+          {
+            echo "### gym environment ${{ steps.key.outputs.key }}"
+            echo ""
+            echo "| part | size |"
+            echo "|---|---|"
+            for d in env/jre env/server-26.1.2.jar env/node env/node_modules env/typecraft-data env/worlds; do echo "| $d | $(du -sh $d | cut -f1) |"; done
+            echo "| **total** | **$(du -sh env | cut -f1)** |"
+            echo ""
+            echo "Built in $(( $(date +%s) - T0 )) s."
+            echo '```'
+            cat env/VERSION
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

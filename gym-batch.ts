@@ -135,7 +135,7 @@ const runOne = (raceId: string): Promise<{ code: number | null; out: string }> =
 	new Promise((resolve) => {
 		const p = spawn(
 			process.execPath,
-			["--env-file=.env", "--import", "./typecraft-resolve.mjs", "gym-cli.ts"],
+			["--env-file-if-exists=.env", "--import", "./typecraft-resolve.mjs", "gym-cli.ts"],
 			{
 				env: {
 					...process.env,
@@ -155,7 +155,8 @@ const runOne = (raceId: string): Promise<{ code: number | null; out: string }> =
 	});
 
 for (let i = 1; i <= RUNS; i++) {
-	slotLanding = LANDINGS[i - 1];
+	// GYM_LANDING_OFFSET: a shard of a sharded screen replays its own slice of the set.
+	slotLanding = LANDINGS[Number(process.env.GYM_LANDING_OFFSET ?? 0) + i - 1];
 	const runId = `${BATCH}-${i}`;
 	const raceId = `gym-${SLUG}-${runId}`;
 	// Pre-run check: RCON must answer. A dead link makes every run a harness loss
