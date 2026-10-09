@@ -118,3 +118,14 @@ compare.ts keyed rows by landing only, so the f10/f12 "nat + nat2" pools used 12
 
 ## f21, run 37921265690: landing set B (new terrain), HEAD vs 303cc21 at 2700 s, 12 paired
 - both 0/12; **best frame 5.18 vs 3.64, +1.55, P(better) = 0.847**; lava deaths 0.64 vs 1.27, P = 0.864; deaths 2.09 vs 2.27. The cycle-7 gain carries to new landings (direction; not separated at n = 11). Head trials 2, 4, 5, 6 cast 10–11 obsidian with no portal: the last-step wall again. f23 = the light fix on set B.
+
+## Races c8a–d (f11, run 37902083738, build at f11's push: log fuel, lid, shuffle; no pickaxe digs), 4 races × 5 bots × 240 min
+| race | stone pick | bucket | flint & steel | site anchor | obsidian ≥ 1 | portal lit | Nether |
+|---|---|---|---|---|---|---|---|
+| c8a (w1) | 4/5 | 3/5 | 3/5 | 3/5 | 1/5 | 0/5 | 0/5 |
+| c8b (w2) | 5/5 | 4/5 | 4/5 | 4/5 | 3/5 | 1/5 (89 min) | 0/5 |
+| c8c (w3) | 3/5 | 2/5 | 1/5 | 1/5 | 1/5 | 0/5 | 0/5 |
+| c8d (w4) | 4/5 | 4/5 | 4/5 | 4/5 | 3/5 | 1/5 (220 min) | **1/5 (220 min)** |
+- **c8d: steve-race-004 entered the Nether at 220 min** (server "[We Need to Go Deeper]" 11:39:30 UTC). Pooled c8: Nether 1/20 = 5% [1%, 24%]; portal lit 2/20; flint & steel 12/20.
+- c8b steve-race-004 lit at 89 min and never entered: portalBuilt only held while a portal block was within 6 of the bot; regressed iron steps (lower priority numbers) took over; it later drowned. Fix 143f2b1 (remember the lit portal; enter_nether first). Validated by races, not the gym (the natural slug enters directly).
+- Early-game losses: c8c bots 002/003 spent the race in gather_wood timeouts ("Returning to surface for wood (y=36 → 64)") and water escapes — treeless/underground starts.
