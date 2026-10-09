@@ -413,3 +413,50 @@ describe("Physics simulation", () => {
 		expect(pos.y).toBe(60);
 	});
 });
+
+// ── Water: ledge lift (cycle 6, from ruststeve's port bug) ──
+
+describe("Physics: out-of-liquid ledge lift", () => {
+	const physics = createPhysics(registry);
+	const wb = registry.blocksByName.get("water")!;
+	const water: PhysicsBlock = { id: wb.id, name: "water", stateId: wb.minStateId ?? 0, shapes: [], boundingBox: "empty", properties: { level: "0" } };
+	// Water y 60..62 (surface ~62.9) against a bank (stone x >= 5) whose top is at y 63, with
+	// stone everywhere below y 60, as under any real lake (and at the world origin).
+	const world: PhysicsWorld = {
+		getBlock: (pos) => {
+			if (pos.y < 60) return { ...stoneBlock };
+			if (pos.x >= 5) return pos.y < 63 ? { ...stoneBlock } : { ...airBlock };
+			if (pos.y < 63) return { ...water };
+			return { ...airBlock };
+		},
+	};
+	const swimmer = (y: number, jump = false) => {
+		const entity = createEntity(1);
+		entity.position = { x: 4.7, y, z: 0.5 };
+		entity.velocity = { x: 0, y: 0, z: 0 };
+		entity.yaw = -Math.PI / 2; // facing +x, into the bank
+		entity.onGround = false;
+		return createPlayerState(registry, entity, { ...NO_CONTROLS, forward: true, jump });
+	};
+
+	it("pressing into a bank with headroom gives the out-of-liquid impulse", () => {
+		// The test box is the player's own box offset by the velocity: free above the bank.
+		const s = physics.simulatePlayer(swimmer(62.5), world);
+		expect(s.isCollidedHorizontally).toBe(true);
+		expect(s.vel.y).toBeCloseTo(physics.config.outOfLiquidImpulse, 5);
+	});
+
+	it("no impulse when the box above is blocked (a 3-high wall)", () => {
+		const wall: PhysicsWorld = { getBlock: (pos) => (pos.x >= 5 && pos.y < 66 ? { ...stoneBlock } : world.getBlock(pos)) };
+		const s = physics.simulatePlayer(swimmer(60.5), wall);
+		expect(s.isCollidedHorizontally).toBe(true);
+		expect(s.vel.y).not.toBeCloseTo(physics.config.outOfLiquidImpulse, 5);
+	});
+
+	it("a bot swimming into a bank one block above the water bed walks out", () => {
+		let s = swimmer(60.2, true);
+		for (let i = 0; i < 200; i++) s = physics.simulatePlayer(s, world);
+		expect(s.pos.x).toBeGreaterThan(5);
+		expect(s.pos.y).toBeGreaterThanOrEqual(63);
+	});
+});

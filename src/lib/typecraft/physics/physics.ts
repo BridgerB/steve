@@ -865,12 +865,16 @@ export const createPhysics = (registry: Registry): PhysicsEngine => {
 			vel.x *= horizontalInertia;
 			vel.z *= horizontalInertia;
 
+			// Ledge lift out of liquid: the test box is the player's position offset by the
+			// velocity (prismarine-physics: pos.offset(vel.x, vel.y + 0.6 - pos.y + lastY,
+			// vel.z)). The port passed the bare velocity, so it tested a box near the world
+			// origin (solid stone) and a swimming bot never climbed a 1-high bank.
 			if (
 				entity.isCollidedHorizontally &&
 				doesNotCollide(world, {
-					x: vel.x,
-					y: vel.y + 0.6 - pos.y + lastY,
-					z: vel.z,
+					x: pos.x + vel.x,
+					y: pos.y + vel.y + 0.6 - pos.y + lastY,
+					z: pos.z + vel.z,
 				})
 			) {
 				vel.y = config.outOfLiquidImpulse;
