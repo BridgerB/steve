@@ -43,7 +43,8 @@ mkdirSync("data/gym", { recursive: true });
 
 // ONE batch at a time (b12: two concurrent batches took server ticks from 17 ms to
 // 104 ms and polluted the cast). The runner holds data/gym/batch.lock for its life.
-const LOCK = "data/gym/batch.lock";
+// GYM_BATCH_LOCK: several bots sharing one server (the capacity test) each hold their own lock.
+const LOCK = process.env.GYM_BATCH_LOCK ?? "data/gym/batch.lock";
 if (existsSync(LOCK)) {
 	const pid = parseInt(readFileSync(LOCK, "utf8"), 10);
 	let alive = false;
@@ -66,6 +67,8 @@ process.on("exit", releaseLock);
 process.on("SIGINT", () => process.exit(130));
 process.on("SIGTERM", () => process.exit(143));
 const db = new DatabaseSync("data/gym/batches.db");
+// Concurrent batches on one machine write the same file; wait instead of failing SQLITE_BUSY.
+db.exec("PRAGMA busy_timeout = 15000");
 db.exec(`CREATE TABLE IF NOT EXISTS runs (
 	run_id TEXT PRIMARY KEY, batch TEXT, slug TEXT, commit_hash TEXT, started_at TEXT,
 	seconds REAL, deepest_phase TEXT, last_cast_event TEXT, obsidian INTEGER,
@@ -99,7 +102,9 @@ if (/Incorrect/i.test(mobReply)) console.log(`WARN gamerule: ${mobReply}`);
 console.log(`batch ${BATCH} slug=${SLUG} runs=${RUNS} commit=${commit} mobs=${MOBS} server=${SERVER} GYM_LAVA_D=${process.env.GYM_LAVA_D ?? "-"} landings=${process.env.GYM_LANDINGS ?? "-"}`);
 // A killed batch never reaches the per-run release below, so its landing stays
 // forceloaded; this runner owns server A's forceloads — clear leftovers up front.
-console.log(`startup ${await rcon.command("forceload remove all").catch(() => "forceload remove failed")}`);
+// GYM_SHARED_SERVER=1: other bots run on this server (capacity test); their arenas stay loaded.
+const SHARED = process.env.GYM_SHARED_SERVER === "1";
+if (!SHARED) console.log(`startup ${await rcon.command("forceload remove all").catch(() => "forceload remove failed")}`);
 
 const memAvailMb = (): number | null => {
 	try {
@@ -191,7 +196,7 @@ for (let i = 1; i <= RUNS; i++) {
 	// chunks were pinned on server A by 22:48, its 10G heap was full, RCON replies
 	// lagged a command behind and 7 of b13's 10 spreads were misread (harness). The
 	// runner owns server A's forceloads — clear them after every run.
-	await rcon.command("forceload remove all").catch(() => "");
+	if (!SHARED) await rcon.command("forceload remove all").catch(() => "");
 	mkdirSync("data/gym/logs", { recursive: true });
 	writeFileSync(`data/gym/logs/${raceId}.log`, out);
 	const seconds = (Date.now() - t0) / 1000;

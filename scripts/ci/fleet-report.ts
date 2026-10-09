@@ -9,11 +9,12 @@ import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { parsePlan } from "../../src/lib/steve/fleet/plan.ts";
 import { fmtRate, quantile } from "../../src/lib/steve/ml/stats.ts";
 
 const [planFile, dataDir, artDir] = process.argv.slice(2);
 if (!planFile || !dataDir || !artDir) throw new Error("usage: fleet-report.ts <plan.json> <data-dir> <artifacts-dir>");
-const plan = JSON.parse(readFileSync(planFile, "utf8")) as {
+const plan = parsePlan(JSON.parse(readFileSync(planFile, "utf8"))) as {
 	label: string;
 	experiments: { name: string; kind?: string; slug?: string; arms?: { name: string; ref?: string; env?: Record<string, string> }[] }[];
 };
