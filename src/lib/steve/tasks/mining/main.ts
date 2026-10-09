@@ -828,8 +828,42 @@ export const tunnelToward = async (bot: Bot, dx: number, dz: number, n: number):
 		// dig on a solid block stops us.
 		if (!isAir(head) && !(await lookDig(bot, head))) break;
 		if (!isAir(feet) && !(await lookDig(bot, feet))) break;
+		// Falling blocks: gravel or sand above the head cell drops into it after the dig
+		// (or onto the bot once it steps in). f27 landing 6, every arm: "lava_tunnel x 23/23"
+		// then death.attack.inWall seconds later. Re-dig until the 1x2 stays open, never
+		// step under a falling block.
+		const FALLING = /gravel|sand|concrete_powder/;
+		let open = true;
+		for (let k = 0; k < 10; k++) {
+			const up = bot.blockAt(vec3(fx + dx, fy + 2, fz + dz));
+			const h = bot.blockAt(cellUp);
+			const f = bot.blockAt(cell);
+			if (!isAir(h)) {
+				if (!(await lookDig(bot, h))) {
+					open = false;
+					break;
+				}
+			} else if (!isAir(f)) {
+				if (!(await lookDig(bot, f))) {
+					open = false;
+					break;
+				}
+			} else if (up && FALLING.test(up.name)) {
+				if (!(await lookDig(bot, up))) {
+					open = false;
+					break;
+				}
+			} else break;
+			await sleep(300);
+		}
+		if (!open) break;
 		await walkToXZ(bot, fx + dx + 0.5, fz + dz + 0.5, { targetDist: 0.3, maxTime: 1500 });
 		if (Math.floor(bot.entity.position.x) === fx && Math.floor(bot.entity.position.z) === fz) break;
+		{
+			const q = bot.entity.position;
+			const own = bot.blockAt(vec3(Math.floor(q.x), Math.floor(q.y) + 1, Math.floor(q.z)));
+			if (own && !isAir(own) && !isLiquid(own)) await lookDig(bot, own);
+		}
 		moved++;
 	}
 	return moved;
