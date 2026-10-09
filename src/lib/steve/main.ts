@@ -359,6 +359,11 @@ const runRace = async (count: number, timeoutMs: number) => {
 		writeFileSync(serialFile, JSON.stringify({ next: serialStart + count }));
 	} catch {}
 	console.log(`  Bots: ${names.join(", ")}`);
+	// Cycle 6 (decision 7): the kit's bucket count is a bandit arm, drawn once per bot here
+	// and passed to the child (steps.ts KIT_BUCKETS); the cast credits it per attempt.
+	const { drawParams } = await import("./ml/bandit.ts");
+	const kits = names.map(() => drawParams().buckets ?? "3");
+	console.log(`  Kit buckets: ${names.map((n, i) => `${n}=${kits[i]}`).join(", ")}`);
 	const SERVER_PORT = parseInt(process.env.MC_PORT ?? "25565", 10);
 	const RCON_PORT = parseInt(process.env.MC_RCON_PORT ?? "25575", 10);
 	const RCON_PASS = process.env.MC_RCON_PASS ?? "minecraft-test-rcon";
@@ -641,6 +646,7 @@ const runRace = async (count: number, timeoutMs: number) => {
 						STEVE_SPAWN_X: String(spawns[i]?.x ?? 0),
 						STEVE_SPAWN_Z: String(spawns[i]?.z ?? 0),
 						STEVE_TIMEOUT: String(timeoutMs / 1000),
+						STEVE_KIT_BUCKETS: kits[i] ?? "3",
 						STEVE_VIEWER_PORT: i < NUM_VIEWERS ? String(3001 + i) : "",
 					},
 					// stderr → data/bot-logs/<name>.log: a crashed child was invisible (race36
@@ -738,8 +744,22 @@ const runRace = async (count: number, timeoutMs: number) => {
 						const w2 = await rcon(`execute as ${name} at @s if block ~ ~-1 ~ minecraft:water`);
 						inWater = w1.includes("passed") || w2.includes("passed");
 					} catch {}
-					if (landedY >= 55 && landedY < 200 && !inLava && !inWater) break;
-					console.log(`  ${name} landed at y=${landedY} (${sx},${sz})${inLava ? " IN LAVA" : inWater ? " IN WATER" : " — underground"}, re-placing`);
+					// Cycle 6 shore check (from ruststeve: 10/10 bots on dry land against 6/10):
+					// no water within 8 blocks, probed every 2 blocks at the feet and the block below.
+					let shore = false;
+					if (landedY >= 55 && landedY < 200 && !inLava && !inWater && t < 3) {
+						scan: for (let dx = -8; dx <= 8; dx += 2)
+							for (let dz = -8; dz <= 8; dz += 2)
+								for (const dy of [0, -1]) {
+									const r = await rcon(`execute as ${name} at @s if block ~${dx} ~${dy} ~${dz} minecraft:water`).catch(() => "");
+									if (r.includes("passed")) {
+										shore = true;
+										break scan;
+									}
+								}
+					}
+					if (landedY >= 55 && landedY < 200 && !inLava && !inWater && !shore) break;
+					console.log(`  ${name} landed at y=${landedY} (${sx},${sz})${inLava ? " IN LAVA" : inWater ? " IN WATER" : shore ? " ON A SHORE" : " — underground"}, re-placing`);
 					sx = x + (t + 1) * 9;
 					sz = z + (t % 2 === 0 ? 7 : -7);
 				}

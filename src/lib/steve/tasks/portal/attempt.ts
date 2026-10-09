@@ -10,6 +10,7 @@ import { buildId, senseContext, writeAttempt } from "../../lib/attempts.ts";
 import { getRaceId } from "../../lib/logger.ts";
 import { guardedAttempt, progressSnapshot } from "../../lib/progress.ts";
 import { drawParams, num, updateParams, useParams } from "../../ml/bandit.ts";
+import { KIT_BUCKETS } from "../../steps.ts";
 import type { StepResult } from "../../types.ts";
 import { buildPortalByCasting, prepareCastSite } from "./cast.ts";
 
@@ -26,6 +27,8 @@ export const castAttempt = async (
 		await Promise.race([ensureSparePickaxe(bot), new Promise((r) => setTimeout(r, 30_000))]);
 	} catch {}
 	const params = drawParams();
+	// The bucket arm is the kit this bot was built with (drawn once per bot), not a fresh draw.
+	params.buckets = String(KIT_BUCKETS);
 	useParams(params);
 	const startMs = Date.now();
 	const context = senseContext(bot);
@@ -66,8 +69,11 @@ export const castAttempt = async (
 	});
 	// Credit the drawn arms (cycle 5 decision 6: live on anchor_dy_max and stall_s; pinned
 	// params are never updated). Reward: the attempt placed obsidian or finished.
-	try {
-		updateParams(params, g.success || snap.obsidian > 0);
-	} catch {}
+	// Cycle 6 (decision 7): arena attempts (GYM_LAVA_D) never credit an arm.
+	if (!process.env.GYM_LAVA_D) {
+		try {
+			updateParams(params, g.success || snap.obsidian > 0);
+		} catch {}
+	}
 	return { success: g.success, message: g.message, outcome };
 };

@@ -8,7 +8,10 @@ import type { GameState, Step, StepResult } from "./types.ts";
 
 // Cycle 4 (decision 5): the race kit carries lava — 3 buckets (two for lava, one for
 // water) so the cast front-loads lava. Iron need = 3 buckets × 3 + flint&steel 1.
-export const KIT_BUCKETS = 3;
+// Cycle 6 (decision 7): the bucket count is a bandit arm (3/4/5), drawn once per bot by
+// the race launcher or the gym and passed as STEVE_KIT_BUCKETS; 3 when unset.
+const kitEnv = Number(process.env.STEVE_KIT_BUCKETS);
+export const KIT_BUCKETS = Number.isInteger(kitEnv) && kitEnv >= 2 && kitEnv <= 6 ? kitEnv : 3;
 export const IRON_NEED = KIT_BUCKETS * 3 + 1;
 const kitBuckets = (s: GameState): number =>
 	s.inventory.buckets + s.inventory.waterBuckets + s.inventory.lavaBuckets;

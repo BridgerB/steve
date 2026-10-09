@@ -19,7 +19,7 @@ export const DEFAULT_PARAMS: ParamsFile = {
 	anchor_dy_max: { arms: { "2": [1, 1], "3": [1, 1], "5": [1, 1] }, pin: "3" },
 	anchor_max_d: { arms: { "8": [1, 1], "12": [1, 1] }, pin: "12" },
 	fill_high: { arms: { "0.6": [1, 1], "1.0": [1, 1], "1.5": [1, 1] }, pin: "1.5" },
-	buckets: { arms: { "2": [1, 1], "3": [1, 1] }, pin: "3" },
+	buckets: { arms: { "3": [1, 1], "4": [1, 1], "5": [1, 1] } },
 	stall_s: { arms: { "120": [1, 1], "180": [1, 1], "300": [1, 1] }, pin: "180" },
 };
 
