@@ -100,3 +100,8 @@ compare.ts keyed rows by landing only, so the f10/f12 "nat + nat2" pools used 12
 ## f16, run 37910944659, walkway level-step sneak vs base, 2 replicates
 - natural (24 pairs): 0/24 each; best frame 3.58 vs 3.17, P = 0.791; deaths 2.13 vs 1.58, P = 0.101; lava deaths 0.67 vs 0.33, P = 0.083. Not separated (trending worse on deaths); walkway arrivals 6/58 vs 3/61.
 - **Root cause found in walkway_stuck:** the head cell was still stone/andesite/copper ore after the walkway "dug" it. digAt never equips a tool (6 s cap); refills run holding a bucket. The cup-lid dig had the same bug: across f10–f16 cup_lid_cleared logged "was X now X" 20 of 21 times (landing 8's copper ore 5 of 5). So the lid fix, the walkway and the shuffle were mostly no-ops. Fix: digWithPick (f18).
+
+## f17, run 37913768424: HEAD vs the f4 champion (303cc21), 2 replicates — NEW CHAMPION
+- natural (23 pairs): head 2/23 (landing 5: 564 s and 1622 s) vs champ 0/24; **best frame 3.17 vs 2.00, +1.17, 95% [0.35, 2.26], P(better) = 0.999, sign p = 0.022** (noise floor between identical trees: P = 0.163); deaths 1.52 vs 1.96, P = 0.825; lava deaths equal.
+- arena: 8/12 vs 9/12, P = 0.278, not separated; seconds equal.
+- champion.json → 2e8a574 (the f17 head arm).

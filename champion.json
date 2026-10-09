@@ -1,13 +1,13 @@
 {
-	"commit": "303cc214b8f083003d120e1c38ee92991011beb2",
+	"commit": "2e8a574bf6fbaa4d41b6c484e33140f66ad99908",
 	"landing_set": "A",
-	"batch": "f4-nat-a",
+	"batch": "f17-nat-head,f17-nat2-head",
 	"metrics": {
-		"pass": "0/12 [0%, 24%]",
-		"best_frame_mean": 3.42,
-		"deaths_mean": 1.58,
-		"noise_floor": "nat a vs nat b (same tree): best frame P = 0.163, seconds P = 0.997"
+		"pass": "2/23 natural (landing 5 twice) vs old champion 0/24",
+		"best_frame_mean": 3.17,
+		"deaths_mean": 1.52,
+		"vs_previous": "best frame +1.17, 95% [0.35, 2.26], P(better) = 0.999, sign p = 0.022 over 303cc21 (f17, run 37913768424)"
 	},
 	"date": "2026-10-09",
-	"note": "noise-floor arm a of f4 (run 37890750601); a challenger must beat it on best frame paired on set A"
+	"note": "cycle-7 fixes through the walkway sneak (f16): craft window, iron log fuel, cup lid, refill shuffle + walkway, shuffle lava stop, descend lava guard. Previous champion 303cc21 (f4 noise-floor arm)."
 }
