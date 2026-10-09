@@ -238,23 +238,11 @@ const descendToY = async (bot: Bot, targetFeetY: number): Promise<void> => {
 				if (!cells.some(([a, b]) => a === cx && b === cz)) cells.push([cx, cz]);
 			}
 		}
-		let guarded = 0;
 		for (const [cx, cz] of cells) {
-			const c = vec3(cx, f - 1, cz);
-			const b = getBlock(bot, c);
-			// Never dig a floor cell that touches lava: the bot drops into what it opens
-			// (f11 natural: 3 of 7 attributed lava deaths came right after a descend).
-			if (touchesLava(bot, c)) {
-				guarded++;
-				continue;
-			}
+			const b = getBlock(bot, vec3(cx, f - 1, cz));
 			if (b && isSolid(b.name) && b.name !== "obsidian") {
-				await digAt(bot, c);
+				await digAt(bot, vec3(cx, f - 1, cz));
 			}
-		}
-		if (guarded === cells.length) {
-			logEvent("cast", "descend_lava_guard", `floor under ${p.x.toFixed(1)},${f},${p.z.toFixed(1)} touches lava — not digging down`, p);
-			break;
 		}
 		await sleep(420);
 	}
