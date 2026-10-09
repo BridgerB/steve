@@ -165,3 +165,6 @@ compare.ts keyed rows by landing only, so the f10/f12 "nat + nat2" pools used 12
 | c9c (w3) | 4/5 | 2/5 | **3/5** (72, 99, 146 min; 11:42:36, 12:08:51, 12:56:03 UTC) |
 | c9d (w4) | 5/5 | 2/5 | **2/5** (63, 65 min; 11:33:11, 11:35:41 UTC) |
 - **Race Nether rate 5/20 = 25% [11%, 47%]** (c8: 1/20, c7: 1/5). c9c steve-race-005 entered at 99 min without a portal of its own in the funnel — it found another bot's portal. c9b's lit portal at 89 min was never entered (the enter-first fix 143f2b1 came after this build).
+
+## f28, run 37938181172: champion (pickaxe everywhere) on landing set B, 12 at 2700 s
+- **5/12 = 42% [19%, 68%]** (B1 800 s, B2 758 s, B4 949 s, B6 877 s, B9 771 s). Set B before the pickaxe fix: f23 1/20 (both arms), f25 0/24. The jump generalises to terrain the fixes were never tuned on. The failures are deaths (6) and one 9/10 frame out of time.
