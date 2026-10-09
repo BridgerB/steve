@@ -149,3 +149,10 @@ compare.ts keyed rows by landing only, so the f10/f12 "nat + nat2" pools used 12
 
 ## f27 arena (run 37931233053): pickaxe on every cast dig vs base
 - 11/12 each; **pick faster by 29 s per trial, 95% [7.6, 57.2]**, better on 9 of 12. Natural arms pending.
+
+## f27, run 37931233053: PICKAXE ON EVERY CAST DIG — natural 12/24 → Nether. NEW CHAMPION
+- natural, set A ×2 at 2700 s (22 pairs): **pick 12/24 = 50% [31%, 69%] vs base 1/22 = 5% [1%, 22%]**; better on 11 landings, worse on 1; sign p = 0.006, P(better) = 1.000. Entries on **9 distinct landings** (1, 2, 3, 4, 5, 7, 8, 10, 12), 726–1851 s.
+- best frame 7.50 vs 5.64, P = 0.976; deaths 1.18 vs 1.86, P = 0.975; lava deaths 0.32 vs 0.59.
+- Lighting: pick arm 13 complete frames → 12 interiors clear → 12 lit; base 5 complete frames → 4 interiors blocked (cobblestone) → 1 lit.
+- arena: 11/12 each, pick 29 s faster per trial.
+- Cause: digAt never equipped a tool and capped digs at 6 s; the cast holds buckets/dirt/cobble, so every stone or cobblestone dig failed silently — cup clearing, lids, walkway, interiors. champion.json → 49ecaa4.

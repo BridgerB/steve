@@ -1,13 +1,13 @@
 {
-	"commit": "2e8a574bf6fbaa4d41b6c484e33140f66ad99908",
+	"commit": "49ecaa4b9d4c918a6410b1381fc3874f16adab9f",
 	"landing_set": "A",
-	"batch": "f17-nat-head,f17-nat2-head",
+	"batch": "f27-nat-pick,f27-nat2-pick",
 	"metrics": {
-		"pass": "2/23 natural (landing 5 twice) vs old champion 0/24",
-		"best_frame_mean": 3.17,
-		"deaths_mean": 1.52,
-		"vs_previous": "best frame +1.17, 95% [0.35, 2.26], P(better) = 0.999, sign p = 0.022 over 303cc21 (f17, run 37913768424)"
+		"pass": "12/24 natural = 50% [31%, 69%] at GYM_TOTAL_S 2700, 9 distinct landings (1,2,3,4,5,7,8,10,12)",
+		"best_frame_mean": 7.5,
+		"deaths_mean": 1.18,
+		"vs_previous": "pass 12/24 vs 1/22 (base = HEAD without the pickaxe digs), sign p = 0.006, P(better) = 1.000 (f27, run 37931233053)"
 	},
 	"date": "2026-10-09",
-	"note": "cycle-7 fixes through the walkway sneak (f16): craft window, iron log fuel, cup lid, refill shuffle + walkway, shuffle lava stop, descend lava guard. Previous champion 303cc21 (f4 noise-floor arm)."
+	"note": "every cast dig equips a carried pickaxe (869b276 interior, 3aac1ae all digs) on top of the f17 champion's fixes, digpick, safe light, enter-first, return-dig."
 }
