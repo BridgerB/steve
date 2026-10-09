@@ -59,7 +59,20 @@ if (process.argv[2] === "--paired") {
 			r.lava_deaths = Number(c.lava_deaths ?? 0);
 			r.gap = typeof c.block_gap_med_s === "number" ? c.block_gap_med_s : null;
 		}
-		return new Map(rows.filter((r) => r.landing_x !== null).map((r) => [`${r.landing_x},${r.landing_z}`, r]));
+		// Key by landing AND its occurrence on this side: replicates of a landing (two
+		// experiments of the same arms, f10/f12 nat + nat2) pair 1st-with-1st, 2nd-with-2nd.
+		// Keyed by landing alone, the later replicate silently replaced the earlier one.
+		const seen = new Map<string, number>();
+		return new Map(
+			rows
+				.filter((r) => r.landing_x !== null)
+				.map((r) => {
+					const l = `${r.landing_x},${r.landing_z}`;
+					const k = seen.get(l) ?? 0;
+					seen.set(l, k + 1);
+					return [`${l}#${k}`, r] as const;
+				}),
+		);
 	};
 	const a = load(A);
 	const b = load(B);
