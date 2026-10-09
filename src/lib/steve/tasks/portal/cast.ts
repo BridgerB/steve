@@ -551,14 +551,14 @@ const excludePool = (bot: Bot, p: Vec3, why: string, hard = false): void => {
  * next mold stance (or the site_return on re-dispatch) brings the bot back to the frame.
  */
 const refillFromOtherPool = async (bot: Bot): Promise<boolean> => {
-	const dead = findFluidSource(bot, "lava", 20) ?? bot.entity.position.floored();
+	const dead = findFluidSource(bot, "lava", 20) ?? vec3(Math.floor(bot.entity.position.x), Math.floor(bot.entity.position.y), Math.floor(bot.entity.position.z));
 	excludePool(bot, dead, "refill_fail", true);
 	const pool = findLavaPool(bot, 64, 3);
 	if (!pool) {
 		logEvent("cast", "refill_hop_none", `no other pool within 64`, bot.entity.position);
 		return false;
 	}
-	const from = bot.entity.position.clone();
+	const from = vec3(bot.entity.position.x, bot.entity.position.y, bot.entity.position.z);
 	await goTo(bot, pool.pos, { range: 4, timeout: 45000 }).catch(() => false);
 	await stationRefill(bot, stationDeps(bot), {
 		frame: siteAnchor.get(bot) ?? null,
