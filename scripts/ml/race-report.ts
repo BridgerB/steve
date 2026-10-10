@@ -30,11 +30,11 @@ if (!rows.length) {
 	process.exit(0);
 }
 const bots = [...new Set(rows.map((r) => r.bot))].sort();
-const t0 = Math.min(...rows.map((r) => r.start_ms));
+const t0 = rows.reduce((m, r) => Math.min(m, r.start_ms), Infinity);
 const BUDGET: Record<string, number> = { gather_wood: 360, mine_iron: 1200, mine_coal: 600, build_nether_portal: 1500, portal_cast: 1500, find_fortress: 900 };
 const budget = (step: string) => BUDGET[step] ?? 600;
 
-console.log(`race ${prefix || "(all)"}: ${bots.length} bots, ${rows.length} dispatch rows, ${Math.round((Math.max(...rows.map((r) => r.start_ms + r.duration_s * 1000)) - t0) / 60000)} min of rows\n`);
+console.log(`race ${prefix || "(all)"}: ${bots.length} bots, ${rows.length} dispatch rows, ${Math.round((rows.reduce((m, r) => Math.max(m, r.start_ms + r.duration_s * 1000), -Infinity) - t0) / 60000)} min of rows\n`);
 
 // Past budget by step.
 const past = new Map<string, Map<string, number>>();

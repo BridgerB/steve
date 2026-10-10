@@ -22,7 +22,7 @@ const rows = readFileSync(file, "utf8")
 	.map((l) => JSON.parse(l) as AttemptRow)
 	.filter((r) => r.source === "race" && r.run_id.startsWith(prefix));
 const bots = [...new Set(rows.map((r) => r.bot))].sort();
-const t0 = Math.min(...rows.map((r) => r.start_ms));
+const t0 = rows.reduce((m, r) => Math.min(m, r.start_ms), Infinity);
 const STAGES: [string, (r: AttemptRow) => boolean][] = [
 	["stone pick", (r) => r.skill === "craft_stone_pickaxe" && r.outcome === "ok"],
 	["bucket", (r) => r.skill === "craft_bucket" && r.outcome === "ok"],
